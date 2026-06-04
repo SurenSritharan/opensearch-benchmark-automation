@@ -33,6 +33,9 @@ run_index_creation_scenario() {
     "--include-tasks=delete-target-index,create-target-index" \
     "$scenario_dir/console.log"
   
+  # Download artifacts
+  download_artifacts "$scenario_dir" "$scenario_dir/console.log" "$namespace"
+  
   # Validate index mapping
   echo "🔍 Validating index field parameters for $engine..."
   local current_mapping=$(get_index_mapping "$namespace" "$engine_index_name")
