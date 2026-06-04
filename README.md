@@ -1,1 +1,199 @@
-# opensearch-benchmark-automation
+# OpenSearch Benchmark Automation
+
+A modular benchmark automation framework for testing OpenSearch vector search performance across multiple vector engines (FAISS, Lucene, JVector).
+
+## 🚀 Features
+
+- **Multi-Engine Support**: Test FAISS, Lucene, and JVector engines in a single run
+- **Comprehensive Scenarios**: 
+  - Index creation and validation
+  - Bulk vector ingestion
+  - Force merge operations
+  - Search concurrency testing with multiple client configurations
+- **Organized Results**: All benchmark results stored in timestamped directories under `results/`
+- **Enhanced Output**: Clear visual separators and progress indicators for each scenario
+- **Telemetry Collection**: Comprehensive cluster health, stats, and performance metrics
+- **Kubernetes Integration**: Designed to work with OpenSearch clusters deployed on GKE
+
+## 📋 Prerequisites
+
+- Kubernetes cluster with OpenSearch deployments
+- `kubectl` configured with access to your cluster
+- `jq` for JSON parsing
+- Bash shell
+
+## 🏗️ Project Structure
+
+```
+opensearch-benchmark-automation/
+├── run-benchmark.sh              # Main benchmark runner
+├── lib/
+│   ├── cli-menu.sh              # Command-line argument parsing
+│   ├── inject-templates.sh      # Index template injection
+│   ├── k8s-utils.sh             # Kubernetes utilities
+│   ├── profiling.sh             # Profiling utilities
+│   ├── scenarios.sh             # Benchmark scenario implementations
+│   └── workload-params.sh       # Workload parameter builders
+├── gke-manifest/
+│   ├── deploy-jvector-cluster.sh
+│   ├── opensearch-cluster-faiss.yaml
+│   ├── opensearch-cluster-lucene.yaml
+│   └── opensearch-jvector-statefulset.yaml
+└── results/                     # Benchmark results (gitignored)
+```
+
+## 🎯 Usage
+
+### Basic Usage
+
+Run benchmarks for all engines:
+```bash
+./run-benchmark.sh
+```
+
+### Command-Line Options
+
+```bash
+./run-benchmark.sh [OPTIONS]
+
+Options:
+  --engines <engine1,engine2,...>  Specify engines to test (faiss,lucene,jvector)
+  --run-index-creation             Enable index creation scenario
+  --run-force-merge                Enable force merge scenario
+  --run-search-tests               Enable search concurrency tests
+  --help                           Show help message
+```
+
+### Example Commands
+
+Test only FAISS and JVector:
+```bash
+./run-benchmark.sh --engines faiss,jvector
+```
+
+Run full benchmark suite:
+```bash
+./run-benchmark.sh --run-index-creation --run-force-merge --run-search-tests
+```
+
+## 📊 Benchmark Scenarios
+
+### 1. Create Index
+- Creates target index with engine-specific configurations
+- Validates index mapping and field types
+- Output: `results/multi-engine-results-{timestamp}/{engine}-metrics/scenario-1-create-index/`
+
+### 2. Bulk Ingestion
+- Loads vector data into the index
+- Measures ingestion throughput and performance
+- Output: `results/multi-engine-results-{timestamp}/{engine}-metrics/scenario-2-custom-vector-bulk/`
+
+### 3. Force Merge
+- Performs force merge operation on the index
+- Optimizes segment structure
+- Output: `results/multi-engine-results-{timestamp}/{engine}-metrics/scenario-force-merge-index/`
+
+### 4. Search Concurrency Matrix
+- Tests search performance with varying client counts (10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
+- Collects comprehensive metrics:
+  - Throughput (ops/s)
+  - Latency percentiles (p50, p90, p99, p99.9, p99.99, max)
+  - Service time percentiles
+  - Error rates
+  - Recall metrics (recall@k, recall@1)
+  - GC statistics
+- Output: `results/multi-engine-results-{timestamp}/{engine}-metrics/scenario-search-only/`
+  - Individual run logs in `clients-{N}/` subdirectories
+  - Aggregated metrics in `summary.csv`
+
+## 📈 Results Structure
+
+```
+results/
+└── multi-engine-results-20260604-145009/
+    ├── faiss-metrics/
+    │   ├── scenario-1-create-index/
+    │   │   ├── console.log
+    │   │   └── index-mapping-validation.json
+    │   ├── scenario-2-custom-vector-bulk/
+    │   │   ├── console.log
+    │   │   └── test_run.json
+    │   ├── scenario-force-merge-index/
+    │   ├── scenario-search-only/
+    │   │   ├── clients-10/
+    │   │   ├── clients-20/
+    │   │   ├── ...
+    │   │   └── summary.csv
+    │   └── cluster-telemetry-state/
+    ├── lucene-metrics/
+    └── jvector-metrics/
+```
+
+## 🔧 Configuration
+
+### Global Configuration
+
+Edit `run-benchmark.sh` to modify default behavior:
+```bash
+# Enable/disable profiling
+ENABLE_PROFILING=true
+```
+
+### Engine-Specific Parameters
+
+Workload parameters are defined in `lib/workload-params.sh`:
+- Index settings (shards, replicas)
+- Vector dimensions
+- Engine-specific configurations (ef_construction, m, etc.)
+- Search parameters
+
+## 🚢 Deployment
+
+### GKE Deployment
+
+Use the provided manifest files to deploy OpenSearch clusters:
+
+```bash
+# Deploy JVector cluster
+./gke-manifest/deploy-jvector-cluster.sh
+
+# Or apply manifests directly
+kubectl apply -f gke-manifest/opensearch-cluster-faiss.yaml
+kubectl apply -f gke-manifest/opensearch-cluster-lucene.yaml
+kubectl apply -f gke-manifest/opensearch-jvector-statefulset.yaml
+```
+
+## 📝 Output Format
+
+The benchmark runner provides clear, formatted output:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 SCENARIO: Create Index [faiss]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ▶ Running index creation...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔍 SCENARIO: Search Concurrency Matrix Sweeps [faiss]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  ▶ Running search test with 10 concurrent clients...
+  ▶ Running search test with 20 concurrent clients...
+```
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit issues or pull requests.
+
+## 📄 License
+
+This project is open source and available under the MIT License.
+
+## 👤 Author
+
+Suren Sritharan
+
+## 🔗 Repository
+
+https://github.com/SurenSritharan/opensearch-benchmark-automation
