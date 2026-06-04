@@ -74,12 +74,14 @@ run_bulk_ingestion_scenario() {
   
   # Start profiling if enabled
   if [ "$ENABLE_PROFILING" = true ]; then
+    echo ""
     echo "🔥 Starting profiling for bulk ingestion..."
     local pods=$(get_opensearch_pods "$namespace")
     local pod_array=($pods)
     for i in "${!pod_array[@]}"; do
       start_node_profiling "$namespace" "${pod_array[$i]}" 300 "$scenario_dir" "bulk-node-$i" &
     done
+    echo ""
   fi
   
   run_benchmark "$namespace" "$index_params" "no-train-test-index-only" \
@@ -88,6 +90,7 @@ run_bulk_ingestion_scenario() {
   
   # Collect profiling artifacts if enabled
   if [ "$ENABLE_PROFILING" = true ]; then
+    echo ""
     echo "🔥 Collecting profiling artifacts..."
     sleep 5  # Allow profilers to complete
     local pods=$(get_opensearch_pods "$namespace")
@@ -95,6 +98,7 @@ run_bulk_ingestion_scenario() {
     for i in "${!pod_array[@]}"; do
       reap_profile_artifacts "$namespace" "${pod_array[$i]}" "bulk-node-$i" "$scenario_dir"
     done
+    echo ""
   fi
   
   download_artifacts "$scenario_dir" "$scenario_dir/console.log" "$namespace"
@@ -155,14 +159,16 @@ run_search_concurrency_scenario() {
     # Build search params with search_clients
     local search_params=$(build_search_params "$engine" "$clients")
     
-    # Start profiling if enabled (only for high concurrency tests)
-    if [ "$ENABLE_PROFILING" = true ] && [ "$clients" -ge 50 ]; then
+    # Start profiling if enabled
+    if [ "$ENABLE_PROFILING" = true ]; then
+      echo ""
       echo "🔥 Starting profiling for ${clients} clients..."
       local pods=$(get_opensearch_pods "$namespace")
       local pod_array=($pods)
       for i in "${!pod_array[@]}"; do
         start_node_profiling "$namespace" "${pod_array[$i]}" 120 "$run_dir" "search-${clients}c-node-$i" &
       done
+      echo ""
     fi
     
     run_benchmark "$namespace" "$search_params" "search-only" \
@@ -170,7 +176,8 @@ run_search_concurrency_scenario() {
       "$run_dir/console.log"
     
     # Collect profiling artifacts if enabled
-    if [ "$ENABLE_PROFILING" = true ] && [ "$clients" -ge 50 ]; then
+    if [ "$ENABLE_PROFILING" = true ]; then
+      echo ""
       echo "🔥 Collecting profiling artifacts..."
       sleep 5  # Allow profilers to complete
       local pods=$(get_opensearch_pods "$namespace")
@@ -178,6 +185,7 @@ run_search_concurrency_scenario() {
       for i in "${!pod_array[@]}"; do
         reap_profile_artifacts "$namespace" "${pod_array[$i]}" "search-${clients}c-node-$i" "$run_dir"
       done
+      echo ""
     fi
     
     download_artifacts "$run_dir" "$run_dir/console.log" "$namespace"

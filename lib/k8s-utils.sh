@@ -75,7 +75,43 @@ run_benchmark() {
 get_opensearch_pods() {
   local namespace="$1"
   
-  kubectl get pods -n "$namespace" -l app=opensearch-cluster -o jsonpath='{.items[*].metadata.name}' 2>/dev/null
+  echo "  🔍 Looking for OpenSearch pods in namespace: $namespace" >&2
+  
+  # Try multiple label selectors and patterns
+  local pods=""
+  
+  # Try app=opensearch-cluster
+  pods=$(kubectl get pods -n "$namespace" -l app=opensearch-cluster -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+  
+  # If not found, try app=opensearch
+  if [ -z "$pods" ]; then
+    pods=$(kubectl get pods -n "$namespace" -l app=opensearch -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+  fi
+  
+  # If still not found, try pattern matching for opensearch-cluster-*
+  if [ -z "$pods" ]; then
+    pods=$(kubectl get pods -n "$namespace" -o name 2>/dev/null | grep -E 'opensearch-cluster-[0-9]+' | sed 's|pod/||' | tr '\n' ' ')
+  fi
+  
+  # If still not found, try pattern matching for opensearch-native-*
+  if [ -z "$pods" ]; then
+    pods=$(kubectl get pods -n "$namespace" -o name 2>/dev/null | grep -E 'opensearch-native-[0-9]+' | sed 's|pod/||' | tr '\n' ' ')
+  fi
+  
+  # If still not found, try any pod starting with opensearch-
+  if [ -z "$pods" ]; then
+    pods=$(kubectl get pods -n "$namespace" -o name 2>/dev/null | grep -E '^pod/opensearch-[^b][a-z-]*-[0-9]+' | sed 's|pod/||' | tr '\n' ' ')
+  fi
+  
+  # If still not found, list all pods for debugging
+  if [ -z "$pods" ]; then
+    echo "  ⚠️  No OpenSearch pods found. Available pods:" >&2
+    kubectl get pods -n "$namespace" -o name 2>/dev/null | sed 's|pod/||' >&2
+  else
+    echo "  ✅ Found OpenSearch pods: $pods" >&2
+  fi
+  
+  echo "$pods"
 }
 
 # Made with Bob
