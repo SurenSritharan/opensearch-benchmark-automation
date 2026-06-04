@@ -62,7 +62,7 @@ reap_profile_artifacts() {
   
   # Extract file payloads safely
   kubectl exec -n "$namespace" "$pod_name" -c opensearch -- cat /tmp/cpu_profile_${label}.html > "$target_dir/profiles/cpu_flame_graph_${label}.html" 2>/dev/null || true
-  kubectl exec -n "$namespace" "$prefix" "$pod_name" -c opensearch -- cat /tmp/disk_${label}.log > "$target_dir/profiles/disk_io_${label}.log" 2>/dev/null || true
+  kubectl exec -n "$namespace" "$pod_name" -c opensearch -- cat /tmp/disk_${label}.log > "$target_dir/profiles/disk_io_${label}.log" 2>/dev/null || true
   kubectl exec -n "$namespace" "$pod_name" -c opensearch -- cat /tmp/memory_${label}.log > "$target_dir/profiles/jvm_memory_${label}.log" 2>/dev/null || true
   
   # Clean up ephemeral container workspace files

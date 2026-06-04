@@ -3,6 +3,7 @@
 
 source "$(dirname "${BASH_SOURCE[0]}")/k8s-utils.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/workload-params.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/profiling.sh"
 
 run_index_creation_scenario() {
   local engine="$1"
@@ -68,9 +69,30 @@ run_bulk_ingestion_scenario() {
   
   local index_params=$(build_index_params "$engine")
   
+  # Start profiling if enabled
+  if [ "$ENABLE_PROFILING" = true ]; then
+    echo "🔥 Starting profiling for bulk ingestion..."
+    local pods=$(get_opensearch_pods "$namespace")
+    local pod_array=($pods)
+    for i in "${!pod_array[@]}"; do
+      start_node_profiling "$namespace" "${pod_array[$i]}" 300 "$scenario_dir" "bulk-node-$i" &
+    done
+  fi
+  
   run_benchmark "$namespace" "$index_params" "no-train-test-index-only" \
     "--include-tasks=custom-vector-bulk" \
     "$scenario_dir/console.log"
+  
+  # Collect profiling artifacts if enabled
+  if [ "$ENABLE_PROFILING" = true ]; then
+    echo "🔥 Collecting profiling artifacts..."
+    sleep 5  # Allow profilers to complete
+    local pods=$(get_opensearch_pods "$namespace")
+    local pod_array=($pods)
+    for i in "${!pod_array[@]}"; do
+      reap_profile_artifacts "$namespace" "${pod_array[$i]}" "bulk-node-$i" "$scenario_dir"
+    done
+  fi
   
   download_artifacts "$scenario_dir" "$scenario_dir/console.log" "$namespace"
 }
@@ -130,9 +152,30 @@ run_search_concurrency_scenario() {
     # Build search params with search_clients
     local search_params=$(build_search_params "$engine" "$clients")
     
+    # Start profiling if enabled (only for high concurrency tests)
+    if [ "$ENABLE_PROFILING" = true ] && [ "$clients" -ge 50 ]; then
+      echo "🔥 Starting profiling for ${clients} clients..."
+      local pods=$(get_opensearch_pods "$namespace")
+      local pod_array=($pods)
+      for i in "${!pod_array[@]}"; do
+        start_node_profiling "$namespace" "${pod_array[$i]}" 120 "$run_dir" "search-${clients}c-node-$i" &
+      done
+    fi
+    
     run_benchmark "$namespace" "$search_params" "search-only" \
       "--exclude-tasks=warmup-indices" \
       "$run_dir/console.log"
+    
+    # Collect profiling artifacts if enabled
+    if [ "$ENABLE_PROFILING" = true ] && [ "$clients" -ge 50 ]; then
+      echo "🔥 Collecting profiling artifacts..."
+      sleep 5  # Allow profilers to complete
+      local pods=$(get_opensearch_pods "$namespace")
+      local pod_array=($pods)
+      for i in "${!pod_array[@]}"; do
+        reap_profile_artifacts "$namespace" "${pod_array[$i]}" "search-${clients}c-node-$i" "$run_dir"
+      done
+    fi
     
     download_artifacts "$run_dir" "$run_dir/console.log" "$namespace"
     

@@ -12,6 +12,7 @@ A modular benchmark automation framework for testing OpenSearch vector search pe
   - Search concurrency testing with multiple client configurations
 - **Organized Results**: All benchmark results stored in timestamped directories under `results/`
 - **Enhanced Output**: Clear visual separators and progress indicators for each scenario
+- **Profiling Support**: Automatic CPU flame graph generation using async-profiler
 - **Telemetry Collection**: Comprehensive cluster health, stats, and performance metrics
 - **Kubernetes Integration**: Designed to work with OpenSearch clusters deployed on GKE
 
@@ -117,11 +118,21 @@ results/
     │   │   └── index-mapping-validation.json
     │   ├── scenario-2-custom-vector-bulk/
     │   │   ├── console.log
-    │   │   └── test_run.json
+    │   │   ├── test_run.json
+    │   │   └── profiles/
+    │   │       ├── cpu_flame_graph_bulk-node-0.html
+    │   │       ├── disk_io_bulk-node-0.log
+    │   │       └── jvm_memory_bulk-node-0.log
     │   ├── scenario-force-merge-index/
     │   ├── scenario-search-only/
     │   │   ├── clients-10/
-    │   │   ├── clients-20/
+    │   │   ├── clients-50/
+    │   │   │   ├── console.log
+    │   │   │   ├── test_run.json
+    │   │   │   └── profiles/
+    │   │   │       ├── cpu_flame_graph_search-50c-node-0.html
+    │   │   │       ├── disk_io_search-50c-node-0.log
+    │   │   │       └── jvm_memory_search-50c-node-0.log
     │   │   ├── ...
     │   │   └── summary.csv
     │   └── cluster-telemetry-state/
@@ -135,9 +146,23 @@ results/
 
 Edit `run-benchmark.sh` to modify default behavior:
 ```bash
-# Enable/disable profiling
+# Enable/disable profiling (CPU flame graphs, memory, disk I/O)
 ENABLE_PROFILING=true
 ```
+
+### Profiling Features
+
+When `ENABLE_PROFILING=true`, the framework automatically:
+- **Bulk Ingestion**: Profiles all OpenSearch nodes during vector ingestion (300s duration)
+- **Search Tests**: Profiles nodes during high-concurrency tests (≥50 clients, 120s duration)
+
+**Profiling Artifacts Generated:**
+- `cpu_flame_graph_*.html` - Interactive CPU flame graphs (async-profiler)
+- `disk_io_*.log` - Disk I/O statistics before/after
+- `jvm_memory_*.log` - JVM heap and native memory snapshots
+
+**Viewing Flame Graphs:**
+Open the HTML files in any web browser to analyze CPU hotspots and call stacks.
 
 ### Engine-Specific Parameters
 

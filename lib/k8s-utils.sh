@@ -72,4 +72,10 @@ run_benchmark() {
       2>&1 | tee "$output_log"
 }
 
+get_opensearch_pods() {
+  local namespace="$1"
+  
+  kubectl get pods -n "$namespace" -l app=opensearch-cluster -o jsonpath='{.items[*].metadata.name}' 2>/dev/null
+}
+
 # Made with Bob
