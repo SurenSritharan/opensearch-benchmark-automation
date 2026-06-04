@@ -1,0 +1,129 @@
+# OpenSearch Benchmark Client
+# Deploy to any namespace by specifying it with kubectl apply -n <namespace>
+# Example: kubectl apply -f opensearch-benchmark-client-only.yaml -n os-jvector
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: opensearch-benchmark-client
+  # namespace will be set by kubectl apply -n <namespace>
+  labels:
+    app: opensearch-benchmark
+    component: client
+spec:
+  nodeSelector:
+    cloud.google.com/gke-nodepool: client-pool
+  
+  # Init container to download and prepare datasets
+  initContainers:
+  - name: bechmark-init
+    image: python:3.11-slim
+    command: ["/bin/bash", "-c"]
+    args:
+      - |
+        set -ex
+        
+        # Install dependencies
+        apt-get update -qq
+        apt-get install -y -qq curl wget git git-lfs
+        
+        # Install Python packages
+        pip install --quiet opensearch-benchmark h5py
+            
+    resources:
+      requests:
+        memory: "4Gi"
+        cpu: "2"
+      limits:
+        memory: "8Gi"
+        cpu: "4"
+    
+    volumeMounts:
+    - name: datasets
+      mountPath: /datasets
+  
+  containers:
+  - name: benchmark
+    image: python:3.11-slim
+    command: ["/bin/bash", "-c"]
+    args:
+      - |
+        set -ex
+        
+        # Install dependencies (including HDF5 support)
+        apt-get update -qq
+        apt-get install -y -qq git curl wget vim libhdf5-dev
+        
+        # Install opensearch-benchmark with HDF5 support
+        pip install --quiet opensearch-benchmark h5py numpy scikit-learn
+        
+        # Create directories
+        mkdir -p /root/.benchmark/logs
+        mkdir -p /results
+        
+        # Clone opensearch-benchmark-workloads repository
+        echo "Cloning opensearch-benchmark-workloads..."
+        cd /root
+        git clone --depth 1 https://github.com/opensearch-project/opensearch-benchmark-workloads.git
+        
+        echo "Setup complete! Container ready for benchmarking."
+        
+        # Keep container running
+        tail -f /dev/null
+    
+    env:
+    - name: BENCHMARK_HOME
+      value: "/datasets/opensearch-benchmark"
+    - name: PYTHONUNBUFFERED
+      value: "1"
+    - name: NO_COLOR
+      value: "1"
+    - name: TERM
+      value: "dumb"
+    
+    # Match Go client resources
+    resources:
+      requests:
+        memory: "48Gi"
+        cpu: "12"
+      limits:
+        memory: "48Gi"
+        cpu: "16"
+    
+    volumeMounts:
+    - name: benchmark-data
+      mountPath: /root/.benchmark
+    - name: datasets
+      mountPath: /datasets
+    - name: results
+      mountPath: /results
+  
+  volumes:
+  - name: benchmark-data
+    emptyDir:
+      sizeLimit: 20Gi
+  - name: datasets
+    persistentVolumeClaim:
+      claimName: benchmark-nvme-storage
+  - name: results
+    emptyDir:
+      sizeLimit: 10Gi
+  
+  restartPolicy: Never
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-benchmark-client
+  # namespace will be set by kubectl apply -n <namespace>
+spec:
+  selector:
+    app: opensearch-benchmark
+    component: client
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http
+  type: ClusterIP
+
+# Made with Bob
