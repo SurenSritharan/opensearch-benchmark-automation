@@ -1,0 +1,17 @@
+# Results directories
+results
+
+# OS files
+.DS_Store
+*.swp
+*.swo
+*~
+
+# IDE files
+.idea/
+
+# Temporary files
+*.log
+*.tmp
+
+# Made with Bob
