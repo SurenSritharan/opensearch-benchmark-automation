@@ -165,49 +165,6 @@ def main():
                 continue  # Skip to next engine
 
         # -------------------------------------------------------------
-        # SCENARIO 2: BULK INGESTION
-        # -------------------------------------------------------------
-        if "bulk" in config.target_scenarios:
-            print_separator(f"Bulk Vector Ingestion [{engine}]")
-
-            # Get parameter file (for official workloads) or None (for custom)
-            local_param_file = dataset.generate_runtime_parameters(engine, client_count=10, query_count=config.query_count)
-            remote_param_path = None
-            
-            if dataset.is_official:
-                # Copy parameter file to pod for official workloads
-                remote_param_path = f"/tmp/params-{engine}-bulk.json"
-                dataset._write_file_to_pod(
-                    ns,
-                    "opensearch-benchmark-client",
-                    remote_param_path,
-                    local_param_file.read_text(),
-                )
-
-            success = run_benchmark_with_profiling(
-                executor=executor,
-                profiler=profiler,
-                namespace=ns,
-                scenario_name="scenario-2-custom-vector-bulk",
-                workload_path=dataset.workload_path,
-                test_procedure=dataset.test_procedures["bulk"],
-                workload_params=remote_param_path,
-                extra_args=[],
-                enable_profiling=config.profiling_enabled,
-                warmup_seconds=60,
-                profile_duration=45,
-            )
-            
-            # Clean up temp file for official workloads
-            if dataset.is_official and local_param_file.exists():
-                local_param_file.unlink(missing_ok=True)
-            
-            # Stop if bulk ingestion failed
-            if not success:
-                print(f"\n❌ Bulk ingestion failed for {engine}. Skipping remaining scenarios.\n")
-                continue  # Skip to next engine
-
-        # -------------------------------------------------------------
         # SCENARIO 4: SEARCH CONCURRENCY MATRIX WITH PROFILING
         # -------------------------------------------------------------
         if "search" in config.target_scenarios:

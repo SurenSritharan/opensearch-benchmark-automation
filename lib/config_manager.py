@@ -158,10 +158,10 @@ class ConfigManager:
         
         scenarios = []
         if "4" in selected_tokens:
-            scenarios = ["index", "bulk", "merge", "search"]
+            scenarios = ["index", "merge", "search"]
         else:
             if "1" in selected_tokens:
-                scenarios.extend(["index", "bulk"])
+                scenarios.append("index")
             if "2" in selected_tokens:
                 scenarios.append("merge")
             if "3" in selected_tokens:

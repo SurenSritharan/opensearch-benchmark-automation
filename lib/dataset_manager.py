@@ -184,6 +184,94 @@ class DatasetManager:
                     print(f"  ✅ Injected: {template_file.name}")
             
             print(f"  ✅ Custom workload ready at {remote_base}")
+            
+            # Download data files if specified
+            self._download_data_files(namespace, pod_name)
+
+    def _download_data_files(self, namespace: str, pod_name: str):
+        """Download data files specified in dataset configuration."""
+        data_files = self.dataset_data.get("data_files", [])
+        if not data_files:
+            return
+        
+        data_dir = self.dataset_data.get("data_dir", f"/datasets/{self.dataset_name}")
+        
+        print(f"  📥 Checking data files in {data_dir}...")
+        
+        # Create data directory
+        self._exec_raw_command(namespace, pod_name, ["mkdir", "-p", data_dir])
+        
+        for file_info in data_files:
+            file_name = file_info.get("name")
+            file_url = file_info.get("url")
+            file_range = file_info.get("range")
+            
+            if not file_name or not file_url:
+                continue
+            
+            file_path = f"{data_dir}/{file_name}"
+            
+            # Calculate expected file size from range
+            expected_size = None
+            if file_range:
+                try:
+                    # Parse range like "0-4100000000" to get size
+                    start, end = file_range.split("-")
+                    expected_size = int(end) - int(start) + 1
+                except:
+                    pass
+            
+            # Check if file exists and has correct size
+            needs_download = False
+            try:
+                # Get file size
+                stat_output = self._exec_raw_command(namespace, pod_name, ["stat", "-c", "%s", file_path])
+                current_size = int(stat_output.strip())
+                
+                if expected_size and current_size != expected_size:
+                    print(f"  ⚠️  File size mismatch for {file_name}")
+                    print(f"     Current: {current_size} bytes, Expected: {expected_size} bytes")
+                    print(f"     Re-downloading with updated range...")
+                    needs_download = True
+                else:
+                    print(f"  ✅ File already exists with correct size: {file_name}")
+                    continue
+            except:
+                # File doesn't exist
+                needs_download = True
+            
+            if needs_download:
+                print(f"  📥 Downloading {file_name}...")
+                print(f"     URL: {file_url}")
+                if file_range:
+                    if expected_size:
+                        size_mb = expected_size / (1024 * 1024)
+                        print(f"     Range: {file_range} ({size_mb:.1f} MB)")
+                    else:
+                        print(f"     Range: {file_range}")
+                
+                # Use wget in silent mode - we'll show our own progress messages
+                wget_cmd = ["wget", "-q", "-O", file_path]
+                
+                # Add range header if specified
+                if file_range:
+                    wget_cmd.extend(["--header", f"Range: bytes={file_range}"])
+                
+                wget_cmd.append(file_url)
+                
+                # Execute download
+                try:
+                    output = self._exec_raw_command(namespace, pod_name, wget_cmd)
+                    
+                    # Verify download completed
+                    stat_output = self._exec_raw_command(namespace, pod_name, ["stat", "-c", "%s", file_path])
+                    downloaded_size = int(stat_output.strip())
+                    downloaded_mb = downloaded_size / (1024 * 1024)
+                    
+                    print(f"  ✅ Downloaded: {file_name} ({downloaded_mb:.1f} MB)")
+                except Exception as e:
+                    print(f"  ❌ Failed to download {file_name}: {str(e)}")
+                    raise
 
     def _write_file_to_pod(self, namespace: str, pod_name: str, dest_path: str, content: str):
         try:

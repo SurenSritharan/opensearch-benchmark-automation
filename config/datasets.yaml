@@ -1,40 +1,4 @@
 # Dataset Configuration Registry
-# Add new datasets here with their specific parameters
-#
-# STANDARDIZED FORMAT FOR EASY DATASET ADDITION:
-#
-# For Official Workloads (from opensearch-benchmark-workloads):
-#   dataset_name:
-#     dimension: <vector dimension>
-#     format: <data format (hdf5, bigann, etc.)>
-#     space_type: <distance metric (innerproduct, l2, cosinesimil, etc.)>
-#     description: <dataset description>
-#     workload_name: "vectorsearch"
-#     is_official: true
-#     corpus_name: <corpus name in workload>
-#     param_files:
-#       faiss: "params/corpus/<size>/faiss-<corpus>-<dim>-dp.json"
-#       lucene: "params/corpus/<size>/lucene-<corpus>-<dim>-dp.json"
-#       nmslib: "params/corpus/<size>/nmslib-<corpus>-<dim>-dp.json"
-#     test_procedures: (optional - override defaults)
-#       index: "no-train-test-index-only"  # Default
-#       bulk: "no-train-test"              # Default
-#       search: "search-only"              # Default
-#
-# For Custom Workloads:
-#   dataset_name:
-#     dimension: <vector dimension>
-#     format: <data format>
-#     space_type: <distance metric>
-#     description: <dataset description>
-#     workload_name: <workload directory name>
-#     is_official: false
-#     custom_workload: "workloads/<workload_name>"
-#     data_dir: "/datasets/<dataset_name>"
-#     data_files: (optional - for download)
-#       - name: <filename>
-#         url: <download url>
-#     test_procedures: (optional - same as above)
 
 datasets:
   # Official vectorsearch workload datasets
