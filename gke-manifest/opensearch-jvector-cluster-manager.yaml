@@ -1,0 +1,205 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opensearch-cluster-manager-config
+  namespace: os-jvector
+data:
+  opensearch.yml: |
+    cluster.name: opensearch-cluster
+    network.host: 0.0.0.0
+    
+    node.roles: [cluster_manager]
+    
+    discovery.seed_hosts:
+      - opensearch-cluster-manager-0.opensearch-cluster-manager.os-jvector.svc.cluster.local
+      
+    cluster.initial_cluster_manager_nodes:
+      - opensearch-cluster-manager-0
+    
+    discovery.seed_resolver.timeout: 10s
+    discovery.seed_resolver.max_concurrent_resolvers: 3
+    
+    plugins.security.disabled: false
+    plugins.security.allow_default_init_securityindex: true
+    plugins.security.allow_unsafe_democertificates: true
+    
+    plugins.security.ssl.http.enabled: true
+    plugins.security.ssl.http.pemcert_filepath: certs/esnode.pem
+    plugins.security.ssl.http.pemkey_filepath: certs/esnode-key.pem
+    plugins.security.ssl.http.pemtrustedcas_filepath: certs/root-ca.pem
+    
+    plugins.security.ssl.transport.pemcert_filepath: certs/esnode.pem
+    plugins.security.ssl.transport.pemkey_filepath: certs/esnode-key.pem
+    plugins.security.ssl.transport.pemtrustedcas_filepath: certs/root-ca.pem
+    plugins.security.ssl.transport.enforce_hostname_verification: false
+    plugins.security.ssl.transport.resolve_hostname: false
+    
+    plugins.security.authcz.admin_dn:
+      - CN=kirk,OU=client,O=client,L=test,C=de
+    
+    plugins.security.nodes_dn:
+      - "CN=opensearch-node,OU=SSL,O=Test,L=Test,ST=Test,C=DE"
+    
+    action.auto_create_index: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-cluster-manager
+  namespace: os-jvector
+  labels:
+    app: opensearch-cluster-manager
+spec:
+  clusterIP: None
+  selector:
+    app: opensearch-cluster-manager
+  ports:
+    - name: transport
+      port: 9300
+      targetPort: 9300
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: opensearch-cluster-manager
+  namespace: os-jvector
+spec:
+  serviceName: opensearch-cluster-manager
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opensearch-cluster-manager
+  template:
+    metadata:
+      labels:
+        app: opensearch-cluster-manager
+        node-role: cluster-manager
+    spec:
+      initContainers:
+        # FIX: Added plugin container to guarantee cluster state mapping alignment
+        - name: install-jvector-plugin
+          image: opensearchproject/opensearch:3.6.0
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              echo "Installing JVector Plugin on cluster manager..."
+              
+              # Copy base plugins from image to shared volume
+              cp -r /usr/share/opensearch/plugins/* /mnt/plugins/
+              
+              # Download JVector plugin
+              curl -sL https://repo1.maven.org/maven2/org/opensearch/plugin/opensearch-jvector-plugin/3.6.0.0/opensearch-jvector-plugin-3.6.0.0.zip -o /tmp/jvector.zip
+              
+              # Remove conflicting plugins
+              rm -rf /mnt/plugins/opensearch-neural-search
+              rm -rf /mnt/plugins/opensearch-knn
+              
+              # Install JVector plugin
+              mkdir -p /mnt/plugins/opensearch-jvector
+              cd /mnt/plugins/opensearch-jvector
+              jar xf /tmp/jvector.zip
+              echo "JVector plugin installed successfully!"
+          volumeMounts:
+            - name: plugins
+              mountPath: /mnt/plugins
+        
+        - name: sysctl
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - "sysctl -w vm.max_map_count=262144"
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            runAsNonRoot: false
+      
+      securityContext:
+        fsGroup: 1000
+        runAsUser: 1000
+        runAsNonRoot: true
+      
+      containers:
+        - name: opensearch
+          image: opensearchproject/opensearch:3.6.0
+          securityContext:
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+                - SETGID
+                - SETUID
+            runAsUser: 1000
+            runAsNonRoot: true
+          env:
+            - name: cluster.name
+              value: "opensearch-cluster"
+            - name: node.name
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPENSEARCH_JAVA_OPTS
+              value: "-Xms2g -Xmx2g"
+            - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
+              value: "admin"
+            - name: DISABLE_INSTALL_DEMO_CONFIG
+              value: "false"
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          ports:
+            - containerPort: 9200
+              name: http
+            - containerPort: 9300
+              name: transport
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/opensearch/data
+            - name: plugins
+              mountPath: /usr/share/opensearch/plugins
+            - name: config
+              mountPath: /usr/share/opensearch/config/opensearch.yml
+              subPath: opensearch.yml
+            - name: certs
+              mountPath: /usr/share/opensearch/config/certs
+          readinessProbe:
+            tcpSocket:
+              port: 9300
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 9300
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: opensearch-cluster-manager-config
+        - name: plugins
+          emptyDir: {}
+        - name: certs
+          secret:
+            secretName: opensearch-shared-certs
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        storageClassName: premium-rwo
+        resources:
+          requests:
+            storage: 20Gi
+
+# Made with Bob
