@@ -1,10 +1,15 @@
 {
   "target_index_name": "cohere-msmarco-1024",
   "target_index_body": "indices/index.json",
-  "target_index_primary_shards": 5,
+  "target_index_primary_shards": 1,
   "target_index_replica_shards": 0,
   "target_index_dimension": 1024,
+  "target_index_max_num_segments": 1,
   "engine": "jvector",
   "method_name": "hnsw",
-  "space_type": "cosinesimil"
+  "space_type": "cosinesimil",
+  "query_k": 10,
+  "query_count": 10000,
+  "query_clients": 1,
+  "warmup_iterations": 100
 }

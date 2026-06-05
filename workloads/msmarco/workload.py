@@ -88,5 +88,147 @@ class MsMarcoFvecPartition:
             "body": body
         }
 
+class MsMarcoSearchSource:
+    """Param source for MS MARCO vector search queries with ground truth validation"""
+    def __init__(self, workload, params, **kwargs):
+        self.index_name = params.get("index")
+        self.k = params.get("k", 10)
+        self.query_count = params.get("query_count", 10000)
+        
+        # MS MARCO query files
+        self.queries_file = "/datasets/msmarco/cohere_msmarco_base.fvec"  # Using base vectors as queries for now
+        self.dim = 1024
+        self.vector_size_bytes = 4 + (self.dim * 4)
+        
+        # Load ground truth if available
+        self.ground_truth_indices = None
+        self.ground_truth_distances = None
+        
+        try:
+            # Try to load ground truth data
+            indices_file = "/datasets/msmarco/cohere_msmarco_indices_d1024_k10_1m.ivec"
+            distances_file = "/datasets/msmarco/cohere_msmarco_distances_d1024_k10_1m.fvec"
+            
+            if os.path.exists(indices_file):
+                self.ground_truth_indices = self._load_ivec(indices_file, self.query_count, self.k)
+            if os.path.exists(distances_file):
+                self.ground_truth_distances = self._load_fvec(distances_file, self.query_count, self.k)
+        except Exception as e:
+            print(f"Warning: Could not load ground truth data: {e}")
+    
+    def _load_ivec(self, filepath, num_vectors, dim):
+        """Load integer vectors (indices) from .ivec file"""
+        data = []
+        with open(filepath, 'rb') as f:
+            for _ in range(num_vectors):
+                length_bytes = f.read(4)
+                if not length_bytes:
+                    break
+                vec_bytes = f.read(dim * 4)
+                if not vec_bytes:
+                    break
+                vec = struct.unpack(f"{dim}i", vec_bytes)
+                data.append(list(vec))
+        return data
+    
+    def _load_fvec(self, filepath, num_vectors, dim):
+        """Load float vectors (distances) from .fvec file"""
+        data = []
+        with open(filepath, 'rb') as f:
+            for _ in range(num_vectors):
+                length_bytes = f.read(4)
+                if not length_bytes:
+                    break
+                vec_bytes = f.read(dim * 4)
+                if not vec_bytes:
+                    break
+                vec = struct.unpack(f"{dim}f", vec_bytes)
+                data.append(list(vec))
+        return data
+    
+    def partition(self, client_index, total_clients):
+        return MsMarcoSearchPartition(self, client_index, total_clients)
+
+class MsMarcoSearchPartition:
+    def __init__(self, source, client_index, total_clients):
+        self.source = source
+        self.index_name = source.index_name
+        self.k = source.k
+        self.dim = source.dim
+        self.vector_size_bytes = source.vector_size_bytes
+        
+        # Partition queries across clients
+        queries_per_client = source.query_count // total_clients
+        self.start_query = client_index * queries_per_client
+        self.end_query = self.start_query + queries_per_client if client_index < total_clients - 1 else source.query_count
+        self.current_query = self.start_query
+        
+        # Open query file
+        self.f = open(source.queries_file, "rb")
+        self.f.seek(self.current_query * self.vector_size_bytes)
+        
+        self.ground_truth_indices = source.ground_truth_indices
+        self.ground_truth_distances = source.ground_truth_distances
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        return self.params()
+    
+    @property
+    def percent_completed(self):
+        total = self.end_query - self.start_query
+        return 1.0 if total == 0 else (self.current_query - self.start_query) / total
+    
+    def params(self):
+        if self.current_query >= self.end_query:
+            self.f.close()
+            raise StopIteration
+        
+        # Read query vector
+        length_bytes = self.f.read(4)
+        if not length_bytes or len(length_bytes) < 4:
+            self.f.close()
+            raise StopIteration
+        
+        vec_bytes = self.f.read(self.dim * 4)
+        if not vec_bytes or len(vec_bytes) < (self.dim * 4):
+            self.f.close()
+            raise StopIteration
+        
+        query_vector = list(struct.unpack(f"{self.dim}f", vec_bytes))
+        
+        # Build search query
+        query_body = {
+            "size": self.k,
+            "query": {
+                "knn": {
+                    "vector": {
+                        "vector": query_vector,
+                        "k": self.k
+                    }
+                }
+            },
+            "_source": False,
+            "docvalue_fields": ["_id"]
+        }
+        
+        result = {
+            "index": self.index_name,
+            "body": query_body,
+            "cache": False
+        }
+        
+        # Add ground truth if available
+        if self.ground_truth_indices and self.current_query < len(self.ground_truth_indices):
+            result["expected_ids"] = self.ground_truth_indices[self.current_query]
+        if self.ground_truth_distances and self.current_query < len(self.ground_truth_distances):
+            result["expected_distances"] = self.ground_truth_distances[self.current_query]
+        
+        self.current_query += 1
+        return result
+
 def register(registry):
     registry.register_param_source("msmarco-fvcec-bulk-source", MsMarcoFvecBulkSource)
+    registry.register_param_source("msmarco-search-source", MsMarcoSearchSource)

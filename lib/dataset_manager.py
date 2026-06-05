@@ -32,7 +32,8 @@ class DatasetManager:
         self.test_procedures = {
             "index": custom_procedures.get("index", "no-train-test-index-only"),
             "bulk": custom_procedures.get("bulk", "no-train-test"),
-            "search": custom_procedures.get("search", "search-only")
+            "search": custom_procedures.get("search", "search-only"),
+            "merge": custom_procedures.get("merge", "force-merge-index")
         }
         
         config.load_kube_config()

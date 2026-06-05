@@ -19,6 +19,7 @@ datasets:
       index: "no-train-test-index-only"     # Default
       bulk: "no-train-test"                 # Default
       search: "search-only-no-warmup"       # Custom: skips warmup-indices task
+      merge: "force-merge-index"            # Force merge to consolidate segments
   
   # Custom workload datasets
   msmarco:
@@ -48,7 +49,8 @@ datasets:
     test_procedures:
       index: "index-only"
       bulk: "bulk-ingest"
-      search: ""
+      search: "search-only"
+      merge: "force-merge"
 
 # Default dataset to use if none specified
 default: cohere-1m

@@ -165,7 +165,44 @@ def main():
                 continue  # Skip to next engine
 
         # -------------------------------------------------------------
-        # SCENARIO 4: SEARCH CONCURRENCY MATRIX WITH PROFILING
+        # SCENARIO 2: FORCE MERGE
+        # -------------------------------------------------------------
+        if "merge" in config.target_scenarios:
+            print_separator(f"Force Merge [{engine}]")
+            
+            # Get parameter file (for official workloads) or None (for custom)
+            local_param_file = dataset.generate_runtime_parameters(engine, client_count=1, query_count=config.query_count)
+            remote_param_path = None
+            
+            if dataset.is_official:
+                # Copy parameter file to pod for official workloads
+                remote_param_path = f"/tmp/params-{engine}-merge.json"
+                dataset._write_file_to_pod(
+                    ns,
+                    "opensearch-benchmark-client",
+                    remote_param_path,
+                    local_param_file.read_text(),
+                )
+
+            success, output = executor.run_osb_command(
+                scenario_name="scenario-2-force-merge",
+                workload_path=dataset.workload_path,
+                test_procedure=dataset.test_procedures["merge"],
+                workload_params=remote_param_path,
+                extra_args=[]
+            )
+            
+            # Clean up temp file for official workloads
+            if dataset.is_official and local_param_file.exists():
+                local_param_file.unlink(missing_ok=True)
+            
+            # Stop if force merge failed
+            if not success:
+                print(f"\n❌ Force merge failed for {engine}. Skipping remaining scenarios.\n")
+                continue  # Skip to next engine
+
+        # -------------------------------------------------------------
+        # SCENARIO 3: SEARCH CONCURRENCY MATRIX WITH PROFILING
         # -------------------------------------------------------------
         if "search" in config.target_scenarios:
             print_separator(f"Search Concurrency sweeps [{engine}]")
