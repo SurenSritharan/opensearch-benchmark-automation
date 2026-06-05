@@ -1,0 +1,7 @@
+{
+  "target_index_name": "cohere-msmarco-1024",
+  "target_index_body": "indices/index.json",
+  "engine": "lucene",
+  "method_name": "hnsw",
+  "space_type": "cosinesimil"
+}

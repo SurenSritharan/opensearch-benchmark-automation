@@ -1,27 +1,69 @@
 # Dataset Configuration Registry
 # Add new datasets here with their specific parameters
 #
-# Format:
+# STANDARDIZED FORMAT FOR EASY DATASET ADDITION:
+#
+# For Official Workloads (from opensearch-benchmark-workloads):
 #   dataset_name:
 #     dimension: <vector dimension>
 #     format: <data format (hdf5, bigann, etc.)>
-#     space_type: <distance metric (cosine, l2, inner_product, etc.)>
-#     description: <optional description>
-#     custom_workload: <path to custom workload directory (optional)>
-#     data_files: <list of data files to download (optional)>
+#     space_type: <distance metric (innerproduct, l2, cosinesimil, etc.)>
+#     description: <dataset description>
+#     workload_name: "vectorsearch"
+#     is_official: true
+#     corpus_name: <corpus name in workload>
+#     param_files:
+#       faiss: "params/corpus/<size>/faiss-<corpus>-<dim>-dp.json"
+#       lucene: "params/corpus/<size>/lucene-<corpus>-<dim>-dp.json"
+#       nmslib: "params/corpus/<size>/nmslib-<corpus>-<dim>-dp.json"
+#     test_procedures: (optional - override defaults)
+#       index: "no-train-test-index-only"  # Default
+#       bulk: "no-train-test"              # Default
+#       search: "search-only"              # Default
+#
+# For Custom Workloads:
+#   dataset_name:
+#     dimension: <vector dimension>
+#     format: <data format>
+#     space_type: <distance metric>
+#     description: <dataset description>
+#     workload_name: <workload directory name>
+#     is_official: false
+#     custom_workload: "workloads/<workload_name>"
+#     data_dir: "/datasets/<dataset_name>"
+#     data_files: (optional - for download)
+#       - name: <filename>
+#         url: <download url>
+#     test_procedures: (optional - same as above)
 
 datasets:
+  # Official vectorsearch workload datasets
   cohere-1m:
     dimension: 768
     format: hdf5
-    space_type: "l2"
-    description: "Cohere 1M embeddings dataset with 768-dimensional vectors"
+    space_type: "innerproduct"
+    description: "Cohere 1M embeddings dataset with 768-dimensional vectors (official workload)"
+    workload_name: "vectorsearch"
+    is_official: true
+    corpus_name: "cohere-1m"
+    # Parameter files for different engines
+    param_files:
+      faiss: "params/faiss-cohere-1m-768-dp.json"
+      lucene: "params/lucene-cohere-1m-768-dp.json"
+      jvector: "params/jvector-cohere-1m-768-dp.json"
+    test_procedures:
+      index: "no-train-test-index-only"     # Default
+      bulk: "no-train-test"                 # Default
+      search: "search-only-no-warmup"       # Custom: skips warmup-indices task
   
+  # Custom workload datasets
   msmarco:
     dimension: 1024
     format: fvec
     space_type: "cosinesimil"
-    description: "MS MARCO passage ranking dataset with 1024-dimensional vectors"
+    description: "MS MARCO passage ranking dataset with 1024-dimensional vectors (custom workload)"
+    workload_name: "msmarco"
+    is_official: false
     custom_workload: "workloads/msmarco"
     data_dir: "/datasets/msmarco"
     data_files:
@@ -33,6 +75,16 @@ datasets:
         url: "https://jvector-datasets-infratest.s3.us-east-2.amazonaws.com/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/cohere/cohere_msmarco/cohere_msmarco_distances_d1024_k10_1m.fvec"
       - name: "cohere_msmarco_indices_d1024_k10_1m.ivec"
         url: "https://jvector-datasets-infratest.s3.us-east-2.amazonaws.com/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/cohere/cohere_msmarco/cohere_msmarco_indices_d1024_k10_1m.ivec"
+    # Parameter files for different engines
+    param_files:
+      jvector: "params/jvector-params.json"
+      faiss: "params/faiss-params.json"
+      lucene: "params/lucene-params.json"
+    # Test procedures for msmarco
+    test_procedures:
+      index: "index-only"
+      bulk: "bulk-ingest"
+      search: ""
 
 # Default dataset to use if none specified
 default: cohere-1m

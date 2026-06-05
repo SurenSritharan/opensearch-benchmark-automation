@@ -142,7 +142,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - name: OPENSEARCH_JAVA_OPTS
-              value: "-Xms2g -Xmx2g"
+              value: "-Xms2g -Xmx2g --add-modules jdk.incubator.vector"
             - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
               value: "admin"
             - name: DISABLE_INSTALL_DEMO_CONFIG

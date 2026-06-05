@@ -2,27 +2,72 @@
   "description": "High-Performance Binary MSMARCO Cohere Ingestion Workload",
   "indices": [
     {
-      "name": "cohere-msmarco-1024",
-      "body": "index.json"
+      "name": "{{ target_index_name | default('target_index') }}",
+      "body": "{{ target_index_body }}"
     }
   ],
-  "schedule": [
+  "test_procedures": [
     {
-      "operation": { "operation-type": "delete-index" }
+      "name": "index-only",
+      "description": "Create index and load data",
+      "default": false,
+      "schedule": [
+        {
+          "operation": {
+            "operation-type": "delete-index",
+            "only-if-exists": true,
+            "index": "{{ target_index_name | default('cohere-msmarco-1024') }}"
+          }
+        },
+        {
+          "operation": {
+            "operation-type": "create-index",
+            "index": "{{ target_index_name | default('cohere-msmarco-1024') }}"
+          }
+        },
+        {
+          "name": "bulk-ingestion-phase",
+          "operation": {
+            "operation-type": "bulk",
+            "param-source": "msmarco-fvcec-bulk-source",
+            "file_path": "/datasets/msmarco/cohere_msmarco_base.fvec",
+            "bulk_size": 1000,
+            "index": "{{ target_index_name | default('cohere-msmarco-1024') }}"
+          },
+          "clients": 8
+        }
+      ]
     },
     {
-      "operation": { "operation-type": "create-index" }
-    },
-    {
-      "name": "bulk-ingestion-phase",
-      "operation": {
-        "operation-type": "bulk",
-        "param-source": "cohere-fvec-bulk-source",
-        "file_path": "/datasets/msmarco/cohere_msmarco_base.fvec",
-        "bulk_size": 1000,
-        "index": "cohere-msmarco-1024"
-      },
-      "clients": 8
+      "name": "bulk-ingest",
+      "description": "Full workflow: delete + create + ingest data",
+      "default": true,
+      "schedule": [
+        {
+          "operation": {
+            "operation-type": "delete-index",
+            "only-if-exists": true,
+            "index": "{{ target_index_name | default('cohere-msmarco-1024') }}"
+          }
+        },
+        {
+          "operation": {
+            "operation-type": "create-index",
+            "index": "{{ target_index_name | default('cohere-msmarco-1024') }}"
+          }
+        },
+        {
+          "name": "bulk-ingestion-phase",
+          "operation": {
+            "operation-type": "bulk",
+            "param-source": "msmarco-fvcec-bulk-source",
+            "file_path": "/datasets/msmarco/cohere_msmarco_base.fvec",
+            "bulk_size": 1000,
+            "index": "{{ target_index_name | default('cohere-msmarco-1024') }}"
+          },
+          "clients": 8
+        }
+      ]
     }
   ]
 }

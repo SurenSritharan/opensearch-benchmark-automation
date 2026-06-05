@@ -14,4 +14,12 @@ results
 *.log
 *.tmp
 
-# Made with Bob
+# Benchmark results
+results/
+
+# Python bytecode
+*.pyc
+
+# Python cache
+lib/__pycache__
+tmp*

@@ -1,7 +1,7 @@
 {
   "settings": {
     "index": {
-      "number_of_shards": 3,
+      "number_of_shards": 5,
       "number_of_replicas": 0,
       "knn": true
     }
@@ -14,9 +14,9 @@
         "type": "knn_vector",
         "dimension": 1024,
         "method": {
-          "name": "hnsw",
-          "space_type": "cosinesimil",
-          "engine": "jvector"
+          "name": "{{ method_name | default('hnsw') }}",
+          "space_type": "{{ space_type | default('cosinesimil') }}",
+          "engine": "{{ engine | default('jvector') }}"
         }
       }
     }

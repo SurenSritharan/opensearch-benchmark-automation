@@ -1,0 +1,22 @@
+# OpenSearch Cluster Configuration
+# This file contains cluster-specific settings for the benchmark automation
+
+# Cluster endpoint configuration
+# Format: hostname:port
+cluster_endpoint: "opensearch-cluster:9200"
+
+# Client options for OpenSearch Benchmark
+# These are passed as --client-options to opensearch-benchmark
+client_options:
+  timeout: 300
+  use_ssl: true
+  verify_certs: false
+  basic_auth_user: "admin"
+  basic_auth_password: "admin"
+
+# Pod discovery configuration for profiling
+# Label selector to find OpenSearch data nodes for profiling
+# Use "app=opensearch-data" for separated architecture or "app=opensearch-cluster" for combined
+pod_label_selector: "app=opensearch-data"
+
+# Made with Bob
