@@ -59,10 +59,19 @@ run_benchmark() {
   
   local compacted_params=$(echo "$workload_params" | jq -c .)
   
+  # Determine workload path based on whether dataset has custom workload
+  local current_dataset="${DATASET:-$(get_default_dataset)}"
+  local workload_path="/root/opensearch-benchmark-workloads/vectorsearch"
+  
+  if has_custom_workload "$current_dataset"; then
+    workload_path="/root/custom-workloads/$current_dataset"
+    echo "ℹ️  Using custom workload: $workload_path"
+  fi
+  
   kubectl exec -it opensearch-benchmark-client -n "$namespace" -- \
     opensearch-benchmark run \
       --pipeline=benchmark-only \
-      --workload-path=/root/opensearch-benchmark-workloads/vectorsearch \
+      --workload-path="$workload_path" \
       --workload-params="$compacted_params" \
       --test-procedure="$test_procedure" \
       $tasks \

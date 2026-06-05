@@ -1,5 +1,6 @@
 #!/bin/bash
 # Interactive CLI menu functions
+# Note: dataset-configs.sh is sourced by run-benchmark.sh
 
 show_menu() {
   echo "=========================================="
@@ -23,6 +24,21 @@ show_menu() {
   esac
 
   echo ""
+  echo "Select dataset to use:"
+  echo "  1) cohere-1m (768 dimensions) - default"
+  echo "  2) msmarco (1024 dimensions)"
+  echo ""
+  read -p "Choose dataset [1/2] (press Enter for default): " dataset_choice
+  
+  case $dataset_choice in
+    1|"") DATASET="cohere-1m" ;;
+    2)    DATASET="msmarco" ;;
+    *)    echo "❌ Invalid dataset selection"; exit 1 ;;
+  esac
+  
+  export DATASET
+
+  echo ""
   echo "Select scenarios to run (use numbers, comma-separated):"
   echo "  1) Index Creation & Data Ingestion"
   echo "  2) Force Merge"
@@ -37,6 +53,7 @@ parse_cli_args() {
   RUN_SEARCH_TESTS=false
   INTERACTIVE_MODE=true
   TARGET_ENGINES=()
+  DATASET=""
   
   # Check if any arguments provided (non-interactive mode)
   if [ $# -gt 0 ]; then
@@ -52,6 +69,18 @@ parse_cli_args() {
             TARGET_ENGINES=("${ENG_ARR[@]}")
           fi
           shift 2
+          ;;
+        --dataset)
+          DATASET="$2"
+          if ! validate_dataset "$DATASET"; then
+            exit 1
+          fi
+          export DATASET
+          shift 2
+          ;;
+        --list-datasets)
+          list_datasets
+          exit 0
           ;;
         --scenario)
           IFS=',' read -ra SCENARIOS <<< "$2"
@@ -71,7 +100,19 @@ parse_cli_args() {
           shift 2
           ;;
         --help|-h)
-          echo "Usage: $0 --engine [jvector,faiss,lucene,all] --scenario [index,merge,search,all]"
+          echo "Usage: $0 [OPTIONS]"
+          echo ""
+          echo "Options:"
+          echo "  --engine <engine>       Specify engine(s): jvector, faiss, lucene, or all"
+          echo "  --dataset <dataset>     Specify dataset: cohere-1m, msmarco (default: cohere-1m)"
+          echo "  --list-datasets         List all available datasets and exit"
+          echo "  --scenario <scenario>   Specify scenario(s): index, merge, search, or all"
+          echo "  --help, -h              Show this help message"
+          echo ""
+          echo "Examples:"
+          echo "  $0 --engine faiss --dataset msmarco --scenario all"
+          echo "  $0 --list-datasets"
+          echo "  $0 --engine all --dataset cohere-1m --scenario search"
           exit 0
           ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -110,10 +151,21 @@ parse_cli_args() {
 }
 
 display_configuration() {
+  # Set default dataset if not specified
+  if [ -z "$DATASET" ]; then
+    DATASET=$(get_default_dataset)
+    export DATASET
+  fi
+  
+  local dimension=$(get_dataset_dimension "$DATASET")
+  local format=$(get_dataset_format "$DATASET")
+  local space_type=$(get_dataset_space_type "$DATASET")
+  
   echo "=========================================="
   echo "📋 Selected Target Matrix Configuration:"
   echo "=========================================="
   echo "  Targeted Engines: ${TARGET_ENGINES[*]}"
+  echo "  Dataset:          $DATASET (${dimension}D, format: $format, space: $space_type)"
   echo "  Index Creation:   $([ "$RUN_INDEX_CREATION" = true ] && echo "✅ YES" || echo "❌ NO")"
   echo "  Force Merge:      $([ "$RUN_FORCE_MERGE" = true ] && echo "✅ YES" || echo "❌ NO")"
   echo "  Search Tests:     $([ "$RUN_SEARCH_TESTS" = true ] && echo "✅ YES" || echo "❌ NO")"

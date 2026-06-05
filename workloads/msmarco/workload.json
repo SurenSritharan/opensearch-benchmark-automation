@@ -1,0 +1,28 @@
+{
+  "description": "High-Performance Binary MSMARCO Cohere Ingestion Workload",
+  "indices": [
+    {
+      "name": "cohere-msmarco-1024",
+      "body": "index.json"
+    }
+  ],
+  "schedule": [
+    {
+      "operation": { "operation-type": "delete-index" }
+    },
+    {
+      "operation": { "operation-type": "create-index" }
+    },
+    {
+      "name": "bulk-ingestion-phase",
+      "operation": {
+        "operation-type": "bulk",
+        "param-source": "cohere-fvec-bulk-source",
+        "file_path": "/datasets/msmarco/cohere_msmarco_base.fvec",
+        "bulk_size": 1000,
+        "index": "cohere-msmarco-1024"
+      },
+      "clients": 8
+    }
+  ]
+}

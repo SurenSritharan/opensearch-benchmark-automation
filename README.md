@@ -21,6 +21,7 @@ A modular benchmark automation framework for testing OpenSearch vector search pe
 - Kubernetes cluster with OpenSearch deployments
 - `kubectl` configured with access to your cluster
 - `jq` for JSON parsing
+- Python 3 with PyYAML (for dataset configuration parsing)
 - Bash shell
 
 ## 🏗️ Project Structure
@@ -58,23 +59,33 @@ Run benchmarks for all engines:
 ./run-benchmark.sh [OPTIONS]
 
 Options:
-  --engines <engine1,engine2,...>  Specify engines to test (faiss,lucene,jvector)
-  --run-index-creation             Enable index creation scenario
-  --run-force-merge                Enable force merge scenario
-  --run-search-tests               Enable search concurrency tests
-  --help                           Show help message
+  --engine <engine>       Specify engine(s): jvector, faiss, lucene, or all
+  --dataset <dataset>     Specify dataset: cohere-1m, msmarco (default: cohere-1m)
+  --list-datasets         List all available datasets and exit
+  --scenario <scenario>   Specify scenario(s): index, merge, search, or all
+  --help, -h              Show this help message
 ```
 
 ### Example Commands
 
-Test only FAISS and JVector:
+Test FAISS with MS MARCO dataset:
 ```bash
-./run-benchmark.sh --engines faiss,jvector
+./run-benchmark.sh --engine faiss --dataset msmarco --scenario all
 ```
 
-Run full benchmark suite:
+List available datasets:
 ```bash
-./run-benchmark.sh --run-index-creation --run-force-merge --run-search-tests
+./run-benchmark.sh --list-datasets
+```
+
+Test all engines with Cohere dataset (default):
+```bash
+./run-benchmark.sh --engine all --dataset cohere-1m --scenario search
+```
+
+Run full benchmark suite with default dataset:
+```bash
+./run-benchmark.sh --engine all --scenario all
 ```
 
 ## 📊 Benchmark Scenarios
@@ -164,11 +175,67 @@ When `ENABLE_PROFILING=true`, the framework automatically:
 **Viewing Flame Graphs:**
 Open the HTML files in any web browser to analyze CPU hotspots and call stacks.
 
+### Dataset Configuration
+
+Datasets are configured in `config/datasets.yaml`.
+
+**Available Datasets:**
+- **cohere-1m**: 768-dimensional vectors (default) - Uses OpenSearch Benchmark's built-in vectorsearch workload
+- **msmarco**: 1024-dimensional vectors - Custom workload with automatic data download
+
+#### Adding a New Dataset
+
+To add a standard dataset (using built-in workload):
+```yaml
+datasets:
+  your-dataset-name:
+    dimension: 512
+    format: hdf5
+    description: "Your dataset description"
+```
+
+#### Adding a Custom Workload Dataset
+
+For datasets requiring custom workloads and data files:
+
+1. Create workload directory: `workloads/your-dataset/`
+2. Add workload files: `workload.json`, `index.json`, `workload.py`
+3. Configure in `config/datasets.yaml`:
+
+```yaml
+datasets:
+  your-dataset:
+    dimension: 1024
+    format: fvec
+    description: "Your custom dataset"
+    custom_workload: "workloads/your-dataset"
+    data_dir: "/datasets/your-dataset"
+    data_files:
+      - name: "vectors.fvec"
+        url: "https://example.com/vectors.fvec"
+        range: "0-4100000000"  # Optional: byte range for partial download
+        size: "~4GB"           # Optional: human-readable size
+      - name: "distances.fvec"
+        url: "https://example.com/distances.fvec"
+```
+
+**How Custom Workloads Work:**
+1. Framework detects custom workload configuration
+2. Downloads data files to benchmark client pod (if not already present)
+3. Copies workload directory to pod
+4. Runs benchmark using custom workload path
+
+**Example: MS MARCO Dataset**
+The msmarco dataset demonstrates custom workload usage:
+- Automatically downloads 3 data files (~4.1GB total)
+- Uses custom workload in `workloads/msmarco/`
+- Data stored in `/datasets/msmarco/` on benchmark client pod
+
 ### Engine-Specific Parameters
 
 Workload parameters are defined in `lib/workload-params.sh`:
 - Index settings (shards, replicas)
-- Vector dimensions
+- Vector dimensions (automatically set based on selected dataset)
 - Engine-specific configurations (ef_construction, m, etc.)
 - Search parameters
 

@@ -1,0 +1,40 @@
+# Dataset Configuration Registry
+# Add new datasets here with their specific parameters
+#
+# Format:
+#   dataset_name:
+#     dimension: <vector dimension>
+#     format: <data format (hdf5, bigann, etc.)>
+#     space_type: <distance metric (cosine, l2, inner_product, etc.)>
+#     description: <optional description>
+#     custom_workload: <path to custom workload directory (optional)>
+#     data_files: <list of data files to download (optional)>
+
+datasets:
+  cohere-1m:
+    dimension: 768
+    format: hdf5
+    space_type: "l2"
+    description: "Cohere 1M embeddings dataset with 768-dimensional vectors"
+  
+  msmarco:
+    dimension: 1024
+    format: fvec
+    space_type: "cosinesimil"
+    description: "MS MARCO passage ranking dataset with 1024-dimensional vectors"
+    custom_workload: "workloads/msmarco"
+    data_dir: "/datasets/msmarco"
+    data_files:
+      - name: "cohere_msmarco_base.fvec"
+        url: "https://jvector-datasets-infratest.s3.us-east-2.amazonaws.com/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/cohere/cohere_msmarco/cohere_msmarco_base.fvec"
+        range: "0-4100000000"
+        size: "~4.1GB"
+      - name: "cohere_msmarco_distances_d1024_k10_1m.fvec"
+        url: "https://jvector-datasets-infratest.s3.us-east-2.amazonaws.com/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/cohere/cohere_msmarco/cohere_msmarco_distances_d1024_k10_1m.fvec"
+      - name: "cohere_msmarco_indices_d1024_k10_1m.ivec"
+        url: "https://jvector-datasets-infratest.s3.us-east-2.amazonaws.com/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/cohere/cohere_msmarco/cohere_msmarco_indices_d1024_k10_1m.ivec"
+
+# Default dataset to use if none specified
+default: cohere-1m
+
+# Made with Bob

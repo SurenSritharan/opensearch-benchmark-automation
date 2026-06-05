@@ -8,6 +8,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source all library modules
+source "$SCRIPT_DIR/lib/dataset-configs.sh"
+source "$SCRIPT_DIR/lib/download-dataset.sh"
 source "$SCRIPT_DIR/lib/cli-menu.sh"
 source "$SCRIPT_DIR/lib/workload-params.sh"
 source "$SCRIPT_DIR/lib/k8s-utils.sh"
@@ -44,6 +46,7 @@ for ENGINE in "${TARGET_ENGINES[@]}"; do
   echo "🚀 =================================================================="
   echo "🚀 STARTING BENCHMARK LOOP MATRIX FOR VECTOR ENGINE: [ $ENGINE ]"
   echo "🚀 TARGETING KUBERNETES NAMESPACE: [ $K8S_NAMESPACE ]"
+  echo "🚀 DATASET: [ ${DATASET:-$(get_default_dataset)} ]"
   echo "🚀 =================================================================="
   echo ""
 
@@ -55,6 +58,30 @@ for ENGINE in "${TARGET_ENGINES[@]}"; do
     echo "❌ Error: Benchmark client pod in namespace $K8S_NAMESPACE is status: [$POD_STATUS]."
     echo "Skipping engine $ENGINE..."
     continue
+  fi
+
+  # Check if dataset has custom workload and download data files if needed
+  CURRENT_DATASET="${DATASET:-$(get_default_dataset)}"
+  if has_custom_workload "$CURRENT_DATASET"; then
+    echo "ℹ️  Custom workload detected for dataset: $CURRENT_DATASET"
+    
+    # Download dataset files if configured
+    if ! download_dataset_files "$CURRENT_DATASET" "$K8S_NAMESPACE"; then
+      echo "❌ Error: Failed to download dataset files for $CURRENT_DATASET"
+      echo "Skipping engine $ENGINE..."
+      continue
+    fi
+    
+    # Copy custom workload to the pod
+    WORKLOAD_PATH=$(get_custom_workload_path "$CURRENT_DATASET")
+    if [ -d "$WORKLOAD_PATH" ]; then
+      echo "📦 Copying custom workload to pod..."
+      # Create parent directory first
+      kubectl exec -n "$K8S_NAMESPACE" -c benchmark opensearch-benchmark-client -- \
+        mkdir -p /root/custom-workloads 2>/dev/null || true
+      kubectl cp "$WORKLOAD_PATH" "$K8S_NAMESPACE/opensearch-benchmark-client:/root/custom-workloads/$CURRENT_DATASET" -c benchmark
+      echo "✅ Custom workload copied"
+    fi
   fi
 
   # Inject index templates
