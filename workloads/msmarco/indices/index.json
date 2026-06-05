@@ -1,8 +1,8 @@
 {
   "settings": {
     "index": {
-      "number_of_shards": 5,
-      "number_of_replicas": 0,
+      "number_of_shards": {{ target_index_primary_shards | default(1) }},
+      "number_of_replicas": {{ target_index_replica_shards | default(0) }},
       "knn": true
     }
   },
@@ -12,9 +12,9 @@
       "text": { "type": "text" },
       "vector": {
         "type": "knn_vector",
-        "dimension": 1024,
+        "dimension": {{ target_index_dimension | default(1024) }},
         "method": {
-          "name": "{{ method_name | default('hnsw') }}",
+          "name": "{% if engine == 'jvector' %}disk_ann{% else %}hnsw{% endif %}",
           "space_type": "{{ space_type | default('cosinesimil') }}",
           "engine": "{{ engine | default('jvector') }}"
         }
