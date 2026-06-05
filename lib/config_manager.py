@@ -199,7 +199,12 @@ class ConfigManager:
         print(f"  Force Merge:      {'✅ YES' if 'merge' in self.target_scenarios else '❌ NO'}")
         print(f"  Search Tests:     {'✅ YES' if 'search' in self.target_scenarios else '❌ NO'}")
         if 'search' in self.target_scenarios:
-            query_display = f"{self.args.queries}" if self.args.queries else "workload default"
+            if self.args.queries:
+                query_display = f"{self.args.queries}"
+            else:
+                # Get default query count from dataset parameter files
+                default_query_count = self._get_default_query_count(dataset_name)
+                query_display = f"{default_query_count} (default)"
             print(f"  Query Count:      {query_display}")
             print(f"  Search Clients:   {', '.join(map(str, self.search_client_counts))}")
         print(f"  Profiling:        {'✅ ENABLED' if not self.args.disable_profiling else '❌ DISABLED'}")
@@ -209,6 +214,25 @@ class ConfigManager:
         if confirm != 'y' and confirm != 'yes':
             print("Execution cancelled.")
             sys.exit(0)
+            
+    def _get_default_query_count(self, dataset_name: str) -> int:
+        """Get the default query count from the dataset's parameter files."""
+        import json
+        dataset_info = self.datasets_manifest["datasets"].get(dataset_name, {})
+        param_files = dataset_info.get("param_files", {})
+        workload_name = dataset_info.get("workload_name", "vectorsearch")
+        
+        # Try to read from the first available engine's param file
+        for engine in ["jvector", "faiss", "lucene"]:
+            if engine in param_files:
+                param_file_path = Path("workloads") / workload_name / param_files[engine]
+                if param_file_path.exists():
+                    try:
+                        params = json.loads(param_file_path.read_text())
+                        return params.get("query_count", 10000)
+                    except:
+                        pass
+        return 10000  # Fallback default
 
     @property
     def profiling_enabled(self) -> bool:

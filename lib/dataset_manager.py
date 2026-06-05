@@ -79,11 +79,31 @@ class DatasetManager:
             
             return local_param_file
         else:
-            # For custom workloads, generate parameters dynamically
+            # For custom workloads, check if param_files are defined
+            param_files = self.dataset_data.get("param_files", {})
+            if engine in param_files:
+                # Use the pre-defined parameter file
+                local_param_file = Path("workloads") / self.workload_name / param_files[engine]
+                if not local_param_file.exists():
+                    raise FileNotFoundError(f"Parameter file not found: {local_param_file}")
+                
+                # Check if we need to override client_count or query_count
+                if client_count != 1 or query_count is not None:
+                    params = json.loads(local_param_file.read_text())
+                    if client_count != 1:
+                        params["query_clients"] = client_count
+                    if query_count is not None:
+                        params["query_count"] = query_count
+                    temp_param_file = Path(f"./tmp_{engine}_{self.dataset_name}_params.json")
+                    temp_param_file.write_text(json.dumps(params, indent=2))
+                    return temp_param_file
+                return local_param_file
+            
+            # Otherwise, generate parameters dynamically
             params = {
-                "vertex_dimension": self.dataset_data["dimension"],
-                "index_name": f"{engine}_index",
-                "target_clients": client_count,
+                "target_index_dimension": self.dataset_data["dimension"],
+                "target_index_name": f"{engine}_index",
+                "query_clients": client_count,
                 "engine_settings": {"type": engine}
             }
 

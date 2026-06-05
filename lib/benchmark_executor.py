@@ -92,6 +92,38 @@ class BenchmarkExecutor:
         cmd = ["curl", "-sk", "-u", "admin:admin", f"https://{self.cluster_endpoint}/{index_name}/_mapping"]
         res = self._exec_subprocess(container="benchmark", cmd=cmd)
         return res if res and not res.startswith("ERROR") else "failed"
+    
+    def validate_vector_field_type(self, index_name: str, field_name: str = "vector") -> tuple[bool, str]:
+        """Validates that the specified field is of type knn_vector."""
+        import json
+        
+        # First check if index exists
+        status_code = self.check_index_exists(index_name)
+        if status_code != "200":
+            return False, f"Index '{index_name}' does not exist (HTTP {status_code})"
+        
+        mapping_json = self.get_index_mapping(index_name)
+        
+        if mapping_json == "failed":
+            return False, "Failed to retrieve index mapping"
+        
+        try:
+            mapping = json.loads(mapping_json)
+            # Navigate through the mapping structure
+            properties = mapping.get(index_name, {}).get("mappings", {}).get("properties", {})
+            field_info = properties.get(field_name, {})
+            field_type = field_info.get("type", "")
+            
+            if not field_type:
+                return False, f"Field '{field_name}' does not exist in index mapping"
+            
+            if field_type != "knn_vector":
+                return False, f"Field '{field_name}' has type '{field_type}' but requires 'knn_vector'"
+            
+            return True, "Valid knn_vector field"
+        except Exception as e:
+            return False, f"Error parsing mapping: {str(e)}"
+
 
     def get_opensearch_pods(self) -> List[str]:
         """Discovers the cluster nodes dynamically using label structures and pattern match paths."""

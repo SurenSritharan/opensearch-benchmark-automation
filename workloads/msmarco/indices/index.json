@@ -14,9 +14,18 @@
         "type": "knn_vector",
         "dimension": {{ target_index_dimension | default(1024) }},
         "method": {
-          "name": "{% if engine == 'jvector' %}disk_ann{% else %}hnsw{% endif %}",
+          "name": "{{ method_name | default('disk_ann') }}",
           "space_type": "{{ space_type | default('cosinesimil') }}",
-          "engine": "{{ engine | default('jvector') }}"
+          "engine": "{{ engine | default('jvector') }}",
+          "parameters": {
+            {%- set comma = joiner(",") %}
+            {%- if hnsw_ef_construction is defined and hnsw_ef_construction %}
+              {{ comma() }} "ef_construction": {{ hnsw_ef_construction }}
+            {%- endif %}
+            {%- if hnsw_m is defined and hnsw_m %}
+              {{ comma() }} "m": {{ hnsw_m }}
+            {%- endif %}
+          }
         }
       }
     }

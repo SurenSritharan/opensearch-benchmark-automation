@@ -6,7 +6,7 @@
   "target_index_dimension": 1024,
   "target_index_max_num_segments": 1,
   "engine": "jvector",
-  "method_name": "hnsw",
+  "method_name": "disk_ann",
   "space_type": "cosinesimil",
   "query_k": 10,
   "query_count": 10000,

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import time
+import json
 import concurrent.futures
 from typing import Callable, Any, Optional
 from lib.config_manager import ConfigManager
@@ -124,15 +125,12 @@ def main():
         dataset.inject_all_templates(namespace=ns)
 
         # -------------------------------------------------------------
-        # SCENARIO 1: INDEX CREATION
+        # SCENARIO 1: INDEX CREATION AND BULK LOADING
         # -------------------------------------------------------------
         if "index" in config.target_scenarios:
-            print_separator(f"Create Index [{engine}]")
+            print_separator(f"Create Index & Bulk Load [{engine}]")
             
-            # Check if index exists before doing raw work
-            status_code = executor.check_index_exists(f"{engine}_index")
-            
-            # Get parameter file and test procedure
+            # Get parameter file
             local_param_file = dataset.generate_runtime_parameters(engine, client_count=1, query_count=config.query_count)
             remote_param_path = None
             
@@ -146,7 +144,8 @@ def main():
                     local_param_file.read_text(),
                 )
             
-            # Run the benchmark command with custom test procedure
+            # Run index creation only (quick operation)
+            print(f"  ▶ Creating index...")
             success, output = executor.run_osb_command(
                 scenario_name="scenario-1-create-index",
                 workload_path=dataset.workload_path,
@@ -155,13 +154,47 @@ def main():
                 extra_args=[]
             )
             
+            # Stop if index creation failed
+            if not success:
+                print(f"\n❌ Index creation failed for {engine}. Skipping remaining scenarios.\n")
+                if dataset.is_official and local_param_file.exists():
+                    local_param_file.unlink(missing_ok=True)
+                continue  # Skip to next engine
+            
+            # Validate that the index has proper knn_vector field type
+            # Read index name from parameter file
+            params = json.loads(local_param_file.read_text())
+            index_name = params.get("target_index_name", f"{engine}_index")
+            print(f"  🔍 Validating index mapping for '{index_name}'...")
+            is_valid, message = executor.validate_vector_field_type(index_name)
+            
+            if not is_valid:
+                print(f"\n❌ Index validation failed: {message}")
+                print(f"   The index was created but does not have the proper knn_vector mapping.")
+                print(f"   This indicates an issue with the index template. Skipping remaining scenarios.\n")
+                if dataset.is_official and local_param_file.exists():
+                    local_param_file.unlink(missing_ok=True)
+                continue  # Skip to next engine
+            
+            print(f"  ✅ Index mapping validated successfully")
+            
+            # Now run bulk ingestion
+            print(f"  ▶ Starting bulk data ingestion...")
+            success, output = executor.run_osb_command(
+                scenario_name="scenario-1-bulk-ingest",
+                workload_path=dataset.workload_path,
+                test_procedure=dataset.test_procedures["bulk"],
+                workload_params=remote_param_path,
+                extra_args=[]
+            )
+            
             # Clean up temp file for official workloads
             if dataset.is_official and local_param_file.exists():
                 local_param_file.unlink(missing_ok=True)
             
-            # Stop if index creation failed
+            # Stop if bulk ingestion failed
             if not success:
-                print(f"\n❌ Index creation failed for {engine}. Skipping remaining scenarios.\n")
+                print(f"\n❌ Bulk ingestion failed for {engine}. Skipping remaining scenarios.\n")
                 continue  # Skip to next engine
 
         # -------------------------------------------------------------

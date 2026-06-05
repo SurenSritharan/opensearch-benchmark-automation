@@ -1,0 +1,20 @@
+{
+  "name": "create-index-only",
+  "description": "Create index without loading data",
+  "default": false,
+  "schedule": [
+    {
+      "operation": {
+        "operation-type": "delete-index",
+        "only-if-exists": true,
+        "index": "{{ target_index_name | default('cohere-1m-768') }}"
+      }
+    },
+    {
+      "operation": {
+        "operation-type": "create-index",
+        "index": "{{ target_index_name | default('cohere-1m-768') }}"
+      }
+    }
+  ]
+}

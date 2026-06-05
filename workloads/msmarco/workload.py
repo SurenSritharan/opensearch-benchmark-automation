@@ -156,6 +156,7 @@ class MsMarcoSearchPartition:
         self.k = source.k
         self.dim = source.dim
         self.vector_size_bytes = source.vector_size_bytes
+        self.infinite = False
         
         # Partition queries across clients
         queries_per_client = source.query_count // total_clients
