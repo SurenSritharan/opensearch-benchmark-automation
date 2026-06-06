@@ -24,8 +24,8 @@
           "space_type": "{{ space_type | default('cosinesimil') }}",
           "engine": "{{ engine | default('jvector') }}",
           "parameters": {
-            "ef_construction": "{{ ef_construction | default(128) }}",
-            "m": "{{ m | default(16) }}"
+            "ef_construction": {{ ef_construction | default(128) }},
+            "m": {{ m | default(16) }}
           }
         }
       }
