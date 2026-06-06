@@ -3,6 +3,18 @@
 # Example: kubectl apply -f opensearch-benchmark-client-only.yaml -n os-jvector
 ---
 apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: benchmark-nvme-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-rwo
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
 kind: Pod
 metadata:
   name: opensearch-benchmark-client
@@ -16,7 +28,7 @@ spec:
   
   # Init container to download and prepare datasets
   initContainers:
-  - name: bechmark-init
+  - name: benchmark-init
     image: python:3.11-slim
     command: ["/bin/bash", "-c"]
     args:

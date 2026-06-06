@@ -52,6 +52,13 @@ data:
     thread_pool.write.queue_size: 2000
     thread_pool.search.size: 13
     thread_pool.search.queue_size: 2000
+
+    knn.algo_param.index_thread_qty: 8
+    knn.memory.circuit_breaker.enabled: true
+    knn.memory.circuit_breaker.limit: 90%
+    knn.cache.item.expiry.enabled: false
+    knn.cache.item.expiry.minutes: "180m"
+    knn.circuit_breaker.triggered: "false"
 ---
 apiVersion: v1
 kind: Service
@@ -105,6 +112,9 @@ spec:
         app: opensearch-data
         node-role: data
     spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: server-pool
+      
       initContainers:
         - name: install-jvector-plugin
           image: opensearchproject/opensearch:3.6.0
