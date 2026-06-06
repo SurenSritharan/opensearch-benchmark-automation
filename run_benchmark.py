@@ -177,14 +177,20 @@ def main():
             
             print(f"  ✅ Index mapping validated successfully")
             
-            # Now run bulk ingestion
+            # Now run bulk ingestion with profiling
             print(f"  ▶ Starting bulk data ingestion...")
-            success, output = executor.run_osb_command(
+            success = run_benchmark_with_profiling(
+                executor=executor,
+                profiler=profiler,
+                namespace=ns,
                 scenario_name="scenario-1-bulk-ingest",
                 workload_path=dataset.workload_path,
                 test_procedure=dataset.test_procedures["bulk"],
                 workload_params=remote_param_path,
-                extra_args=[]
+                extra_args=[],
+                enable_profiling=config.profiling_enabled,
+                warmup_seconds=60,
+                profile_duration=45,
             )
             
             # Clean up temp file
@@ -214,12 +220,18 @@ def main():
                 local_param_file.read_text(),
             )
 
-            success, output = executor.run_osb_command(
+            success = run_benchmark_with_profiling(
+                executor=executor,
+                profiler=profiler,
+                namespace=ns,
                 scenario_name="scenario-2-force-merge",
                 workload_path=dataset.workload_path,
                 test_procedure=dataset.test_procedures["merge"],
                 workload_params=remote_param_path,
-                extra_args=[]
+                extra_args=[],
+                enable_profiling=config.profiling_enabled,
+                warmup_seconds=30,
+                profile_duration=60,
             )
             
             # Clean up temp file
