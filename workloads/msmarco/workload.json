@@ -2,8 +2,8 @@
   "description": "High-Performance Binary MSMARCO Cohere Ingestion Workload",
   "indices": [
     {
-      "name": "{{ target_index_name | default('target_index') }}",
-      "body": "{{ target_index_body }}"
+      "name": "{{ target_index_name | default('cohere-msmarco-1024') }}",
+      "body": "{{ target_index_body | default('indices/index.json') }}"
     }
   ],
   "test_procedures": [
@@ -46,7 +46,7 @@
       ]
     },
     {
-      "name": "index-only",
+      "name": "create-index-and-load",
       "description": "Create index and load data",
       "default": false,
       "schedule": [

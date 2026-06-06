@@ -47,7 +47,7 @@ echo "🔨 Step 3: Creating index using OpenSearch Benchmark..."
 kubectl exec -it -n "$NAMESPACE" -c benchmark opensearch-benchmark-client -- \
   opensearch-benchmark run \
   --workload-path=/root/custom-workloads/msmarco \
-  --test-procedure=index-only \
+  --test-procedure=create-index-and-load \
   --workload-params=/tmp/test-params.json \
   --target-hosts=opensearch-cluster:9200 \
   --client-options="timeout:300,use_ssl:true,verify_certs:false,basic_auth_user:admin,basic_auth_password:admin" \
