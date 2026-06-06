@@ -134,15 +134,14 @@ def main():
             local_param_file = dataset.generate_runtime_parameters(engine, client_count=1, query_count=config.query_count)
             remote_param_path = None
             
-            if dataset.is_official:
-                # Copy parameter file to pod for official workloads
-                remote_param_path = f"/tmp/params-{engine}-index.json"
-                dataset._write_file_to_pod(
-                    ns,
-                    "opensearch-benchmark-client",
-                    remote_param_path,
-                    local_param_file.read_text(),
-                )
+            # Copy parameter file to pod for both official and custom workloads
+            remote_param_path = f"/tmp/params-{engine}-index.json"
+            dataset._write_file_to_pod(
+                ns,
+                "opensearch-benchmark-client",
+                remote_param_path,
+                local_param_file.read_text(),
+            )
             
             # Run index creation only (quick operation)
             print(f"  ▶ Creating index...")
@@ -188,8 +187,8 @@ def main():
                 extra_args=[]
             )
             
-            # Clean up temp file for official workloads
-            if dataset.is_official and local_param_file.exists():
+            # Clean up temp file
+            if local_param_file.exists():
                 local_param_file.unlink(missing_ok=True)
             
             # Stop if bulk ingestion failed
@@ -203,19 +202,17 @@ def main():
         if "merge" in config.target_scenarios:
             print_separator(f"Force Merge [{engine}]")
             
-            # Get parameter file (for official workloads) or None (for custom)
+            # Get parameter file
             local_param_file = dataset.generate_runtime_parameters(engine, client_count=1, query_count=config.query_count)
-            remote_param_path = None
             
-            if dataset.is_official:
-                # Copy parameter file to pod for official workloads
-                remote_param_path = f"/tmp/params-{engine}-merge.json"
-                dataset._write_file_to_pod(
-                    ns,
-                    "opensearch-benchmark-client",
-                    remote_param_path,
-                    local_param_file.read_text(),
-                )
+            # Copy parameter file to pod for both official and custom workloads
+            remote_param_path = f"/tmp/params-{engine}-merge.json"
+            dataset._write_file_to_pod(
+                ns,
+                "opensearch-benchmark-client",
+                remote_param_path,
+                local_param_file.read_text(),
+            )
 
             success, output = executor.run_osb_command(
                 scenario_name="scenario-2-force-merge",
@@ -225,8 +222,8 @@ def main():
                 extra_args=[]
             )
             
-            # Clean up temp file for official workloads
-            if dataset.is_official and local_param_file.exists():
+            # Clean up temp file
+            if local_param_file.exists():
                 local_param_file.unlink(missing_ok=True)
             
             # Stop if force merge failed
@@ -275,7 +272,7 @@ def main():
                 )
 
                 # Housekeeping: Unlink temporary workspace configuration file locally
-                if dataset.is_official and local_param_file.exists():
+                if local_param_file.exists():
                     local_param_file.unlink(missing_ok=True)
 
         # Collect cluster telemetry after all scenarios complete for this engine
