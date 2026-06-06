@@ -85,6 +85,8 @@ class ConfigManager:
                           help="Number of queries to execute during search tests (default: workload-specific)")
         parser.add_argument("--disable-profiling", action="store_true", default=False,
                           help="Disable performance profiling during benchmark execution")
+        parser.add_argument("--yes", "-y", action="store_true", default=False,
+                          help="Skip confirmation prompt and proceed automatically")
         parser.add_argument("--help", "-h", action="store_true")
         return parser.parse_known_args()
 
@@ -209,6 +211,11 @@ class ConfigManager:
             print(f"  Search Clients:   {', '.join(map(str, self.search_client_counts))}")
         print(f"  Profiling:        {'✅ ENABLED' if not self.args.disable_profiling else '❌ DISABLED'}")
         print("==========================================")
+        
+        # Skip confirmation if --yes flag is provided
+        if self.args.yes:
+            print("\n✅ Auto-confirmed (--yes flag provided)")
+            return
         
         confirm = input("\nLaunch baseline suite sweep? (y/n): ").strip().lower()
         if confirm != 'y' and confirm != 'yes':

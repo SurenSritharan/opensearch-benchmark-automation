@@ -38,8 +38,8 @@ def prepare_and_copy_params(dataset: DatasetManager, engine: str, namespace: str
 
 def cleanup_param_file(local_param_file: Path):
     """Clean up temporary local parameter file."""
-    if local_param_file and local_param_file.exists():
-        local_param_file.unlink(missing_ok=True)
+    # if local_param_file and local_param_file.exists():
+    #     local_param_file.unlink(missing_ok=True)
 
 
 def print_header(dataset_name: str):
@@ -297,7 +297,7 @@ def main():
                 )
 
                 # Clean up temp file
-                cleanup_param_file(local_param_file)
+                # cleanup_param_file(local_param_file)
 
         # Collect cluster telemetry after all scenarios complete for this engine
         print(f"\n{'='*66}")
