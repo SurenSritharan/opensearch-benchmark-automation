@@ -4,8 +4,7 @@ import sys
 import subprocess
 from pathlib import Path
 from typing import Tuple, List, Optional
-from kubernetes import client as k8s_client
-from kubernetes import config as k8s_config
+from lib.kubectl_helper import KubectlHelper
 
 
 class BenchmarkExecutor:
@@ -19,37 +18,19 @@ class BenchmarkExecutor:
         self.results_dir = results_dir
         self.pod_name = "opensearch-benchmark-client"
         self.config = config
+        self.kubectl = KubectlHelper()
         
         # Extract cluster settings from config
         self.cluster_endpoint = config.cluster_endpoint
         self.client_options = config.client_options
-        
-        # Load local kube config for API endpoints that don't need shell overhead
-        k8s_config.load_kube_config()
-        self.k8s_core = k8s_client.CoreV1Api()
 
     def _exec_subprocess(self, container: str, cmd: list) -> str:
-        """Runs a direct, non-blocking kubectl exec command via native subprocesses."""
-        full_cmd = [
-            "kubectl", "exec", "-n", self.namespace, "-c", container,
-            self.pod_name, "--"
-        ] + cmd
-        try:
-            result = subprocess.run(full_cmd, capture_output=True, text=True, timeout=30)
-            return result.stdout.strip()
-        except subprocess.TimeoutExpired:
-            return "TIMEOUT"
-        except Exception as e:
-            return f"ERROR: {str(e)}"
+        """Runs a direct, non-blocking kubectl exec command via kubectl helper."""
+        return self.kubectl.exec_command(self.namespace, self.pod_name, container, cmd)
 
     def check_pod_status(self) -> str:
         """Returns the current execution lifecycle phase of the benchmark runner pod."""
-        cmd = ["kubectl", "get", "pod", self.pod_name, "-n", self.namespace, "-o", "jsonpath={.status.phase}"]
-        try:
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            return res.stdout.strip() if res.stdout else "NotFound"
-        except Exception:
-            return "NotFound"
+        return self.kubectl.get_pod_status(self.namespace, self.pod_name)
 
     def clear_remote_logs(self):
         """Truncates the remote OSB logging payload to zero bytes before a new run starts."""
@@ -131,28 +112,26 @@ class BenchmarkExecutor:
         
         selectors = ["app=opensearch-cluster", "app=opensearch"]
         for selector in selectors:
-            pods = self.k8s_core.list_namespaced_pod(self.namespace, label_selector=selector)
-            if pods.items:
-                found_names = [p.metadata.name for p in pods.items]
+            pods = self.kubectl.get_pods(self.namespace, label_selector=selector)
+            if pods:
+                found_names = [pod["metadata"]["name"] for pod in pods]
                 print(f"  ✅ Found OpenSearch nodes via pattern match: {found_names}")
                 return found_names
 
         # Fallback regex sweep across any non-benchmark processing pod structures
-        try:
-            all_pods = self.k8s_core.list_namespaced_pod(self.namespace)
+        all_pods = self.kubectl.get_pods(self.namespace)
+        if all_pods:
             patterns = [r'opensearch-cluster-\d+', r'opensearch-data-\d+', r'^opensearch-[^b][a-z-]*-\d+']
             matched_names = []
             
-            for pod in all_pods.items:
-                name = pod.metadata.name
+            for pod in all_pods:
+                name = pod["metadata"]["name"]
                 if any(re.search(pat, name) for pat in patterns):
                     matched_names.append(name)
             
             if matched_names:
                 print(f"  ✅ Found OpenSearch nodes via fallback regex patterns: {matched_names}")
                 return matched_names
-        except Exception:
-            pass
 
         print(f"  ⚠️  No OpenSearch pods found. Check cluster status in namespace {self.namespace}!")
         return []
@@ -249,14 +228,17 @@ class BenchmarkExecutor:
             err_file.parent.mkdir(parents=True, exist_ok=True)
             err_file.write_text(error_log, encoding="utf-8")
 
-    def collect_telemetry(self):
-        """Collects comprehensive cluster telemetry and saves to cluster-telemetry-state directory."""
+    def collect_telemetry(self, index_name):
+        """Collects comprehensive cluster telemetry and saves to cluster-telemetry-state directory.
+        
+        Args:
+            index_name: The name of the index to collect stats for. If None, defaults to {engine}_index.
+        """
         telemetry_dir = self.results_dir / "cluster-telemetry-state"
         telemetry_dir.mkdir(parents=True, exist_ok=True)
         
         print("📊 Collecting comprehensive cluster telemetry...")
         
-        index_name = f"{self.engine}_index"
         
         # Helper function to execute curl and save output
         def save_curl_output(endpoint: str, filename: str, description: str = ""):

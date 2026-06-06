@@ -3,7 +3,13 @@
     "index": {
       "number_of_shards": {{ target_index_primary_shards | default(1) }},
       "number_of_replicas": {{ target_index_replica_shards | default(0) }},
-      "knn": true
+      "knn": true,
+      "refresh_interval": "-1",
+      "number_of_replicas": 0,
+      "store.preload": ["vex", "veq", "vem"],
+      "merge.policy.segments_per_tier": 5,
+      "merge.policy.floor_segment": "1gb",
+      "merge.policy.max_merged_segment": "25gb"
     }
   },
   "mappings": {
@@ -18,13 +24,8 @@
           "space_type": "{{ space_type | default('cosinesimil') }}",
           "engine": "{{ engine | default('jvector') }}",
           "parameters": {
-            {%- set comma = joiner(",") %}
-            {%- if hnsw_ef_construction is defined and hnsw_ef_construction %}
-              {{ comma() }} "ef_construction": {{ hnsw_ef_construction }}
-            {%- endif %}
-            {%- if hnsw_m is defined and hnsw_m %}
-              {{ comma() }} "m": {{ hnsw_m }}
-            {%- endif %}
+            "ef_construction": "{{ ef_construction | default(128) }}",
+            "m": "{{ m | default(16) }}"
           }
         }
       }

@@ -134,6 +134,41 @@ spec:
             - name: plugins
               mountPath: /mnt/plugins
         
+        - name: install-async-profiler
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "Installing async-profiler..."
+              
+              # Detect architecture
+              ARCH=$(uname -m)
+              if [ "$ARCH" = "x86_64" ]; then
+                PROFILER_ARCH="linux-x64"
+              elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+                PROFILER_ARCH="linux-arm64"
+              else
+                echo "Unsupported architecture: $ARCH"
+                exit 1
+              fi
+              
+              # Download and install async-profiler
+              cd /tmp
+              wget -q https://github.com/async-profiler/async-profiler/releases/download/v4.4/async-profiler-4.4-${PROFILER_ARCH}.tar.gz
+              tar -xzf async-profiler-4.4-${PROFILER_ARCH}.tar.gz
+              mkdir -p /mnt/async-profiler
+              mv async-profiler-4.4-${PROFILER_ARCH}/* /mnt/async-profiler/
+              chmod +x /mnt/async-profiler/bin/asprof
+              echo "async-profiler installed successfully!"
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+          volumeMounts:
+            - name: async-profiler
+              mountPath: /mnt/async-profiler
+        
         - name: sysctl
           image: busybox:1.36
           command:
@@ -198,6 +233,8 @@ spec:
               subPath: opensearch.yml
             - name: certs
               mountPath: /usr/share/opensearch/config/certs
+            - name: async-profiler
+              mountPath: /opt/async-profiler
           readinessProbe:
             exec:
               command:
@@ -227,6 +264,8 @@ spec:
         - name: certs
           secret:
             secretName: opensearch-shared-certs
+        - name: async-profiler
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: data

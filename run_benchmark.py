@@ -3,10 +3,43 @@ import time
 import json
 import concurrent.futures
 from typing import Callable, Any, Optional
+from pathlib import Path
 from lib.config_manager import ConfigManager
 from lib.dataset_manager import DatasetManager
 from lib.benchmark_executor import BenchmarkExecutor
 from lib.profiling_manager import ProfilingManager
+
+
+def prepare_and_copy_params(dataset: DatasetManager, engine: str, namespace: str,
+                            client_count: int = 1, query_count: Optional[int] = None) -> tuple[str, dict, Path]:
+    """
+    Generate parameters, copy to pod, and return remote path, params dict, and local file.
+    
+    Returns:
+        tuple: (remote_param_path, params_dict, local_param_file)
+    """
+    # Generate local parameter file
+    local_param_file = dataset.generate_runtime_parameters(engine, client_count=client_count, query_count=query_count)
+    
+    # Read parameters
+    params = json.loads(local_param_file.read_text())
+    
+    # Copy to pod
+    remote_param_path = f"/tmp/params-{engine}-{client_count}.json"
+    dataset._write_file_to_pod(
+        namespace,
+        "opensearch-benchmark-client",
+        remote_param_path,
+        local_param_file.read_text(),
+    )
+    
+    return remote_param_path, params, local_param_file
+
+
+def cleanup_param_file(local_param_file: Path):
+    """Clean up temporary local parameter file."""
+    if local_param_file and local_param_file.exists():
+        local_param_file.unlink(missing_ok=True)
 
 
 def print_header(dataset_name: str):
@@ -59,6 +92,7 @@ def run_benchmark_with_profiling(
     """
     if enable_profiling:
         # Run benchmark with concurrent profiling
+        print(f"\n🔥 Profiling enabled for {profile_duration}s window\n")
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as loop_pool:
             # 1. Fire off the OSB benchmark in the background
             bench_job = loop_pool.submit(
@@ -123,6 +157,9 @@ def main():
 
         # Step 1: Provision and push the static workload templates out to GKE
         dataset.inject_all_templates(namespace=ns)
+        
+        # Initialize index name with default (will be updated from params if available)
+        index_name = f"{engine}_index"
 
         # -------------------------------------------------------------
         # SCENARIO 1: INDEX CREATION AND BULK LOADING
@@ -130,18 +167,11 @@ def main():
         if "index" in config.target_scenarios:
             print_separator(f"Create Index & Bulk Load [{engine}]")
             
-            # Get parameter file
-            local_param_file = dataset.generate_runtime_parameters(engine, client_count=1, query_count=config.query_count)
-            remote_param_path = None
-            
-            # Copy parameter file to pod for both official and custom workloads
-            remote_param_path = f"/tmp/params-{engine}-index.json"
-            dataset._write_file_to_pod(
-                ns,
-                "opensearch-benchmark-client",
-                remote_param_path,
-                local_param_file.read_text(),
+            # Prepare parameters and copy to pod
+            remote_param_path, params, local_param_file = prepare_and_copy_params(
+                dataset, engine, ns, client_count=1, query_count=config.query_count
             )
+            index_name = params.get("target_index_name", f"{engine}_index")
             
             # Run index creation only (quick operation)
             print(f"  ▶ Creating index...")
@@ -156,14 +186,10 @@ def main():
             # Stop if index creation failed
             if not success:
                 print(f"\n❌ Index creation failed for {engine}. Skipping remaining scenarios.\n")
-                if dataset.is_official and local_param_file.exists():
-                    local_param_file.unlink(missing_ok=True)
+                cleanup_param_file(local_param_file)
                 continue  # Skip to next engine
             
             # Validate that the index has proper knn_vector field type
-            # Read index name from parameter file
-            params = json.loads(local_param_file.read_text())
-            index_name = params.get("target_index_name", f"{engine}_index")
             print(f"  🔍 Validating index mapping for '{index_name}'...")
             is_valid, message = executor.validate_vector_field_type(index_name)
             
@@ -171,8 +197,7 @@ def main():
                 print(f"\n❌ Index validation failed: {message}")
                 print(f"   The index was created but does not have the proper knn_vector mapping.")
                 print(f"   This indicates an issue with the index template. Skipping remaining scenarios.\n")
-                if dataset.is_official and local_param_file.exists():
-                    local_param_file.unlink(missing_ok=True)
+                cleanup_param_file(local_param_file)
                 continue  # Skip to next engine
             
             print(f"  ✅ Index mapping validated successfully")
@@ -194,8 +219,7 @@ def main():
             )
             
             # Clean up temp file
-            if local_param_file.exists():
-                local_param_file.unlink(missing_ok=True)
+            cleanup_param_file(local_param_file)
             
             # Stop if bulk ingestion failed
             if not success:
@@ -208,17 +232,13 @@ def main():
         if "merge" in config.target_scenarios:
             print_separator(f"Force Merge [{engine}]")
             
-            # Get parameter file
-            local_param_file = dataset.generate_runtime_parameters(engine, client_count=1, query_count=config.query_count)
-            
-            # Copy parameter file to pod for both official and custom workloads
-            remote_param_path = f"/tmp/params-{engine}-merge.json"
-            dataset._write_file_to_pod(
-                ns,
-                "opensearch-benchmark-client",
-                remote_param_path,
-                local_param_file.read_text(),
+            # Prepare parameters and copy to pod
+            remote_param_path, params, local_param_file = prepare_and_copy_params(
+                dataset, engine, ns, client_count=1, query_count=config.query_count
             )
+            
+            # Update index_name from params
+            index_name = params.get("target_index_name", index_name)
 
             success = run_benchmark_with_profiling(
                 executor=executor,
@@ -235,8 +255,7 @@ def main():
             )
             
             # Clean up temp file
-            if local_param_file.exists():
-                local_param_file.unlink(missing_ok=True)
+            cleanup_param_file(local_param_file)
             
             # Stop if force merge failed
             if not success:
@@ -255,19 +274,13 @@ def main():
                     f"  ▶ Running search sweep with {clients} concurrent clients..."
                 )
 
-                # Generate performance configuration parameters
-                local_param_file = dataset.generate_runtime_parameters(
-                    engine, client_count=clients, query_count=config.query_count
+                # Prepare parameters and copy to pod
+                remote_param_path, params, local_param_file = prepare_and_copy_params(
+                    dataset, engine, ns, client_count=clients, query_count=config.query_count
                 )
-                remote_param_path = f"/tmp/params-{engine}-{clients}.json"
-
-                # Copy parameter file to pod
-                dataset._write_file_to_pod(
-                    ns,
-                    "opensearch-benchmark-client",
-                    remote_param_path,
-                    local_param_file.read_text(),
-                )
+                
+                # Update index_name from params
+                index_name = params.get("target_index_name", index_name)
 
                 run_benchmark_with_profiling(
                     executor=executor,
@@ -283,15 +296,14 @@ def main():
                     profile_duration=45,
                 )
 
-                # Housekeeping: Unlink temporary workspace configuration file locally
-                if local_param_file.exists():
-                    local_param_file.unlink(missing_ok=True)
+                # Clean up temp file
+                cleanup_param_file(local_param_file)
 
         # Collect cluster telemetry after all scenarios complete for this engine
         print(f"\n{'='*66}")
         print(f"📊 Collecting Cluster Telemetry ... ")
         print(f"{'='*66}")
-        executor.collect_telemetry()
+        executor.collect_telemetry(index_name=index_name)
 
     print(
         f"\n✅ Matrix Finished. Output stored in: {config.results_root}"

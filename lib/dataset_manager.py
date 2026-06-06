@@ -1,16 +1,16 @@
 import json
 import yaml
 import sys
+import tempfile
 from pathlib import Path
-from kubernetes import client, config
-from kubernetes.stream import stream
-from kubernetes.client.exceptions import ApiException
+from lib.kubectl_helper import KubectlHelper
 
 class DatasetManager:
     """Manages multi-layered engine/dataset parameters and pushes Jinja2 templates."""
     def __init__(self, dataset_name: str, config_dir: str = "config"):
         self.config_dir = Path(config_dir)
         self.dataset_name = dataset_name
+        self.kubectl = KubectlHelper()
         
         # Parse global dataset metadata
         datasets_manifest = self._load_yaml(self.config_dir / "datasets.yaml")
@@ -35,9 +35,6 @@ class DatasetManager:
             "search": custom_procedures.get("search", "search-only"),
             "merge": custom_procedures.get("merge", "force-merge-index")
         }
-        
-        config.load_kube_config()
-        self.k8s_core = client.CoreV1Api()
 
     def _load_yaml(self, path: Path) -> dict:
         with open(path, "r") as f:
@@ -295,63 +292,42 @@ class DatasetManager:
                     raise
 
     def _write_file_to_pod(self, namespace: str, pod_name: str, dest_path: str, content: str):
+        """Write content to a file in a pod using kubectl cp."""
         try:
-            resp = stream(
-                self.k8s_core.connect_get_namespaced_pod_exec, pod_name, namespace,
-                container="benchmark", command=['bash', '-c', f'cat > {dest_path}'],
-                stderr=True, stdin=True, stdout=True, tty=False, _preload_content=False
-            )
-            resp.write_stdin(content)
-            resp.close()
-        except ApiException as e:
-            self._handle_k8s_error(e, pod_name, namespace)
-        except AttributeError as e:
-            if "'NoneType' object has no attribute 'decode'" in str(e):
-                self._handle_pod_not_found_error(pod_name, namespace)
-            else:
-                raise
+            # Write content to a temporary local file
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as tmp_file:
+                tmp_file.write(content)
+                tmp_file_path = tmp_file.name
+            
+            try:
+                # Use kubectl helper to copy the file to the pod
+                success = self.kubectl.copy_to_pod(namespace, pod_name, "benchmark", tmp_file_path, dest_path)
+                if not success:
+                    print(f"\n❌ Error: Failed to write file to pod '{pod_name}'")
+                    sys.exit(1)
+            finally:
+                # Clean up temporary file
+                Path(tmp_file_path).unlink(missing_ok=True)
+                
         except Exception as e:
             print(f"\n❌ Error: Unexpected error writing to pod '{pod_name}': {str(e)}")
             sys.exit(1)
 
     def _exec_raw_command(self, namespace: str, pod_name: str, cmd: list):
-        try:
-            resp = stream(
-                self.k8s_core.connect_get_namespaced_pod_exec, pod_name, namespace,
-                container="benchmark", command=cmd,
-                stderr=True, stdin=False, stdout=True, tty=False,
-                _preload_content=False
-            )
-            # Read and close the response
-            output = ""
-            while resp.is_open():
-                resp.update(timeout=1)
-                if resp.peek_stdout():
-                    output += resp.read_stdout()
-                if resp.peek_stderr():
-                    stderr = resp.read_stderr()
-                    if stderr:
-                        print(f"  ⚠️  Command stderr: {stderr}")
-            resp.close()
-            return output
-        except ApiException as e:
-            self._handle_k8s_error(e, pod_name, namespace)
-        except AttributeError as e:
-            if "'NoneType' object has no attribute 'decode'" in str(e):
-                self._handle_pod_not_found_error(pod_name, namespace)
-            else:
-                raise
-        except Exception as e:
-            print(f"\n❌ Error: Unexpected error executing command on pod '{pod_name}': {str(e)}")
+        """Execute a command in a pod using kubectl exec."""
+        output = self.kubectl.exec_command(namespace, pod_name, "benchmark", cmd)
+        if output.startswith("Execution failed"):
+            print(f"\n❌ Error: {output}")
             sys.exit(1)
+        return output
     
-    def _handle_k8s_error(self, e: ApiException, pod_name: str, namespace: str):
-        """Handle Kubernetes API exceptions with clear error messages."""
+    def _handle_k8s_error(self, e: Exception, pod_name: str, namespace: str):
+        """Handle kubectl command exceptions with clear error messages."""
         print(f"\n❌ Error: Failed to connect to pod '{pod_name}' in namespace '{namespace}'")
-        if e.status == 404:
+        if "not found" in str(e).lower():
             self._handle_pod_not_found_error(pod_name, namespace)
         else:
-            print(f"   Kubernetes API error: {e.reason}")
+            print(f"   kubectl error: {str(e)}")
             sys.exit(1)
     
     def _handle_pod_not_found_error(self, pod_name: str, namespace: str):

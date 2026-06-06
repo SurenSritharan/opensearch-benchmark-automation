@@ -9,7 +9,6 @@
   "method_name": "disk_ann",
   "space_type": "cosinesimil",
   "query_k": 10,
-  "query_count": 10000,
-  "query_clients": 1,
+  "query_count": 100000,
   "warmup_iterations": 100
 }
