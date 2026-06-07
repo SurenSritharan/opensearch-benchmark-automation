@@ -184,7 +184,13 @@ spec:
           command:
             - sh
             - -c
-            - "sysctl -w vm.max_map_count=262144"
+            - |
+              set -ex
+              # Required for OpenSearch memory locking
+              sysctl -w vm.max_map_count=262144
+              
+              # Required for async-profiler to read kernel space events without crashing
+              sysctl -w kernel.perf_event_paranoid=1
           securityContext:
             privileged: true
             runAsUser: 0
