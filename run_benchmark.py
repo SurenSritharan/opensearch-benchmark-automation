@@ -10,6 +10,7 @@ from lib.config_manager import ConfigManager
 from lib.dataset_manager import DatasetManager
 from lib.benchmark_executor import BenchmarkExecutor
 from lib.profiling_manager import ProfilingManager
+from lib.metrics_collector import MetricsCollector
 
 def print_header(dataset_name: str):
     """Prints the primary execution header banner at framework startup."""
@@ -96,6 +97,7 @@ def retrieve_and_merge_params(
 def run_benchmark_with_profiling(
     executor: BenchmarkExecutor,
     profiler: ProfilingManager,
+    metrics_collector: Optional[MetricsCollector],
     namespace: str,
     scenario_name: str,
     workload_name: str,
@@ -109,11 +111,12 @@ def run_benchmark_with_profiling(
     profile_duration: int = 45,
 ) -> bool:
     """
-    Execute a benchmark with optional concurrent profiling during steady-state operation.
+    Execute a benchmark with optional concurrent profiling and metrics collection.
     
     Args:
         executor: BenchmarkExecutor instance to run the benchmark
         profiler: ProfilingManager instance to capture performance data
+        metrics_collector: Optional MetricsCollector instance for resource metrics
         namespace: Kubernetes namespace for the cluster
         scenario_name: Name identifier for the scenario (may include sweep subdirectory)
         workload_name: Name of the workload
@@ -129,10 +132,22 @@ def run_benchmark_with_profiling(
     Returns:
         bool: True if benchmark succeeded, False otherwise
     """
+    # Determine number of concurrent workers needed
+    max_workers = 1  # Benchmark always runs
     if enable_profiling:
-        # Run benchmark with concurrent profiling
-        print(f"\n🔥 Profiling enabled for {profile_duration}s window\n")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as loop_pool:
+        max_workers += 1
+    if metrics_collector and metrics_collector.enabled:
+        max_workers += 1
+    
+    if max_workers > 1:
+        # Run benchmark with concurrent profiling and/or metrics collection
+        if enable_profiling:
+            print(f"\n🔥 Profiling enabled for {profile_duration}s window")
+        if metrics_collector and metrics_collector.enabled:
+            print(f"📊 Metrics collection enabled")
+        print()
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as loop_pool:
             # 1. Fire off the OSB benchmark in the background
             bench_job = loop_pool.submit(
                 executor.run_osb_command,
@@ -145,36 +160,51 @@ def run_benchmark_with_profiling(
                 extra_args
             )
 
-            # 2. Allow benchmark to pass warm-up noise and hit a steady state
+            # 2. Start metrics collection if enabled
+            metrics_job = None
+            if metrics_collector and metrics_collector.enabled:
+                metrics_job = loop_pool.submit(
+                    metrics_collector.start_collection,
+                    scenario_name,
+                    interval=10
+                )
+
+            # 3. Allow benchmark to pass warm-up noise and hit a steady state
             time.sleep(warmup_seconds)
 
-            # 3. Trigger low-overhead sampling profilers on the nodes for a precise window
-            # Pass the full scenario_name which includes sweep subdirectory if present
-            # Also pass executor.results_dir which is the engine-specific directory
-            prof_job = loop_pool.submit(
-                profiler.profile_steady_state,
-                namespace,
-                scenario_name,  # This now includes sweep-N subdirectory
-                duration=profile_duration,
-                engine_results_dir=executor.results_dir,
-            )
+            # 4. Trigger low-overhead sampling profilers on the nodes for a precise window
+            prof_job = None
+            if enable_profiling:
+                prof_job = loop_pool.submit(
+                    profiler.profile_steady_state,
+                    namespace,
+                    scenario_name,
+                    duration=profile_duration,
+                    engine_results_dir=executor.results_dir,
+                )
 
             # Wait for benchmark to complete first
-            bench_job.result()
-            
-            # Then wait for profiling and get buffered output
-            profiling_output = prof_job.result()
-            
-            # Display profiling output after benchmark completes
-            if profiling_output:
-                for line in profiling_output:
-                    print(line)
-            
-            # Get benchmark result
             success, _ = bench_job.result()
+            
+            # Stop metrics collection now that benchmark is done
+            if metrics_collector and metrics_collector.enabled:
+                metrics_collector.stop_collection()
+            
+            # Then wait for profiling if enabled
+            if prof_job:
+                profiling_output = prof_job.result()
+                if profiling_output:
+                    for line in profiling_output:
+                        print(line)
+            
+            # Wait for metrics collection to finish and save
+            if metrics_job and metrics_collector:
+                metrics_job.result()  # Wait for collection thread to finish
+                metrics_collector.save_metrics(scenario_name)
+            
             return success
     else:
-        # Run benchmark without profiling
+        # Run benchmark without profiling or metrics
         success, _ = executor.run_osb_command(
             scenario_name,
             workload_name,
@@ -200,6 +230,13 @@ def main():
         ns = f"os-{engine}"
         engine_dir = config.results_root / f"{dataset.dataset_name}-{engine}"
         executor = BenchmarkExecutor(engine, ns, engine_dir, config, dataset_name=dataset.dataset_name)
+        
+        # Initialize metrics collector for this engine
+        metrics_collector = MetricsCollector(
+            namespace=ns,
+            results_dir=engine_dir,
+            enabled=config.metrics_enabled
+        ) if config.metrics_enabled else None
 
         # Step 1: Pull the latest workloads in pod
         dataset.pull_workload_repo(namespace=ns)
@@ -309,6 +346,7 @@ def main():
                     success = run_benchmark_with_profiling(
                         executor=executor,
                         profiler=profiler,
+                        metrics_collector=metrics_collector,
                         namespace=ns,
                         scenario_name=f"scenario-{idx+1}-force-merge" + (f"/sweep-{sweep_idx}" if len(parameter_sweeps) > 1 else ""),
                         workload_name=workload_name,
@@ -339,6 +377,7 @@ def main():
                     run_benchmark_with_profiling(
                         executor=executor,
                         profiler=profiler,
+                        metrics_collector=metrics_collector,
                         namespace=ns,
                         scenario_name=f"scenario-{idx+1}-search" + (f"/sweep-{sweep_idx}" if len(parameter_sweeps) > 1 else ""),
                         workload_name=workload_name,

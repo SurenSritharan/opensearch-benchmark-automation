@@ -81,6 +81,8 @@ class ConfigManager:
         parser.add_argument("--scenario", type=str, default=None)
         parser.add_argument("--enable-profiling", action="store_true", default=False,
                           help="enable performance profiling during benchmark execution")
+        parser.add_argument("--enable-metrics", action="store_true", default=False,
+                          help="enable resource metrics collection and graphing")
         parser.add_argument("--quiet", "-q", action="store_true", default=False,
                           help="Skip confirmation prompt and proceed automatically")
         parser.add_argument("--help", "-h", action="store_true")
@@ -183,6 +185,7 @@ class ConfigManager:
         print(f"  Force Merge:      {'✅ YES' if 'merge' in self.target_scenarios else '❌ NO'}")
         print(f"  Search Tests:     {'✅ YES' if 'search' in self.target_scenarios else '❌ NO'}")
         print(f"  Profiling:        {'✅ ENABLED' if self.profiling_enabled else '❌ DISABLED'}")
+        print(f"  Metrics:          {'✅ ENABLED' if self.metrics_enabled else '❌ DISABLED'}")
         print("==========================================")
         
         # Build and display the equivalent command line
@@ -220,6 +223,32 @@ class ConfigManager:
         # Check cluster.yaml configuration
         profiling_config = self.cluster_config.get("profiling", {})
         return profiling_config.get("enabled", False)  # Default to disabled
+    
+    @property
+    def metrics_enabled(self) -> bool:
+        """
+        Returns whether metrics collection is enabled.
+        Priority: CLI flag > cluster.yaml config > default (false)
+        """
+        # CLI flag takes precedence
+        if self.args.enable_metrics:
+            return True
+        
+        # Check cluster.yaml configuration
+        metrics_config = self.cluster_config.get("metrics", {})
+        return metrics_config.get("enabled", False)  # Default to disabled
+    
+    @property
+    def metrics_interval(self) -> int:
+        """Returns the metrics collection interval in seconds."""
+        metrics_config = self.cluster_config.get("metrics", {})
+        return metrics_config.get("interval_seconds", 10)
+    
+    @property
+    def metrics_generate_graphs(self) -> bool:
+        """Returns whether to automatically generate graphs after metrics collection."""
+        metrics_config = self.cluster_config.get("metrics", {})
+        return metrics_config.get("generate_graphs", True)
 
     @property
     def target_engines(self) -> list:
