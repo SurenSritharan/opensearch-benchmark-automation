@@ -17,192 +17,82 @@ class DatasetManager:
         if dataset_name not in datasets_manifest["datasets"]:
             raise ValueError(f"Dataset '{dataset_name}' not defined in datasets.yaml")
         
+        self.base_workload_path = "/datasets/opensearch-benchmark-workloads"
         self.dataset_data = datasets_manifest["datasets"][dataset_name]
-        self.workload_name = self.dataset_data.get("workload_name", "vectorsearch")
-        self.is_official = self.dataset_data.get("is_official", False)
+        self.workload_name = self.dataset_data.get("workload_name", "default")
+        self.workload_path = f"{self.base_workload_path}/{self.workload_name}"
+        self.test_procedures = self.dataset_data.get("test_procedures", [])
+    
+    def get_filtered_procedures(self, target_scenarios: list) -> list:
+        """Filter test procedures based on user-selected scenarios.
         
-        # For official workloads, use the pre-installed workload path; for custom, use custom path
-        if self.is_official:
-            self.workload_path = f"/root/opensearch-benchmark-workloads/{self.workload_name}"
-        else:
-            self.workload_path = f"/root/custom-workloads/{self.workload_name}"
+        Args:
+            target_scenarios: List of scenario names (e.g., ['index', 'search', 'merge'])
         
-        # Load custom test procedures if defined, with defaults
-        custom_procedures = self.dataset_data.get("test_procedures", {})
-        self.test_procedures = {
-            "index": custom_procedures.get("index", "no-train-test-index-only"),
-            "bulk": custom_procedures.get("bulk", "no-train-test"),
-            "search": custom_procedures.get("search", "search-only"),
-            "merge": custom_procedures.get("merge", "force-merge-index")
-        }
+        Returns:
+            List of tuples: (test_procedure_name, scenario_type, procedure_config)
+            where scenario_type is one of: 'create-index', 'bulk', 'search', 'merge'
+            and procedure_config is the full procedure dict (may contain parameter_sweeps)
+        """
+        filtered = []
+        
+        for proc in self.test_procedures:
+            # Handle both old format (string) and new format (dict with 'name' key)
+            if isinstance(proc, str):
+                proc_name = proc
+                proc_config = {}
+            else:
+                proc_name = proc.get('name', '')
+                proc_config = proc
+            
+            proc_lower = proc_name.lower()
+            
+            # Determine scenario type and check if user wants it
+            if 'create-index' in proc_lower or 'index-only' in proc_lower:
+                if 'index' in target_scenarios:
+                    filtered.append((proc_name, 'create-index', proc_config))
+            
+            elif 'ingest' in proc_lower:
+                if 'index' in target_scenarios:
+                    filtered.append((proc_name, 'ingest', proc_config))
+            
+            elif 'search' in proc_lower:
+                if 'search' in target_scenarios:
+                    filtered.append((proc_name, 'search', proc_config))
+            
+            elif 'merge' in proc_lower or 'force-merge' in proc_lower:
+                if 'merge' in target_scenarios:
+                    filtered.append((proc_name, 'merge', proc_config))
+        
+        return filtered
+        
 
     def _load_yaml(self, path: Path) -> dict:
         with open(path, "r") as f:
             return yaml.safe_load(f)
 
-    def generate_runtime_parameters(self, engine: str, client_count: int, preset = None, query_count = None) -> Path:
-        """Returns the parameter file for the workload."""
-        if self.is_official:
-            # For official workloads, use the pre-defined parameter file from local copy
-            param_files = self.dataset_data.get("param_files", {})
-            if engine not in param_files:
-                raise ValueError(f"No parameter file defined for engine '{engine}' in dataset '{self.dataset_name}'")
-            
-            # Read the local parameter file
-            local_param_file = Path("workloads") / self.workload_name / param_files[engine]
-            if not local_param_file.exists():
-                raise FileNotFoundError(f"Parameter file not found: {local_param_file}")
-            
-            # Check if custom index template exists or query_count override is needed
-            local_workload_dir = Path("workloads") / self.workload_name
-            custom_index_file = local_workload_dir / "indices" / f"{engine}-index.json"
-            
-            if custom_index_file.exists() or query_count is not None:
-                # Modify parameter file to use custom index template and/or query count
-                params = json.loads(local_param_file.read_text())
-                
-                # Set path to custom template (template is already injected to pod)
-                if custom_index_file.exists():
-                    params["target_index_body"] = f"indices/{engine}-index.json"
-                
-                # Override query count if specified
-                if query_count is not None:
-                    params["query_count"] = query_count
-                
-                # Write modified params to temp file
-                temp_param_file = Path(f"./tmp_{engine}_{self.dataset_name}_params.json")
-                temp_param_file.write_text(json.dumps(params, indent=2))
-                return temp_param_file
-            
-            return local_param_file
+    def pull_workload_repo(self, namespace: str, pod_name: str = "opensearch-benchmark-client"):
+        """Pull latest changes from the workload repository on the pod."""
+        
+        remote_base = self.base_workload_path
+        
+        print(f"  🔄 Pulling latest workload definitions from git repository...")
+        
+        # Pull latest changes from the repository
+        pull_cmd = ["sh", "-c", f"cd {remote_base} && git pull origin main"]
+        output = self._exec_raw_command(namespace, pod_name, pull_cmd)
+        
+        if "Already up to date" in output:
+            print(f"  ✅ Workload repository already up to date")
         else:
-            # For custom workloads, check if param_files are defined
-            param_files = self.dataset_data.get("param_files", {})
-            if engine in param_files:
-                # Use the pre-defined parameter file
-                local_param_file = Path("workloads") / self.workload_name / param_files[engine]
-                if not local_param_file.exists():
-                    raise FileNotFoundError(f"Parameter file not found: {local_param_file}")
-                
-                # Check if we need to override client_count or query_count
-                if client_count != 1 or query_count is not None:
-                    params = json.loads(local_param_file.read_text())
-                    if client_count != 1:
-                        params["query_clients"] = client_count
-                    if query_count is not None:
-                        params["query_count"] = query_count
-                    temp_param_file = Path(f"./tmp_{engine}_{self.dataset_name}_params.json")
-                    temp_param_file.write_text(json.dumps(params, indent=2))
-                    return temp_param_file
-                return local_param_file
-            
-            # Otherwise, generate parameters dynamically
-            params = {
-                "target_index_dimension": self.dataset_data["dimension"],
-                "target_index_name": f"{engine}_index",
-                "query_clients": client_count,
-                "engine_settings": {"type": engine}
-            }
-
-            # Merge base engine defaults
-            engine_file = self.config_dir / f"engines/{engine}.yaml"
-            if engine_file.exists():
-                engine_data = self._load_yaml(engine_file)
-                settings = engine_data.get("defaults", {}).copy()
-                if preset and preset in engine_data.get("tuning_presets", {}):
-                    settings.update(engine_data["tuning_presets"][preset])
-                params["engine_settings"].update(settings)
-
-            # Merge dataset-specific engine overrides
-            dataset_overrides = self.dataset_data.get("engine_overrides", {}).get(engine, {})
-            params["engine_settings"].update(dataset_overrides)
-
-            output_path = Path(f"./tmp_{engine}_workload_params.json")
-            output_path.write_text(json.dumps(params, indent=2))
-            return output_path
-
-    def inject_all_templates(self, namespace: str, pod_name: str = "opensearch-benchmark-client"):
-        """Prepares workload files on the pod."""
-        if self.is_official:
-            # For official workloads, inject custom templates into the pre-installed workload
-            local_workload_dir = Path("workloads") / self.workload_name
-            local_templates_dir = local_workload_dir / "indices"
-            local_test_procedures_dir = local_workload_dir / "test_procedures"
-            
-            has_custom_files = False
-            
-            # Inject custom index templates
-            if local_templates_dir.exists():
-                print(f"  📝 Injecting custom index templates into official workload '{self.workload_name}'...")
-                
-                # Inject templates into the pre-installed workload at /root/opensearch-benchmark-workloads
-                remote_workload_indices = f"{self.workload_path}/indices"
-                
-                # Ensure the indices directory exists
-                self._exec_raw_command(namespace, pod_name, ["mkdir", "-p", remote_workload_indices])
-                
-                # Inject custom index templates
-                for template_file in local_templates_dir.glob("*.json"):
-                    payload = template_file.read_text(encoding="utf-8")
-                    remote_path = f"{remote_workload_indices}/{template_file.name}"
-                    self._write_file_to_pod(namespace, pod_name, remote_path, payload)
-                    print(f"  ✅ Injected index template: {template_file.name}")
-                has_custom_files = True
-            
-            # Inject custom test procedures
-            if local_test_procedures_dir.exists():
-                print(f"  📝 Injecting custom test procedures into official workload '{self.workload_name}'...")
-                
-                remote_test_procedures = f"{self.workload_path}/test_procedures"
-                
-                # Ensure the test_procedures directory exists
-                self._exec_raw_command(namespace, pod_name, ["mkdir", "-p", remote_test_procedures])
-                
-                # Inject custom test procedures
-                for procedure_file in local_test_procedures_dir.glob("*.json"):
-                    payload = procedure_file.read_text(encoding="utf-8")
-                    remote_path = f"{remote_test_procedures}/{procedure_file.name}"
-                    self._write_file_to_pod(namespace, pod_name, remote_path, payload)
-                    print(f"  ✅ Injected test procedure: {procedure_file.name}")
-                has_custom_files = True
-            
-            if has_custom_files:
-                print(f"  ✅ Using official workload at {self.workload_path} with custom files")
-            else:
-                print(f"  ℹ️  Using official workload '{self.workload_name}' with default files")
-        else:
-            # For custom workloads, copy entire workload structure
-            print(f"  📝 Setting up custom workload '{self.workload_name}'...")
-            
-            local_workload_dir = Path("workloads") / self.workload_name
-            remote_base = self.workload_path
-            
-            # Create directory structure
-            self._exec_raw_command(namespace, pod_name, ["mkdir", "-p", f"{remote_base}/indices"])
-            
-            # Copy workload files
-            for file in ["workload.json", "workload.py", "__init__.py", "runners.py"]:
-                local_file = local_workload_dir / file
-                if local_file.exists():
-                    payload = local_file.read_text(encoding="utf-8")
-                    self._write_file_to_pod(namespace, pod_name, f"{remote_base}/{file}", payload)
-            
-            # Copy operations directory if exists
-            self._copy_directory_to_pod(namespace, pod_name, local_workload_dir / "operations", f"{remote_base}/operations")
-            
-            # Copy test_procedures directory if exists
-            self._copy_directory_to_pod(namespace, pod_name, local_workload_dir / "test_procedures", f"{remote_base}/test_procedures")
-            
-            # Inject custom index templates from workload directory
-            local_templates_dir = local_workload_dir / "indices"
-            if local_templates_dir.exists():
-                for template_file in local_templates_dir.glob("*.json"):
-                    payload = template_file.read_text(encoding="utf-8")
-                    self._write_file_to_pod(namespace, pod_name, f"{remote_base}/indices/{template_file.name}", payload)
-                    print(f"  ✅ Injected: {template_file.name}")
-            
-            print(f"  ✅ Custom workload ready at {remote_base}")
-            
+            print(f"  ✅ Updated workload repository with latest changes")
+        
+        # Show current commit for verification
+        commit_cmd = ["sh", "-c", f"cd {remote_base} && git log -1 --oneline"]
+        commit_info = self._exec_raw_command(namespace, pod_name, commit_cmd)
+        print(f"  📌 Current commit: {commit_info.strip()}")
+        
+        if 'data_files' in self.dataset_data:
             # Download data files if specified
             self._download_data_files(namespace, pod_name)
 
@@ -242,20 +132,29 @@ class DatasetManager:
             # Check if file exists and has correct size
             needs_download = False
             try:
-                # Get file size
-                stat_output = self._exec_raw_command(namespace, pod_name, ["stat", "-c", "%s", file_path])
-                current_size = int(stat_output.strip())
+                # Check if file exists using test command (more reliable than stat)
+                test_cmd = ["test", "-f", file_path]
+                test_result = self._exec_raw_command(namespace, pod_name, test_cmd, allow_failure=True)
                 
-                if expected_size and current_size != expected_size:
-                    print(f"  ⚠️  File size mismatch for {file_name}")
-                    print(f"     Current: {current_size} bytes, Expected: {expected_size} bytes")
-                    print(f"     Re-downloading with updated range...")
+                if "Execution failed" in test_result:
+                    # File doesn't exist
                     needs_download = True
                 else:
-                    print(f"  ✅ File already exists with correct size: {file_name}")
-                    continue
-            except:
-                # File doesn't exist
+                    # File exists, check size
+                    stat_output = self._exec_raw_command(namespace, pod_name, ["stat", "-c", "%s", file_path])
+                    current_size = int(stat_output.strip())
+                    
+                    if expected_size and current_size != expected_size:
+                        print(f"  ⚠️  File size mismatch for {file_name}")
+                        print(f"     Current: {current_size} bytes, Expected: {expected_size} bytes")
+                        print(f"     Re-downloading with updated range...")
+                        needs_download = True
+                    else:
+                        print(f"  ✅ File already exists with correct size: {file_name}")
+                        continue
+            except Exception as e:
+                # File doesn't exist or error checking
+                print(f"  ℹ️  File not found: {file_name}, will download")
                 needs_download = True
             
             if needs_download:
@@ -291,69 +190,12 @@ class DatasetManager:
                     print(f"  ❌ Failed to download {file_name}: {str(e)}")
                     raise
 
-    def _write_file_to_pod(self, namespace: str, pod_name: str, dest_path: str, content: str):
-        """Write content to a file in a pod using kubectl cp."""
-        try:
-            # Write content to a temporary local file
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as tmp_file:
-                tmp_file.write(content)
-                tmp_file_path = tmp_file.name
-            
-            try:
-                # Use kubectl helper to copy the file to the pod
-                success = self.kubectl.copy_to_pod(namespace, pod_name, "benchmark", tmp_file_path, dest_path)
-                if not success:
-                    print(f"\n❌ Error: Failed to write file to pod '{pod_name}'")
-                    sys.exit(1)
-            finally:
-                # Clean up temporary file
-                Path(tmp_file_path).unlink(missing_ok=True)
-                
-        except Exception as e:
-            print(f"\n❌ Error: Unexpected error writing to pod '{pod_name}': {str(e)}")
-            sys.exit(1)
-
-    def _exec_raw_command(self, namespace: str, pod_name: str, cmd: list):
+    def _exec_raw_command(self, namespace: str, pod_name: str, cmd: list, allow_failure: bool = False):
         """Execute a command in a pod using kubectl exec."""
         output = self.kubectl.exec_command(namespace, pod_name, "benchmark", cmd)
         if output.startswith("Execution failed"):
+            if allow_failure:
+                return output
             print(f"\n❌ Error: {output}")
             sys.exit(1)
         return output
-    
-    def _handle_k8s_error(self, e: Exception, pod_name: str, namespace: str):
-        """Handle kubectl command exceptions with clear error messages."""
-        print(f"\n❌ Error: Failed to connect to pod '{pod_name}' in namespace '{namespace}'")
-        if "not found" in str(e).lower():
-            self._handle_pod_not_found_error(pod_name, namespace)
-        else:
-            print(f"   kubectl error: {str(e)}")
-            sys.exit(1)
-    
-    def _handle_pod_not_found_error(self, pod_name: str, namespace: str):
-        """Handle pod not found errors with helpful guidance."""
-        print(f"   Pod '{pod_name}' not found in namespace '{namespace}'")
-        print(f"\n   💡 Troubleshooting steps:")
-        print(f"   1. Check if the pod exists:")
-        print(f"      kubectl get pods -n {namespace}")
-        print(f"   2. If the pod is in a different namespace, check:")
-        print(f"      kubectl get pods --all-namespaces | grep {pod_name}")
-        print(f"   3. Ensure the benchmark client pod is deployed:")
-        print(f"      kubectl apply -f gke-manifest/opensearch-benchmark-client.yaml")
-        sys.exit(1)
-    def _copy_directory_to_pod(self, namespace: str, pod_name: str, local_dir: Path, remote_dir: str):
-        """Recursively copy a directory to the pod."""
-        if not local_dir.exists():
-            return
-        
-        self._exec_raw_command(namespace, pod_name, ["mkdir", "-p", remote_dir])
-        
-        for item in local_dir.rglob("*"):
-            if item.is_file():
-                relative_path = item.relative_to(local_dir)
-                remote_path = f"{remote_dir}/{relative_path}"
-                remote_parent = f"{remote_dir}/{relative_path.parent}" if relative_path.parent != Path(".") else remote_dir
-                
-                self._exec_raw_command(namespace, pod_name, ["mkdir", "-p", remote_parent])
-                payload = item.read_text(encoding="utf-8")
-                self._write_file_to_pod(namespace, pod_name, remote_path, payload)

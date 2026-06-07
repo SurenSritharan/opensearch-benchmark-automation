@@ -1,14 +1,12 @@
 # Dataset Configuration Registry
 
 datasets:
-  # Official vectorsearch workload datasets
   cohere-1m:
     dimension: 768
     format: hdf5
     space_type: "innerproduct"
     description: "Cohere 1M embeddings dataset with 768-dimensional vectors (official workload)"
-    workload_name: "vectorsearch"
-    is_official: true
+    workload_name: "vectorsearch" # needs to match opensearch-benchmark-workloads folder
     corpus_name: "cohere-1m"
     # Parameter files for different engines
     param_files:
@@ -16,19 +14,18 @@ datasets:
       lucene: "params/lucene-cohere-1m-768-dp.json"
       jvector: "params/jvector-cohere-1m-768-dp.json"
     test_procedures:
-      index: "create-index-only"            # Create index without loading data
-      bulk: "bulk-ingest-only"              # Load data into existing index
-      search: "search-only-no-warmup"       # Search only: skips warmup-indices task
-      merge: "force-merge-index"            # Force merge to consolidate segments
+      - name: "create-index-only"
+      - name: "bulk-ingest-only" 
+      - name: "search-only-no-warmup" 
+      - name: "force-merge-index" 
   
-  # Custom workload datasets
   msmarco:
     dimension: 1024
     format: fvec
     space_type: "cosinesimil"
     description: "MS MARCO passage ranking dataset with 1024-dimensional vectors (custom workload)"
-    workload_name: "msmarco"
-    is_official: false
+    index_name: cohere-msmarco-1024
+    workload_name: "msmarco" # needs to match opensearch-benchmark-workloads folder 
     custom_workload: "workloads/msmarco"
     data_dir: "/datasets/msmarco"
     data_files:
@@ -47,10 +44,28 @@ datasets:
       lucene: "params/lucene-params.json"
     # Test procedures for msmarco
     test_procedures:
-      index: "create-index-only"
-      bulk: "bulk-ingest-only"
-      search: "search-only"
-      merge: "force-merge"
+      - name: "create-index-only"        
+      - name: "bulk-ingest-only"
+      - name: "force-merge"      
+      - name: "search-only"
+        parameter_sweeps:
+          - params:
+              query_clients: 1
+              query_count: 1000
+              warmup_iterations: 2000
+          - params:
+              query_clients: 50
+              query_count: 25000
+              warmup_iterations: 2000
+          - params:
+              query_clients: 100
+              query_count: 50000
+              warmup_iterations: 2000
+          - params:
+              query_clients: 200
+              query_count: 100000
+              warmup_iterations: 2000
+    
 
 # Default dataset to use if none specified
 default: cohere-1m

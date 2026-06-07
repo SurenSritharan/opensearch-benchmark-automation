@@ -1,46 +1,15 @@
 #!/usr/bin/env python3
+from ast import Tuple
 import time
 import json
 import concurrent.futures
+import subprocess
 from typing import Callable, Any, Optional
 from pathlib import Path
 from lib.config_manager import ConfigManager
 from lib.dataset_manager import DatasetManager
 from lib.benchmark_executor import BenchmarkExecutor
 from lib.profiling_manager import ProfilingManager
-
-
-def prepare_and_copy_params(dataset: DatasetManager, engine: str, namespace: str,
-                            client_count: int = 1, query_count: Optional[int] = None) -> tuple[str, dict, Path]:
-    """
-    Generate parameters, copy to pod, and return remote path, params dict, and local file.
-    
-    Returns:
-        tuple: (remote_param_path, params_dict, local_param_file)
-    """
-    # Generate local parameter file
-    local_param_file = dataset.generate_runtime_parameters(engine, client_count=client_count, query_count=query_count)
-    
-    # Read parameters
-    params = json.loads(local_param_file.read_text())
-    
-    # Copy to pod
-    remote_param_path = f"/tmp/params-{engine}-{client_count}.json"
-    dataset._write_file_to_pod(
-        namespace,
-        "opensearch-benchmark-client",
-        remote_param_path,
-        local_param_file.read_text(),
-    )
-    
-    return remote_param_path, params, local_param_file
-
-
-def cleanup_param_file(local_param_file: Path):
-    """Clean up temporary local parameter file."""
-    # if local_param_file and local_param_file.exists():
-    #     local_param_file.unlink(missing_ok=True)
-
 
 def print_header(dataset_name: str):
     """Prints the primary execution header banner at framework startup."""
@@ -58,15 +27,83 @@ def print_separator(title: str):
     print(f"\n  ▶ Running {title}...")
 
 
+def retrieve_and_merge_params(
+    namespace: str,
+    pod_name: str,
+    workload_params: Optional[str],
+    extra_params: Optional[dict[str, Any]] = None
+) -> Optional[str]:
+    """
+    Retrieves and parses base configurations from a remote JSON file, a raw JSON string,
+    or a comma-separated key-value string, then merges them with runtime overrides.
+    """
+    merged_dict: dict[str, Any] = {}
+    has_valid_base = False
+
+    if workload_params and workload_params.strip():
+        clean_params = workload_params.strip()
+        
+        # Format 1: Remote JSON file path
+        if clean_params.endswith('.json'):
+            try:
+                cat_cmd = ["kubectl", "exec", "-n", namespace, pod_name, "--", "cat", clean_params]
+                result = subprocess.run(cat_cmd, capture_output=True, text=True, check=True)
+                
+                if result.stdout.strip():
+                    merged_dict = json.loads(result.stdout)
+                    has_valid_base = True
+            except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+                print(f"⚠️  Warning: Could not read remote config file '{clean_params}' ({type(e).__name__}).")
+        
+        else:
+            try:
+                # Format 2: Raw inline JSON string (e.g., '{"query_k":50}')
+                merged_dict = json.loads(clean_params)
+                has_valid_base = True
+            except json.JSONDecodeError:
+                # Format 3: Plain key-value pairs (e.g., "query_k:50,clients:4")
+                try:
+                    # Split into individual pairs, then split each pair into key and value
+                    pairs = [pair.split(':', 1) for pair in clean_params.split(',') if ':' in pair]
+                    if pairs:
+                        for key, val in pairs:
+                            # Clean up whitespace and attempt to cast numbers/booleans dynamically
+                            key = key.strip()
+                            val = val.strip()
+                            if val.isdigit():
+                                merged_dict[key] = int(val)
+                            elif val.lower() == 'true':
+                                merged_dict[key] = True
+                            elif val.lower() == 'false':
+                                merged_dict[key] = False
+                            else:
+                                merged_dict[key] = val
+                        has_valid_base = True
+                except Exception:
+                    print(f"⚠️  Warning: Provided workload_params string '{clean_params}' could not be parsed.")
+
+    # Guard Rail: Only update if we successfully parsed a base config OR have extra params to layer in
+    if has_valid_base or extra_params:
+        if extra_params:
+            merged_dict.update(extra_params)
+        
+        # Always output a clean, unified, minified JSON block back to OpenSearch Benchmark
+        return json.dumps(merged_dict, separators=(',', ':'))
+    
+    return None
+
+
 def run_benchmark_with_profiling(
     executor: BenchmarkExecutor,
     profiler: ProfilingManager,
     namespace: str,
     scenario_name: str,
+    workload_name: str,
     workload_path: str,
     test_procedure: str,
     workload_params: Optional[str],
     extra_args: list[str],
+    extra_params: Optional[dict] = None,
     enable_profiling: bool = True,
     warmup_seconds: int = 60,
     profile_duration: int = 45,
@@ -78,11 +115,13 @@ def run_benchmark_with_profiling(
         executor: BenchmarkExecutor instance to run the benchmark
         profiler: ProfilingManager instance to capture performance data
         namespace: Kubernetes namespace for the cluster
-        scenario_name: Name identifier for the scenario
+        scenario_name: Name identifier for the scenario (may include sweep subdirectory)
+        workload_name: Name of the workload
         workload_path: Path to the workload configuration
         test_procedure: Test procedure to execute
         workload_params: Optional path to workload parameters file
         extra_args: Additional arguments for the benchmark command
+        extra_params: Optional dictionary of extra parameters to merge
         enable_profiling: Whether to enable profiling (default: True)
         warmup_seconds: Seconds to wait before starting profiling (default: 60)
         profile_duration: Duration in seconds for profiling (default: 45)
@@ -98,9 +137,11 @@ def run_benchmark_with_profiling(
             bench_job = loop_pool.submit(
                 executor.run_osb_command,
                 scenario_name,
+                workload_name,
                 workload_path,
                 test_procedure,
                 workload_params,
+                extra_params,
                 extra_args
             )
 
@@ -108,11 +149,14 @@ def run_benchmark_with_profiling(
             time.sleep(warmup_seconds)
 
             # 3. Trigger low-overhead sampling profilers on the nodes for a precise window
+            # Pass the full scenario_name which includes sweep subdirectory if present
+            # Also pass executor.results_dir which is the engine-specific directory
             prof_job = loop_pool.submit(
                 profiler.profile_steady_state,
                 namespace,
-                scenario_name,
+                scenario_name,  # This now includes sweep-N subdirectory
                 duration=profile_duration,
+                engine_results_dir=executor.results_dir,
             )
 
             # Wait for benchmark to complete first
@@ -133,9 +177,11 @@ def run_benchmark_with_profiling(
         # Run benchmark without profiling
         success, _ = executor.run_osb_command(
             scenario_name,
+            workload_name,
             workload_path,
             test_procedure,
             workload_params,
+            extra_params,
             extra_args
         )
         return success
@@ -152,152 +198,161 @@ def main():
     # Sweep sequentially across target engine nodes (e.g., jvector, faiss, lucene)
     for engine in config.target_engines:
         ns = f"os-{engine}"
-        engine_dir = config.results_root / f"{engine}-metrics"
-        executor = BenchmarkExecutor(engine, ns, engine_dir, config)
+        engine_dir = config.results_root / f"{dataset.dataset_name}-{engine}"
+        executor = BenchmarkExecutor(engine, ns, engine_dir, config, dataset_name=dataset.dataset_name)
 
-        # Step 1: Provision and push the static workload templates out to GKE
-        dataset.inject_all_templates(namespace=ns)
+        # Step 1: Pull the latest workloads in pod
+        dataset.pull_workload_repo(namespace=ns)
         
-        # Initialize index name with default (will be updated from params if available)
-        index_name = f"{engine}_index"
+        # Get index name from dataset config, fallback to workload name if not specified
+        index_name = dataset.dataset_data.get("index_name", dataset.workload_name)
+        print(f"\n🚢  {engine} engine selected - index: {index_name}")
+        
+        # Get workload params file for this engine
+        param_files = dataset.dataset_data.get("param_files", {})
+        if engine not in param_files:
+            print(f"\n⚠️  No parameter file defined for engine '{engine}' in dataset '{dataset.dataset_name}'")
+            print(f"   Available engines: {', '.join(param_files.keys())}")
+            print(f"   Skipping {engine}.\n")
+            continue
+        
+        workload_name = f"{dataset.workload_name}"
+        workload_params = f"{dataset.workload_path}/{param_files[engine]}" # path to workload params json file
+        workload_path = dataset.workload_path # path to directory where workload.json is located
 
-        # -------------------------------------------------------------
-        # SCENARIO 1: INDEX CREATION AND BULK LOADING
-        # -------------------------------------------------------------
-        if "index" in config.target_scenarios:
-            print_separator(f"Create Index & Bulk Load [{engine}]")
+        # Get filtered test procedures based on user-selected scenarios
+        filtered_procedures = dataset.get_filtered_procedures(config.target_scenarios)
+        
+        if not filtered_procedures:
+            print(f"\n⚠️  No test procedures match selected scenarios for {engine}. Skipping.\n")
+            continue
+        
+        # Execute test procedures in order
+        for idx, (test_procedure, scenario_type, proc_config) in enumerate(filtered_procedures):
+            # Get parameter sweeps from procedure config (if any)
+            parameter_sweeps = proc_config.get("parameter_sweeps", [])
             
-            # Prepare parameters and copy to pod
-            remote_param_path, params, local_param_file = prepare_and_copy_params(
-                dataset, engine, ns, client_count=1, query_count=config.query_count
-            )
-            index_name = params.get("target_index_name", f"{engine}_index")
+            # If no sweeps defined, create a single default sweep with no extra params
+            if not parameter_sweeps:
+                parameter_sweeps = [{"params": {}}]
             
-            # Run index creation only (quick operation)
-            print(f"  ▶ Creating index...")
-            success, output = executor.run_osb_command(
-                scenario_name="scenario-1-create-index",
-                workload_path=dataset.workload_path,
-                test_procedure=dataset.test_procedures["index"],
-                workload_params=remote_param_path,
-                extra_args=[]
-            )
+            if scenario_type == 'create-index':
+                print_separator(f"Create Index [{engine}]")
+                for sweep_idx, sweep_config in enumerate(parameter_sweeps, 1):
+                    params = sweep_config.get("params", {})
+                    if params:
+                        param_desc = ", ".join(f"{k}={v}" for k, v in params.items())
+                        print(f"  ▶ Creating index with {param_desc}...")
+                    else:
+                        print(f"  ▶ Creating index...")
+                    
+                    success, output = executor.run_osb_command(
+                        scenario_name=f"scenario-{idx+1}-create-index" + (f"/sweep-{sweep_idx}" if len(parameter_sweeps) > 1 else ""),
+                        workload_name=workload_name,
+                        workload_path=workload_path,
+                        test_procedure=test_procedure,
+                        workload_params=workload_params,
+                        extra_params=params if params else None,
+                        extra_args=[]
+                    )
+                    
+                    if not success:
+                        print(f"\n❌ Index creation failed for {engine}. Skipping remaining scenarios.\n")
+                        break
+                    
+                    # Validate index mapping
+                    print(f"  🔍 Validating index mapping for '{index_name}'...")
+                    is_valid, message = executor.validate_vector_field_type(index_name)
+                    
+                    if not is_valid:
+                        print(f"\n❌ Index validation failed: {message}")
+                        print(f"   The index was created but does not have the proper knn_vector mapping.")
+                        print(f"   This indicates an issue with the index template. Skipping remaining scenarios.\n")
+                        break
+                    
+                    print(f"  ✅ Index mapping validated successfully")
             
-            # Stop if index creation failed
-            if not success:
-                print(f"\n❌ Index creation failed for {engine}. Skipping remaining scenarios.\n")
-                cleanup_param_file(local_param_file)
-                continue  # Skip to next engine
+            elif scenario_type == 'ingest':
+                print_separator(f"Bulk Ingest [{engine}]")
+                for sweep_idx, sweep_config in enumerate(parameter_sweeps, 1):
+                    params = sweep_config.get("params", {})
+                    if params:
+                        param_desc = ", ".join(f"{k}={v}" for k, v in params.items())
+                        print(f"  ▶ Starting bulk data ingestion with {param_desc}...")
+                    else:
+                        print(f"  ▶ Starting bulk data ingestion...")
+                    
+                    success = executor.run_osb_command(
+                        scenario_name=f"scenario-{idx+1}-bulk-ingest" + (f"/sweep-{sweep_idx}" if len(parameter_sweeps) > 1 else ""),
+                        workload_name=workload_name,
+                        workload_path=workload_path,
+                        test_procedure=test_procedure,
+                        workload_params=workload_params,
+                        extra_params=params if params else None,
+                        extra_args=[]
+                    )
+                    
+                    if not success:
+                        print(f"\n❌ Bulk ingestion failed for {engine}. Skipping remaining scenarios.\n")
+                        break
             
-            # Validate that the index has proper knn_vector field type
-            print(f"  🔍 Validating index mapping for '{index_name}'...")
-            is_valid, message = executor.validate_vector_field_type(index_name)
+            elif scenario_type == 'merge':
+                print_separator(f"Force Merge [{engine}]")
+                for sweep_idx, sweep_config in enumerate(parameter_sweeps, 1):
+                    params = sweep_config.get("params", {})
+                    if params:
+                        param_desc = ", ".join(f"{k}={v}" for k, v in params.items())
+                        print(f"  ▶ Starting force merge with {param_desc}...")
+                    else:
+                        print(f"  ▶ Starting force merge...")
+                    
+                    success = run_benchmark_with_profiling(
+                        executor=executor,
+                        profiler=profiler,
+                        namespace=ns,
+                        scenario_name=f"scenario-{idx+1}-force-merge" + (f"/sweep-{sweep_idx}" if len(parameter_sweeps) > 1 else ""),
+                        workload_name=workload_name,
+                        workload_path=workload_path,
+                        test_procedure=test_procedure,
+                        workload_params=workload_params,
+                        extra_params=params if params else None,
+                        extra_args=[],
+                        enable_profiling=config.profiling_enabled,
+                        warmup_seconds=30,
+                        profile_duration=60,
+                    )
+                    
+                    if not success:
+                        print(f"\n❌ Force merge failed for {engine}. Skipping remaining scenarios.\n")
+                        break
             
-            if not is_valid:
-                print(f"\n❌ Index validation failed: {message}")
-                print(f"   The index was created but does not have the proper knn_vector mapping.")
-                print(f"   This indicates an issue with the index template. Skipping remaining scenarios.\n")
-                cleanup_param_file(local_param_file)
-                continue  # Skip to next engine
+            elif scenario_type == 'search':
+                print_separator(title=f"Search [{engine}]")
+                for sweep_idx, sweep_config in enumerate(parameter_sweeps, 1):
+                    params = sweep_config.get("params", {})
+                    if params:
+                        param_desc = ", ".join(f"{k}={v}" for k, v in params.items())
+                        print(f"  ▶ Running search sweep #{sweep_idx} with {param_desc}...")
+                    else:
+                        print(f"  ▶ Running search with default parameters...")
+                    
+                    run_benchmark_with_profiling(
+                        executor=executor,
+                        profiler=profiler,
+                        namespace=ns,
+                        scenario_name=f"scenario-{idx+1}-search" + (f"/sweep-{sweep_idx}" if len(parameter_sweeps) > 1 else ""),
+                        workload_name=workload_name,
+                        workload_path=workload_path,
+                        test_procedure=test_procedure,
+                        workload_params=workload_params,
+                        extra_params=params if params else None,
+                        extra_args=[],
+                        enable_profiling=config.profiling_enabled,
+                        warmup_seconds=30,
+                        profile_duration=45,
+                    )
             
-            print(f"  ✅ Index mapping validated successfully")
             
-            # Now run bulk ingestion with profiling
-            print(f"  ▶ Starting bulk data ingestion...")
-            success = run_benchmark_with_profiling(
-                executor=executor,
-                profiler=profiler,
-                namespace=ns,
-                scenario_name="scenario-1-bulk-ingest",
-                workload_path=dataset.workload_path,
-                test_procedure=dataset.test_procedures["bulk"],
-                workload_params=remote_param_path,
-                extra_args=[],
-                enable_profiling=config.profiling_enabled,
-                warmup_seconds=60,
-                profile_duration=45,
-            )
-            
-            # Clean up temp file
-            cleanup_param_file(local_param_file)
-            
-            # Stop if bulk ingestion failed
-            if not success:
-                print(f"\n❌ Bulk ingestion failed for {engine}. Skipping remaining scenarios.\n")
-                continue  # Skip to next engine
-
-        # -------------------------------------------------------------
-        # SCENARIO 2: FORCE MERGE
-        # -------------------------------------------------------------
-        if "merge" in config.target_scenarios:
-            print_separator(f"Force Merge [{engine}]")
-            
-            # Prepare parameters and copy to pod
-            remote_param_path, params, local_param_file = prepare_and_copy_params(
-                dataset, engine, ns, client_count=1, query_count=config.query_count
-            )
-            
-            # Update index_name from params
-            index_name = params.get("target_index_name", index_name)
-
-            success = run_benchmark_with_profiling(
-                executor=executor,
-                profiler=profiler,
-                namespace=ns,
-                scenario_name="scenario-2-force-merge",
-                workload_path=dataset.workload_path,
-                test_procedure=dataset.test_procedures["merge"],
-                workload_params=remote_param_path,
-                extra_args=[],
-                enable_profiling=config.profiling_enabled,
-                warmup_seconds=30,
-                profile_duration=60,
-            )
-            
-            # Clean up temp file
-            cleanup_param_file(local_param_file)
-            
-            # Stop if force merge failed
-            if not success:
-                print(f"\n❌ Force merge failed for {engine}. Skipping remaining scenarios.\n")
-                continue  # Skip to next engine
-
-        # -------------------------------------------------------------
-        # SCENARIO 3: SEARCH CONCURRENCY MATRIX WITH PROFILING
-        # -------------------------------------------------------------
-        if "search" in config.target_scenarios:
-            print_separator(f"Search Concurrency sweeps [{engine}]")
-            client_matrix = config.search_client_counts
-
-            for clients in client_matrix:
-                print(
-                    f"  ▶ Running search sweep with {clients} concurrent clients..."
-                )
-
-                # Prepare parameters and copy to pod
-                remote_param_path, params, local_param_file = prepare_and_copy_params(
-                    dataset, engine, ns, client_count=clients, query_count=config.query_count
-                )
-                
-                # Update index_name from params
-                index_name = params.get("target_index_name", index_name)
-
-                run_benchmark_with_profiling(
-                    executor=executor,
-                    profiler=profiler,
-                    namespace=ns,
-                    scenario_name=f"scenario-search-only/clients-{clients}",
-                    workload_path=dataset.workload_path,
-                    test_procedure=dataset.test_procedures["search"],
-                    workload_params=remote_param_path,
-                    extra_args=[],
-                    enable_profiling=config.profiling_enabled,
-                    warmup_seconds=30,
-                    profile_duration=45,
-                )
-
-                # Clean up temp file
-                # cleanup_param_file(local_param_file)
 
         # Collect cluster telemetry after all scenarios complete for this engine
         print(f"\n{'='*66}")

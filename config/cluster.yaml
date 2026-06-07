@@ -19,4 +19,11 @@ client_options:
 # Use "app=opensearch-data" for separated architecture or "app=opensearch-cluster" for combined
 pod_label_selector: "app=opensearch-data"
 
+# Profiling configuration
+# Enable or disable async-profiler flame graph generation during benchmarks
+profiling:
+  enabled: true  # Set to false to disable profiling globally
+  warmup_seconds: 0  # Seconds to wait before starting profiling (default: 60)
+  duration_seconds: 45  # Duration of profiling window in seconds (default: 45)
+
 # Made with Bob

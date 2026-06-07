@@ -3,7 +3,7 @@ import json
 import sys
 import subprocess
 from pathlib import Path
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Any
 from lib.kubectl_helper import KubectlHelper
 
 
@@ -12,12 +12,13 @@ class BenchmarkExecutor:
     
     BENCHMARK_HOME = "/datasets/opensearch-benchmark"
 
-    def __init__(self, engine: str, namespace: str, results_dir: Path, config):
+    def __init__(self, engine: str, namespace: str, results_dir: Path, config, dataset_name: Optional[str] = None):
         self.engine = engine
         self.namespace = namespace
         self.results_dir = results_dir
         self.pod_name = "opensearch-benchmark-client"
         self.config = config
+        self.dataset_name = dataset_name
         self.kubectl = KubectlHelper()
         
         # Extract cluster settings from config
@@ -136,33 +137,119 @@ class BenchmarkExecutor:
         print(f"  ⚠️  No OpenSearch pods found. Check cluster status in namespace {self.namespace}!")
         return []
 
-    def run_osb_command(self, scenario_name: str, workload_path: str, test_procedure: str, workload_params: Optional[str] = None, extra_args: Optional[list] = None) -> Tuple[bool, str]:
+
+    @staticmethod
+    def retrieve_and_merge_params(
+        namespace: str,
+        pod_name: str,
+        workload_params: Optional[str],
+        extra_params: Optional[dict[str, Any]] = None
+    ) -> Optional[str]:
+        """
+        Retrieves and parses base configurations from a remote JSON file, a raw JSON string,
+        or a comma-separated key-value string, then merges them with runtime overrides.
+        """
+        merged_dict: dict[str, Any] = {}
+        has_valid_base = False
+
+        if workload_params and workload_params.strip():
+            clean_params = workload_params.strip()
+            
+            # Format 1: Remote JSON file path
+            if clean_params.endswith('.json'):
+                try:
+                    cat_cmd = ["kubectl", "exec", "-n", namespace, pod_name, "--", "cat", clean_params]
+                    result = subprocess.run(cat_cmd, capture_output=True, text=True, check=True)
+                    
+                    if result.stdout.strip():
+                        merged_dict = json.loads(result.stdout)
+                        has_valid_base = True
+                except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+                    print(f"⚠️  Warning: Could not read remote config file '{clean_params}' ({type(e).__name__}).")
+            
+            else:
+                try:
+                    # Format 2: Raw inline JSON string (e.g., '{"query_k":50}')
+                    merged_dict = json.loads(clean_params)
+                    has_valid_base = True
+                except json.JSONDecodeError:
+                    # Format 3: Plain key-value pairs (e.g., "query_k:50,clients:4")
+                    try:
+                        # Split into individual pairs, then split each pair into key and value
+                        pairs = [pair.split(':', 1) for pair in clean_params.split(',') if ':' in pair]
+                        if pairs:
+                            for key, val in pairs:
+                                # Clean up whitespace and attempt to cast numbers/booleans dynamically
+                                key = key.strip()
+                                val = val.strip()
+                                if val.isdigit():
+                                    merged_dict[key] = int(val)
+                                elif val.lower() == 'true':
+                                    merged_dict[key] = True
+                                elif val.lower() == 'false':
+                                    merged_dict[key] = False
+                                else:
+                                    merged_dict[key] = val
+                            has_valid_base = True
+                    except Exception:
+                        print(f"⚠️  Warning: Provided workload_params string '{clean_params}' could not be parsed.")
+
+        # Guard Rail: Only update if we successfully parsed a base config OR have extra params to layer in
+        if has_valid_base or extra_params:
+            if extra_params:
+                merged_dict.update(extra_params)
+            
+            # Always output a clean, unified, minified JSON block back to OpenSearch Benchmark
+            return json.dumps(merged_dict, separators=(',', ':'))
+        
+        return None
+
+    def run_osb_command(self, scenario_name: str, workload_name: str, workload_path: str, test_procedure: str, workload_params: Optional[str] = None, extra_params = None, extra_args: Optional[list] = None) -> Tuple[bool, str]:
         """Runs the complete OpenSearch Benchmark workload wrapper process."""
         # Clean remote logs before starting a fresh run path
         self.clear_remote_logs()
-
+        
+        updated_workload_params = self.retrieve_and_merge_params(
+            namespace=self.namespace,
+            pod_name=self.pod_name,
+            workload_params=workload_params,
+            extra_params=extra_params
+        )
+        
         # Build command array
         cmd = [
             "kubectl", "exec", "-it", "-n", self.namespace, "-c", "benchmark",
             self.pod_name, "--", "opensearch-benchmark", "run",
             "--pipeline=benchmark-only",
+            '--kill-running-processes'
         ]
         
         # Use --workload for official workloads (no path), --workload-path for custom
         if workload_path.startswith("/"):
             cmd.append(f"--workload-path={workload_path}")
-        else:
-            cmd.append(f"--workload={workload_path}")
+        else:    
+            cmd.append(f"--workload={workload_name}")
         
         cmd.extend([
             f"--test-procedure={test_procedure}",
             f"--target-hosts={self.cluster_endpoint}",
-            f"--client-options={self.client_options}",
-            "--kill-running-processes"
+            f"--client-options={self.client_options}"
         ])
         
+        # Add user tags to include dataset and engine metadata in results
+        # Use --user-tag multiple times (key:value format)
+        if self.dataset_name:
+            cmd.append(f"--user-tag=dataset:{self.dataset_name}")
+        cmd.append(f"--user-tag=engine:{self.engine}")
+        cmd.append(f"--user-tag=scenario:{scenario_name}")
+        
+        # Print current resolved workload parameters for visibility
+        current_workload_params = updated_workload_params or workload_params
+        if current_workload_params:
+            print(f"  🧾 Current workload parameters: {current_workload_params}")
+        
         # Add workload-params if provided
-        if workload_params:
+        if updated_workload_params:
             cmd.append(f"--workload-params={workload_params}")
         
         # Add any additional arguments

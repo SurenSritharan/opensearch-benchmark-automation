@@ -43,24 +43,17 @@ class ParallelBenchmarkRunner:
             "run_benchmark.py",
             "--engine", engine,
             "--dataset", self.config.args.dataset or "cohere-1m",
-            "--yes",  # Skip confirmation prompt for parallel execution
+            "--quiet",  # Skip confirmation prompt for parallel execution
         ]
         
         # Add scenario if specified
         if self.config.args.scenario:
             cmd.extend(["--scenario", self.config.args.scenario])
         
-        # Add client counts if specified
-        if self.config.args.clients:
-            cmd.extend(["--clients", self.config.args.clients])
             
-        # Add query count if specified
-        if self.config.args.queries:
-            cmd.extend(["--queries", str(self.config.args.queries)])
-            
-        # Add profiling flag if disabled
-        if self.config.args.disable_profiling:
-            cmd.append("--disable-profiling")
+        # Add profiling flag if enabled
+        if self.config.args.enable_profiling:
+            cmd.append("--enable-profiling")
         
         print(f"🚀 Starting {engine} benchmark in background...")
         print(f"   Log file: {log_file.relative_to(Path.cwd())}")

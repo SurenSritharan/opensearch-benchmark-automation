@@ -79,13 +79,9 @@ class ConfigManager:
         parser.add_argument("--engine", type=str, default=None)
         parser.add_argument("--dataset", type=str, default=None)
         parser.add_argument("--scenario", type=str, default=None)
-        parser.add_argument("--clients", type=str, default=None,
-                          help="Client counts for search concurrency (comma-separated, e.g., '10,50,100' or single value '50')")
-        parser.add_argument("--queries", type=int, default=None,
-                          help="Number of queries to execute during search tests (default: workload-specific)")
-        parser.add_argument("--disable-profiling", action="store_true", default=False,
-                          help="Disable performance profiling during benchmark execution")
-        parser.add_argument("--yes", "-y", action="store_true", default=False,
+        parser.add_argument("--enable-profiling", action="store_true", default=False,
+                          help="enable performance profiling during benchmark execution")
+        parser.add_argument("--quiet", "-q", action="store_true", default=False,
                           help="Skip confirmation prompt and proceed automatically")
         parser.add_argument("--help", "-h", action="store_true")
         return parser.parse_known_args()
@@ -97,13 +93,11 @@ class ConfigManager:
         print("  --engine <engine>       Specify engine(s): jvector, faiss, lucene, or all")
         print("  --dataset <dataset>     Specify dataset: cohere-1m, msmarco")
         print("  --scenario <scenario>   Specify scenario(s) comma-separated: index, merge, search, or all")
-        print("  --clients <counts>      Client counts for search (comma-separated or single, e.g., '50' or '10,50,100')")
-        print("  --queries <count>       Number of queries to execute during search tests")
-        print("  --disable-profiling     Disable performance profiling (enabled by default)")
+        print("  --enable-profiling     enable performance profiling (enabled by default)")
         print("  --help, -h              Show this help message")
         print("\nExamples:")
         print("  ./run-benchmark.sh --engine faiss --dataset msmarco --scenario all")
-        print("  ./run-benchmark.sh --engine all --scenario search --disable-profiling")
+        print("  ./run-benchmark.sh --engine all --scenario search --enable-profiling")
         sys.exit(0)
 
     def _validate_programmatic_args(self):
@@ -174,18 +168,6 @@ class ConfigManager:
             
         self.args.scenario = ",".join(scenarios)
         
-        # Ask for query count if search scenarios are selected
-        if "search" in scenarios:
-            query_input = input("\nNumber of queries for search tests (press Enter for workload default): ").strip()
-            if query_input:
-                try:
-                    self.args.queries = int(query_input)
-                except ValueError:
-                    print("❌ Invalid query count. Using workload default.")
-                    self.args.queries = None
-        
-        # Profiling is enabled by default in interactive mode (no prompt)
-        self.args.disable_profiling = False
 
     def _display_configuration_and_confirm(self):
         """Displays config metrics and requests execution confirmation."""
@@ -200,51 +182,44 @@ class ConfigManager:
         print(f"  Index Creation:   {'✅ YES' if 'index' in self.target_scenarios else '❌ NO'}")
         print(f"  Force Merge:      {'✅ YES' if 'merge' in self.target_scenarios else '❌ NO'}")
         print(f"  Search Tests:     {'✅ YES' if 'search' in self.target_scenarios else '❌ NO'}")
-        if 'search' in self.target_scenarios:
-            if self.args.queries:
-                query_display = f"{self.args.queries}"
-            else:
-                # Get default query count from dataset parameter files
-                default_query_count = self._get_default_query_count(dataset_name)
-                query_display = f"{default_query_count} (default)"
-            print(f"  Query Count:      {query_display}")
-            print(f"  Search Clients:   {', '.join(map(str, self.search_client_counts))}")
-        print(f"  Profiling:        {'✅ ENABLED' if not self.args.disable_profiling else '❌ DISABLED'}")
+        print(f"  Profiling:        {'✅ ENABLED' if self.profiling_enabled else '❌ DISABLED'}")
         print("==========================================")
         
-        # Skip confirmation if --yes flag is provided
-        if self.args.yes:
-            print("\n✅ Auto-confirmed (--yes flag provided)")
+        # Build and display the equivalent command line
+        cmd_parts = ["./run-benchmark.sh"]
+        cmd_parts.append(f"--engine {self.args.engine}")
+        cmd_parts.append(f"--dataset {dataset_name}")
+        cmd_parts.append(f"--scenario {self.args.scenario or 'all'}")
+        if self.profiling_enabled:
+            cmd_parts.append("--enable-profiling")
+        
+        print("\n💡 To run this configuration again without the menu:")
+        print(f"   {' '.join(cmd_parts)}")
+        print()
+        
+        # Skip confirmation if --quiet flag is provided
+        if self.args.quiet:
+            print("✅ Auto-confirmed (--quiet flag provided)")
             return
         
-        confirm = input("\nLaunch baseline suite sweep? (y/n): ").strip().lower()
+        confirm = input("Launch baseline suite sweep? (y/n): ").strip().lower()
         if confirm != 'y' and confirm != 'yes':
             print("Execution cancelled.")
             sys.exit(0)
             
-    def _get_default_query_count(self, dataset_name: str) -> int:
-        """Get the default query count from the dataset's parameter files."""
-        import json
-        dataset_info = self.datasets_manifest["datasets"].get(dataset_name, {})
-        param_files = dataset_info.get("param_files", {})
-        workload_name = dataset_info.get("workload_name", "vectorsearch")
-        
-        # Try to read from the first available engine's param file
-        for engine in ["jvector", "faiss", "lucene"]:
-            if engine in param_files:
-                param_file_path = Path("workloads") / workload_name / param_files[engine]
-                if param_file_path.exists():
-                    try:
-                        params = json.loads(param_file_path.read_text())
-                        return params.get("query_count", 10000)
-                    except:
-                        pass
-        return 10000  # Fallback default
-
     @property
     def profiling_enabled(self) -> bool:
-        """Returns whether profiling is enabled (enabled by default unless disabled)."""
-        return not self.args.disable_profiling
+        """
+        Returns whether profiling is enabled.
+        Priority: CLI flag > cluster.yaml config > default (false)
+        """
+        # CLI flag takes precedence
+        if self.args.enable_profiling:
+            return True
+        
+        # Check cluster.yaml configuration
+        profiling_config = self.cluster_config.get("profiling", {})
+        return profiling_config.get("enabled", False)  # Default to disabled
 
     @property
     def target_engines(self) -> list:
@@ -290,17 +265,3 @@ class ConfigManager:
     def pod_label_selector(self) -> str:
         """Returns the pod label selector for discovering OpenSearch pods."""
         return self.cluster_config.get("pod_label_selector", "app=opensearch-cluster")
-
-    @property
-    def search_client_counts(self) -> list:
-        """Returns the list of client counts for search concurrency testing."""
-        if self.args.clients:
-            # Parse comma-separated values
-            return [int(c.strip()) for c in self.args.clients.split(",")]
-        # Default sweep
-        return [10, 50, 100]
-
-    @property
-    def query_count(self):
-        """Returns the number of queries to execute during search tests, or None for workload default."""
-        return self.args.queries
