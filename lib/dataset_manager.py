@@ -22,6 +22,7 @@ class DatasetManager:
         self.workload_name = self.dataset_data.get("workload_name", "default")
         self.workload_path = f"{self.base_workload_path}/{self.workload_name}"
         self.test_procedures = self.dataset_data.get("test_procedures", [])
+        self.default_params = self.dataset_data.get("default_params", {})
     
     def get_filtered_procedures(self, target_scenarios: list) -> list:
         """Filter test procedures based on user-selected scenarios.
@@ -65,7 +66,18 @@ class DatasetManager:
                     filtered.append((proc_name, 'merge', proc_config))
         
         return filtered
+    
+    def get_default_params(self) -> dict:
+        """Returns default workload parameters from dataset configuration.
         
+        These parameters will be merged with workload params and can include
+        any Jinja2 template variables like target_index_primary_shards,
+        ef_construction, m, etc.
+        
+        Returns:
+            Dictionary of default parameters
+        """
+        return self.default_params.copy()
 
     def _load_yaml(self, path: Path) -> dict:
         with open(path, "r") as f:

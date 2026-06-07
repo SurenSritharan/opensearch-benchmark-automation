@@ -12,13 +12,14 @@ class BenchmarkExecutor:
     
     BENCHMARK_HOME = "/datasets/opensearch-benchmark"
 
-    def __init__(self, engine: str, namespace: str, results_dir: Path, config, dataset_name: Optional[str] = None):
+    def __init__(self, engine: str, namespace: str, results_dir: Path, config, dataset_name: Optional[str] = None, default_params: Optional[dict] = None):
         self.engine = engine
         self.namespace = namespace
         self.results_dir = results_dir
         self.pod_name = "opensearch-benchmark-client"
         self.config = config
         self.dataset_name = dataset_name
+        self.default_params = default_params or {}
         self.kubectl = KubectlHelper()
         
         # Extract cluster settings from config
@@ -205,15 +206,29 @@ class BenchmarkExecutor:
         return None
 
     def run_osb_command(self, scenario_name: str, workload_name: str, workload_path: str, test_procedure: str, workload_params: Optional[str] = None, extra_params = None, extra_args: Optional[list] = None) -> Tuple[bool, str]:
-        """Runs the complete OpenSearch Benchmark workload wrapper process."""
+        """Runs the complete OpenSearch Benchmark workload wrapper process.
+        
+        Parameter merge order (later overrides earlier):
+        1. workload_params (from JSON file in workload)
+        2. self.default_params (from dataset.yaml default_params)
+        3. extra_params (from parameter sweeps or CLI)
+        """
         # Clean remote logs before starting a fresh run path
         self.clear_remote_logs()
+        
+        # Merge default_params from dataset config with extra_params
+        # Default params go first, then extra_params can override them
+        merged_extra_params = {}
+        if self.default_params:
+            merged_extra_params.update(self.default_params)
+        if extra_params:
+            merged_extra_params.update(extra_params)
         
         updated_workload_params = self.retrieve_and_merge_params(
             namespace=self.namespace,
             pod_name=self.pod_name,
             workload_params=workload_params,
-            extra_params=extra_params
+            extra_params=merged_extra_params if merged_extra_params else None
         )
         
         # Build command array
@@ -249,8 +264,8 @@ class BenchmarkExecutor:
             print(f"  🧾 Current workload parameters: {current_workload_params}")
         
         # Add workload-params if provided
-        if updated_workload_params:
-            cmd.append(f"--workload-params={workload_params}")
+        if current_workload_params:
+            cmd.append(f"--workload-params={current_workload_params}")
         
         # Add any additional arguments
         if extra_args:

@@ -229,7 +229,11 @@ def main():
     for engine in config.target_engines:
         ns = f"os-{engine}"
         engine_dir = config.results_root / f"{dataset.dataset_name}-{engine}"
-        executor = BenchmarkExecutor(engine, ns, engine_dir, config, dataset_name=dataset.dataset_name)
+        
+        # Get default parameters from dataset config
+        default_params = dataset.get_default_params()
+        
+        executor = BenchmarkExecutor(engine, ns, engine_dir, config, dataset_name=dataset.dataset_name, default_params=default_params)
         
         # Initialize metrics collector for this engine
         metrics_collector = MetricsCollector(
@@ -244,6 +248,13 @@ def main():
         # Get index name from dataset config, fallback to workload name if not specified
         index_name = dataset.dataset_data.get("index_name", dataset.workload_name)
         print(f"\n🚢  {engine} engine selected - index: {index_name}")
+        
+        # Get default parameters from dataset config
+        default_params = dataset.get_default_params()
+        if default_params:
+            print(f"  📋 Default parameters from dataset config:")
+            for key, value in default_params.items():
+                print(f"     {key}: {value}")
         
         # Get workload params file for this engine
         param_files = dataset.dataset_data.get("param_files", {})
@@ -319,14 +330,21 @@ def main():
                     else:
                         print(f"  ▶ Starting bulk data ingestion...")
                     
-                    success = executor.run_osb_command(
+                    success = run_benchmark_with_profiling(
+                        executor=executor,
+                        profiler=profiler,
+                        metrics_collector=metrics_collector,
+                        namespace=ns,
                         scenario_name=f"scenario-{idx+1}-bulk-ingest" + (f"/sweep-{sweep_idx}" if len(parameter_sweeps) > 1 else ""),
                         workload_name=workload_name,
                         workload_path=workload_path,
                         test_procedure=test_procedure,
                         workload_params=workload_params,
                         extra_params=params if params else None,
-                        extra_args=[]
+                        extra_args=[],
+                        enable_profiling=config.profiling_enabled,
+                        warmup_seconds=30,
+                        profile_duration=45,
                     )
                     
                     if not success:

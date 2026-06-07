@@ -25,9 +25,19 @@ datasets:
     space_type: "cosinesimil"
     description: "MS MARCO passage ranking dataset with 1024-dimensional vectors (custom workload)"
     index_name: cohere-msmarco-1024
-    workload_name: "msmarco" # needs to match opensearch-benchmark-workloads folder 
+    workload_name: "msmarco" # needs to match opensearch-benchmark-workloads folder
     custom_workload: "workloads/msmarco"
     data_dir: "/datasets/msmarco"
+    # Default workload parameters - these will be passed to all test procedures
+    # Keys must match the Jinja2 template variables in the workload
+    # These can be overridden by parameter sweeps or CLI arguments
+    default_params:
+      target_index_primary_shards: 3      # Distribute across 3 data nodes
+      target_index_replica_shards: 1      # 1 replica for high availability
+      # You can add any other template variables here:
+      # target_index_dimension: 1024
+      # ef_construction: 128
+      # m: 16
     data_files:
       - name: "cohere_msmarco_base.fvec"
         url: "https://jvector-datasets-infratest.s3.us-east-2.amazonaws.com/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/cohere/cohere_msmarco/cohere_msmarco_base.fvec"
