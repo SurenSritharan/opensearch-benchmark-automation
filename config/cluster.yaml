@@ -26,4 +26,11 @@ profiling:
   warmup_seconds: 0  # Seconds to wait before starting profiling (default: 60)
   duration_seconds: 45  # Duration of profiling window in seconds (default: 45)
 
+# Metrics collection configuration
+# Enable or disable GKE resource metrics collection and graphing
+metrics:
+  enabled: true  # Set to false to disable metrics collection globally
+  interval_seconds: 10  # Seconds between metric samples (default: 10)
+  generate_graphs: true  # Automatically generate graphs after collection (default: true)
+
 # Made with Bob
