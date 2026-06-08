@@ -348,23 +348,7 @@ Each engine has its own parameter file (e.g., `faiss-cohere-1m-768-dp.json`, `jv
 
 ### GKE Deployment
 
-The project supports two deployment architectures:
-
-#### 1. Separated Cluster Architecture (Recommended)
-Deploy a single cluster with separated cluster manager and data nodes:
-
-```bash
-# Deploy to a specific namespace (os-jvector, os-faiss, or os-lucene)
-./gke-manifest/deploy-separated-cluster.sh
-
-# This deploys:
-# - 1 dedicated cluster manager node
-# - 3 data + ingest nodes
-```
-
-See [README-SEPARATED-CLUSTER.md](gke-manifest/README-SEPARATED-CLUSTER.md) for details.
-
-#### 2. Multi-Namespace Deployment
+#### Create GKE Clusters
 Deploy separate clusters for each engine across three namespaces:
 
 ```bash
@@ -377,7 +361,7 @@ Deploy separate clusters for each engine across three namespaces:
 ./gke-manifest/deploy-all-clusters.sh
 ```
 
-See [README-NAMESPACE-DEPLOYMENT.md](gke-manifest/README-NAMESPACE-DEPLOYMENT.md) for details.
+See [GKE-MANIFEST](gke-manifest/README.md) for details.
 
 #### Available Manifests
 - `opensearch-jvector-cluster-manager.yaml` - JVector cluster manager

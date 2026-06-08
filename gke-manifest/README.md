@@ -41,12 +41,13 @@ This deployment uses **two separate StatefulSets** for optimal performance testi
 - `opensearch-jvector-cluster-manager.yaml` - Cluster manager StatefulSet
 - `opensearch-jvector-data-nodes.yaml` - Data nodes StatefulSet
 - `deploy-separated-cluster.sh` - Deployment script
+- `deploy-all-clusters.sh` - Deployment script
 
 ## Deployment
 
 ```bash
 cd gke-manifest
-./deploy-separated-cluster.sh
+./deploy-all-clusters.sh
 ```
 
 The script will:
