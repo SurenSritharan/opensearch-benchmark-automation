@@ -59,8 +59,7 @@ opensearch-benchmark-automation/
 │   ├── opensearch-standard-cluster-manager.yaml
 │   ├── opensearch-standard-data-nodes.yaml
 │   ├── opensearch-benchmark-client.yaml
-│   ├── README-SEPARATED-CLUSTER.md
-│   └── README-NAMESPACE-DEPLOYMENT.md
+│   ├── README.md
 ├── scripts/
 │   ├── check-index-stats.sh
 │   ├── check-shard-info.sh
@@ -122,40 +121,6 @@ Run benchmarks sequentially with live stdout:
 ```bash
 ./run-benchmark.sh
 ```
-
-### Parallel Execution (NEW!)
-
-For detailed parallel execution guide, see [PARALLEL_EXECUTION_GUIDE.md](PARALLEL_EXECUTION_GUIDE.md)
-
-**Run benchmarks in parallel:**
-```bash
-# All engines with all scenarios
-./run-benchmark-parallel.sh --engine all --scenario all
-
-# Specific engines only
-./run-benchmark-parallel.sh --engine jvector,faiss --scenario search
-
-# With custom settings
-./run-benchmark-parallel.sh --dataset msmarco --clients 50,100 --disable-profiling
-```
-
-**Monitor progress:**
-```bash
-# Show status
-./view_logs.py
-
-# Follow specific engine
-./view_logs.py --tail faiss --follow
-
-# Follow all engines
-./view_logs.py --follow-all
-
-# Check for errors
-./view_logs.py --errors
-```
-
-### Sequential Execution (Original)
-
 **Command-Line Options:**
 
 ```bash
@@ -196,20 +161,25 @@ Run full benchmark suite with default dataset:
 ### 1. Create Index
 - Creates target index with engine-specific configurations
 - Validates index mapping and field types
-- Output: `results/{timestamp}/{engine}-metrics/scenario-1-create-index/`
+- Output: `results/{timestamp}/{dataset}-{engine}/scenario-1-create-index/`
 
 ### 2. Bulk Ingestion
 - Loads vector data into the index
 - Measures ingestion throughput and performance
-- Output: `results/{timestamp}/{engine}-metrics/scenario-2-custom-vector-bulk/`
+- Output: `results/{timestamp}/{dataset}-{engine}/scenario-2-custom-vector-bulk/`
 
 ### 3. Force Merge
 - Performs force merge operation on the index
 - Optimizes segment structure
-- Output: `results/{timestamp}/{engine}-metrics/scenario-force-merge-index/`
+- Output: `results/{timestamp}/{dataset}-{engine}/scenario-3-force-merge/`
 
-### 4. Search Concurrency Matrix
-- Tests search performance with varying client counts (10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
+### 4. Search Concurrency Tests
+- Tests search performance with parameter sweeps defined in `config/datasets.yaml`
+- Each dataset can define multiple search test configurations via `parameter_sweeps`
+- Common sweep parameters include:
+  - `query_clients`: Number of concurrent search clients
+  - `query_count`: Total number of queries to execute
+  - `warmup_iterations`: Number of warmup queries before measurement
 - Collects comprehensive metrics:
   - Throughput (ops/s)
   - Latency percentiles (p50, p90, p99, p99.9, p99.99, max)
@@ -217,16 +187,25 @@ Run full benchmark suite with default dataset:
   - Error rates
   - Recall metrics (recall@k, recall@1)
   - GC statistics
-- Output: `results/{timestamp}/{engine}-metrics/scenario-search-only/`
-  - Individual run logs in `clients-{N}/` subdirectories
-  - Aggregated metrics in `summary.csv`
+- Output: `results/{timestamp}/{dataset}-{engine}/scenario-4-search/`
+  - Individual sweep results in `sweep-{N}/` subdirectories (one per parameter sweep defined in `datasets.yaml`)
+  - Each sweep directory contains:
+    - `benchmark.log` - Detailed benchmark execution log
+    - `console.log` - Console output
+    - `test_run.json` - Test execution metadata
+    - `results.html` - Interactive results dashboard
+    - `gke_metrics.json` - GKE cluster metrics
+    - `gke_metrics_summary.json` - Summarized GKE metrics
+    - `profiles/` - CPU flame graphs and profiling data (if enabled)
+
+**Note**: Search test configurations are dataset-specific and defined in the `parameter_sweeps` section of each dataset in `config/datasets.yaml`. The number of `sweep-{N}/` directories corresponds to the number of parameter sweeps configured. See the [Dataset Configuration](#dataset-configuration) section for details.
 
 ## 📈 Results Structure
 
 ```
 results/
-└── 20260605-145009/              # Timestamp-based directory
-    ├── faiss-metrics/            # Per-engine results
+└── 20260608-080406/              # Timestamp-based directory
+    ├── msmarco-lucene/           # {dataset}-{engine} results
     │   ├── scenario-1-create-index/
     │   │   ├── console.log
     │   │   └── index-mapping-validation.json
@@ -237,22 +216,28 @@ results/
     │   │       ├── cpu_flame_graph_bulk-node-0.html
     │   │       ├── disk_io_bulk-node-0.log
     │   │       └── jvm_memory_bulk-node-0.log
-    │   ├── scenario-force-merge-index/
-    │   ├── scenario-search-only/
-    │   │   ├── clients-10/
-    │   │   ├── clients-50/
+    │   ├── scenario-3-force-merge/
+    │   ├── scenario-4-search/
+    │   │   ├── sweep-1/          # First parameter sweep from datasets.yaml
+    │   │   │   ├── benchmark.log
     │   │   │   ├── console.log
     │   │   │   ├── test_run.json
+    │   │   │   ├── results.html
+    │   │   │   ├── gke_metrics.json
+    │   │   │   ├── gke_metrics_summary.json
     │   │   │   └── profiles/
-    │   │   │       ├── cpu_flame_graph_search-50c-node-0.html
-    │   │   │       ├── disk_io_search-50c-node-0.log
-    │   │   │       └── jvm_memory_search-50c-node-0.log
-    │   │   ├── ...
-    │   │   └── summary.csv
+    │   │   │       ├── cpu_flame_graph_search-node-0.html
+    │   │   │       ├── disk_io_search-node-0.log
+    │   │   │       └── jvm_memory_search-node-0.log
+    │   │   ├── sweep-2/          # Second parameter sweep
+    │   │   ├── sweep-3/          # Third parameter sweep
+    │   │   └── sweep-4/          # Fourth parameter sweep
     │   └── cluster-telemetry-state/
-    ├── lucene-metrics/           # Lucene engine results
-    └── jvector-metrics/          # JVector engine results
+    ├── msmarco-faiss/            # FAISS engine results
+    └── msmarco-jvector/          # JVector engine results
 ```
+
+**Note**: The number of `sweep-{N}/` directories under `scenario-4-search/` corresponds to the number of parameter sweeps defined in the `parameter_sweeps` section of the selected dataset in `config/datasets.yaml`. The example above shows the MS MARCO dataset's 4 parameter sweeps (1, 50, 100, and 200 concurrent clients).
 
 ## 🔧 Configuration
 
@@ -277,6 +262,16 @@ When `ENABLE_PROFILING=true`, the framework automatically:
 
 **Viewing Flame Graphs:**
 Open the HTML files in any web browser to analyze CPU hotspots and call stacks.
+
+#### Example Flame Graphs
+
+Sample flame graphs showing cosine similarity operations during bulk ingestion are available in [`docs/flame-graphs/`](docs/flame-graphs/):
+
+**Bulk Ingestion (MS MARCO dataset with cosine similarity):**
+- [JVector Bulk Ingest](docs/flame-graphs/jvector-bulk-ingest-cosine.html) - Shows JVector's cosine similarity computation during vector indexing
+- [Lucene Bulk Ingest](docs/flame-graphs/lucene-bulk-ingest-cosine.html) - Shows Lucene's cosine similarity computation during vector indexing
+
+These flame graphs highlight the CPU time spent in cosine similarity calculations during index building, which is critical for understanding vector search performance bottlenecks.
 
 ### Dataset Configuration
 
@@ -314,11 +309,19 @@ datasets:
       - name: "create-index-only"
       - name: "bulk-ingest-only"
       - name: "search-only"
-        parameter_sweeps:  # Optional: parameter variations
+        parameter_sweeps:  # Optional: parameter variations for search tests
           - params:
               query_clients: 50
               query_count: 25000
+              warmup_iterations: 100
+          - params:
+              query_clients: 100
+              query_count: 50000
+              warmup_iterations: 100
 ```
+
+**Parameter Sweeps for Search Tests:**
+The `parameter_sweeps` section allows you to define multiple search test configurations with different parameters. Each sweep creates a separate test run with its own results directory. This is particularly useful for testing search performance under different concurrency levels and query loads.
 
 **Key Configuration Fields:**
 - `workload_name`: Must match a workload directory in the opensearch-benchmark-workloads repository
@@ -328,10 +331,15 @@ datasets:
 - `default_params`: Default parameters passed to all test procedures (can be overridden by parameter sweeps)
 
 **Example: MS MARCO Dataset**
-The msmarco dataset demonstrates the configuration:
+The msmarco dataset demonstrates the full configuration including parameter sweeps:
 - Automatically downloads 3 data files (~4.1GB total) to `/datasets/msmarco/`
 - Uses the `msmarco` workload from opensearch-benchmark-workloads
-- Defines parameter sweeps for search tests with different client counts
+- Defines 4 parameter sweeps for search tests:
+  - 1 client with 1,000 queries (baseline)
+  - 50 clients with 25,000 queries
+  - 100 clients with 50,000 queries
+  - 200 clients with 100,000 queries
+- Each sweep runs as a separate test with its own results directory
 - Stores engine-specific parameters in `workloads/msmarco/params/`
 
 ### Engine-Specific Parameters
