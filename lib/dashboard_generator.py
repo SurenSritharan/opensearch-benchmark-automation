@@ -120,68 +120,87 @@ class DashboardGenerator:
                         
                         test_file = sweep_dir / "test_run.json"
                         if test_file.exists():
-                            with open(test_file) as f:
-                                data = json.load(f)
-                                workload_params = data.get("workload-params", {})
-                                
-                                for op in data["results"]["op_metrics"]:
-                                    throughput = op.get("throughput", {}).get("mean")
-                                    latency = op.get("latency", {})
-                                    p50 = latency.get("50_0") if latency else None
-                                    p90 = latency.get("90_0") if latency else None
-                                    p99 = latency.get("99_0") if latency else None
-                                    p100 = latency.get("100_0") if latency else None
+                            try:
+                                with open(test_file) as f:
+                                    data = json.load(f)
+                                    workload_params = data.get("workload-params", {})
                                     
-                                    if throughput and p50:
-                                        sweep_num = int(sweep_dir.name.split('-')[1])
-                                        all_data[engine][f'{scenario_type}_sweeps'].append({
-                                            'sweep': sweep_num,
-                                            'throughput': throughput,
-                                            'p50': p50,
-                                            'p90': p90,
-                                            'p99': p99,
-                                            'p100': p100,
-                                            'config': workload_params
-                                        })
+                                    # Check if results exist
+                                    if "results" not in data or "op_metrics" not in data.get("results", {}):
+                                        continue
+                                    
+                                    for op in data["results"]["op_metrics"]:
+                                        throughput = op.get("throughput", {}).get("mean")
+                                        latency = op.get("latency", {})
+                                        p50 = latency.get("50_0") if latency else None
+                                        p90 = latency.get("90_0") if latency else None
+                                        p99 = latency.get("99_0") if latency else None
+                                        p100 = latency.get("100_0") if latency else None
+                                        
+                                        if throughput and p50:
+                                            sweep_num = int(sweep_dir.name.split('-')[1])
+                                            all_data[engine][f'{scenario_type}_sweeps'].append({
+                                                'sweep': sweep_num,
+                                                'throughput': throughput,
+                                                'p50': p50,
+                                                'p90': p90,
+                                                'p99': p99,
+                                                'p100': p100,
+                                                'config': workload_params
+                                            })
+                            except (json.JSONDecodeError, KeyError, IndexError) as e:
+                                # Skip malformed or incomplete test files
+                                print(f"Warning: Skipping {test_file}: {e}")
+                                continue
                 
                 # Handle direct scenarios (no sweeps)
                 else:
                     test_file = scenario_dir / "test_run.json"
                     if test_file.exists():
-                        with open(test_file) as f:
-                            data = json.load(f)
-                            
-                            if scenario_type == 'bulk_ingest':
-                                metrics = data["results"]["op_metrics"][0]
-                                all_data[engine]['bulk_ingest'] = {
-                                    'throughput': metrics['throughput']['mean'],
-                                    'p50': metrics['latency']['50_0'],
-                                    'p99': metrics['latency']['99_0'],
-                                    'p100': metrics['latency']['100_0']
-                                }
-                            
-                            elif scenario_type == 'search':
-                                # Handle search scenarios without sweeps
-                                metrics = data["results"]["op_metrics"][0]
-                                throughput = metrics.get("throughput", {}).get("mean")
-                                latency = metrics.get("latency", {})
+                        try:
+                            with open(test_file) as f:
+                                data = json.load(f)
                                 
-                                if throughput and latency:
-                                    all_data[engine]['search'] = {
-                                        'throughput': throughput,
-                                        'p50': latency.get("50_0"),
-                                        'p99': latency.get("99_0"),
-                                        'p100': latency.get("100_0"),
-                                        'config': data.get("workload-params", {})
+                                # Check if results exist
+                                if "results" not in data or "op_metrics" not in data.get("results", {}):
+                                    continue
+                                
+                                if scenario_type == 'bulk_ingest':
+                                    metrics = data["results"]["op_metrics"][0]
+                                    all_data[engine]['bulk_ingest'] = {
+                                        'throughput': metrics['throughput']['mean'],
+                                        'p50': metrics['latency']['50_0'],
+                                        'p99': metrics['latency']['99_0'],
+                                        'p100': metrics['latency']['100_0']
                                     }
-                            
-                            elif scenario_type == 'force_merge':
-                                for op in data["results"]["op_metrics"]:
-                                    if "force-merge" in op.get("operation", "").lower():
-                                        all_data[engine]['force_merge'] = {
-                                            'service_time': op.get('service_time', 0)
+                                
+                                elif scenario_type == 'search':
+                                    # Handle search scenarios without sweeps
+                                    metrics = data["results"]["op_metrics"][0]
+                                    throughput = metrics.get("throughput", {}).get("mean")
+                                    latency = metrics.get("latency", {})
+                                    
+                                    if throughput and latency:
+                                        all_data[engine]['search'] = {
+                                            'throughput': throughput,
+                                            'p50': latency.get("50_0"),
+                                            'p90': latency.get("90_0"),
+                                            'p99': latency.get("99_0"),
+                                            'p100': latency.get("100_0"),
+                                            'config': data.get("workload-params", {})
                                         }
-                                        break
+                                
+                                elif scenario_type == 'force_merge':
+                                    for op in data["results"]["op_metrics"]:
+                                        if "force-merge" in op.get("operation", "").lower():
+                                            all_data[engine]['force_merge'] = {
+                                                'service_time': op.get('service_time', 0)
+                                            }
+                                            break
+                        except (json.JSONDecodeError, KeyError, IndexError) as e:
+                            # Skip malformed or incomplete test files
+                            print(f"Warning: Skipping {test_file}: {e}")
+                            continue
         
         return all_data
     
@@ -266,12 +285,14 @@ class DashboardGenerator:
         .section-title {{
             font-size: 28px;
             font-weight: 700;
-            background: linear-gradient(135deg, #1890ff 0%, #722ed1 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
             display: flex;
             align-items: center;
             gap: 12px;
+        }}
+        .section-title span {{
+            background: linear-gradient(135deg, #1890ff 0%, #722ed1 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }}
         .section-icon {{ font-size: 32px; }}
         .view-comparison {{
@@ -657,9 +678,9 @@ class DashboardGenerator:
             margin-bottom: 30px;
         }}
         .header h1 {{
-            font-size: 38px;
+            font-size: 42px;
             font-weight: 700;
-            background: linear-gradient(135deg, #1890ff 0%, #722ed1 100%);
+            background: linear-gradient(135deg, #1890ff 0%, #722ed1 50%, #eb2f96 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             margin-bottom: 12px;
@@ -733,14 +754,17 @@ class DashboardGenerator:
         }}
         
         .section-title {{
-            font-size: 24px;
+            font-size: 28px;
             font-weight: 700;
+            margin: 40px 0 20px 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }}
+        .section-title span {{
             background: linear-gradient(135deg, #1890ff 0%, #722ed1 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin: 40px 0 20px 0;
-            padding-left: 10px;
-            border-left: 4px solid #1890ff;
         }}
         
         .chart-container {{
@@ -825,7 +849,7 @@ class DashboardGenerator:
             <div class="subtitle">Cross-engine analysis of search throughput and latency</div>
         </div>
         
-        <div class="section-title">📊 Performance Summary</div>
+        <div class="section-title"><span>📊 Performance Summary</span></div>
         <div class="summary-cards">
 '''
         
@@ -865,7 +889,7 @@ class DashboardGenerator:
             <canvas id="latencyChart" style="max-height: 350px;"></canvas>
         </div>
         
-        <div class="section-title">🔬 Detailed Sweep Analysis</div>
+        <div class="section-title"><span>🔬 Detailed Sweep Analysis</span></div>
 '''
         
         # Add sweep tables for each engine
