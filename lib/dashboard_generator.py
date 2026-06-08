@@ -585,12 +585,12 @@ class DashboardGenerator:
                 <thead>
                     <tr>
                         <th>Engine</th>
-                        <th>Total Time</th>
-                        <th>Merge Time</th>
-                        <th>Merge Count</th>
-                        <th>Throttle Time</th>
-                        <th>Refresh Time</th>
-                        <th>Flush Time</th>
+                        <th title="The cumulative time spent actively indexing documents (or the overall duration of the test run)">Total Time ℹ️</th>
+                        <th title="The cumulative time spent combining smaller, immutable Lucene segments into larger ones. This frees up disk space and optimizes search speeds.">Merge Time ℹ️</th>
+                        <th title="The total number of segment merges executed by the cluster during your workload">Merge Count ℹ️</th>
+                        <th title="The cumulative time the cluster spent deliberately slowing down (throttling) indexing operations. This happens when background merges cannot keep up with your high ingestion rate, preventing disk I/O bottlenecks.">Throttle Time ℹ️</th>
+                        <th title="The cumulative time spent making recently indexed documents visible for search (by creating a new, searchable Lucene segment)">Refresh Time ℹ️</th>
+                        <th title="The cumulative time spent flushing the transaction log (translog) to disk and committing segments to the Lucene index. This is a heavier, less frequent, and more resource-intensive operation than a refresh.">Flush Time ℹ️</th>
                         <th>Details</th>
                     </tr>
                 </thead>

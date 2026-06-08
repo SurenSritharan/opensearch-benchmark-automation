@@ -7,8 +7,6 @@ datasets:
     space_type: "innerproduct"
     description: "Cohere 1M embeddings dataset with 768-dimensional vectors (official workload)"
     workload_name: "vectorsearch" # needs to match opensearch-benchmark-workloads folder
-    corpus_name: "cohere-1m"
-    # Parameter files for different engines
     param_files:
       faiss: "params/faiss-cohere-1m-768-dp.json"
       lucene: "params/lucene-cohere-1m-768-dp.json"
@@ -26,7 +24,6 @@ datasets:
     description: "MS MARCO passage ranking dataset with 1024-dimensional vectors (custom workload)"
     index_name: cohere-msmarco-1024
     workload_name: "msmarco" # needs to match opensearch-benchmark-workloads folder
-    custom_workload: "workloads/msmarco"
     data_dir: "/datasets/msmarco"
     # Default workload parameters - these will be passed to all test procedures
     # Keys must match the Jinja2 template variables in the workload

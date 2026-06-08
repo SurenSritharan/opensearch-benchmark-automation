@@ -2,9 +2,11 @@ import re
 import json
 import sys
 import subprocess
+import time
 from pathlib import Path
 from typing import Tuple, List, Optional, Any
 from lib.kubectl_helper import KubectlHelper
+from lib.telemetry_collector import TelemetryCollector
 
 
 class BenchmarkExecutor:
@@ -12,7 +14,7 @@ class BenchmarkExecutor:
     
     BENCHMARK_HOME = "/datasets/opensearch-benchmark"
 
-    def __init__(self, engine: str, namespace: str, results_dir: Path, config, dataset_name: Optional[str] = None, default_params: Optional[dict] = None):
+    def __init__(self, engine: str, namespace: str, results_dir: Path, config, dataset_name: Optional[str] = None, default_params: Optional[dict] = None, enable_telemetry: bool = True):
         self.engine = engine
         self.namespace = namespace
         self.results_dir = results_dir
@@ -25,6 +27,25 @@ class BenchmarkExecutor:
         # Extract cluster settings from config
         self.cluster_endpoint = config.cluster_endpoint
         self.client_options = config.client_options
+        
+        # Initialize telemetry collector with config settings
+        # Telemetry is now collected centrally at the run level (not per-scenario)
+        # This executor's telemetry collector is disabled; collection happens in the main runners
+        telemetry_config = config.cluster_config.get("telemetry", {})
+        
+        # Disable per-scenario telemetry collection in the executor
+        # Telemetry is collected once per run at the results root by the main runner
+        telemetry_enabled = False  # Always disabled; collected centrally
+        
+        self.telemetry_collector = TelemetryCollector(
+            namespace=namespace,
+            results_dir=results_dir,
+            cluster_endpoint=self.cluster_endpoint,
+            enabled=telemetry_enabled,
+            pre_run_log_lines=telemetry_config.get("pre_run_log_lines", 1000),
+            post_run_log_lines=telemetry_config.get("post_run_log_lines", 5000)
+        )
+        self.is_parallel_mode = config.is_parallel_mode
 
     def _exec_subprocess(self, container: str, cmd: list) -> str:
         """Runs a direct, non-blocking kubectl exec command via kubectl helper."""
@@ -205,14 +226,32 @@ class BenchmarkExecutor:
         
         return None
 
-    def run_osb_command(self, scenario_name: str, workload_name: str, workload_path: str, test_procedure: str, workload_params: Optional[str] = None, extra_params = None, extra_args: Optional[list] = None) -> Tuple[bool, str]:
+    def run_osb_command(self, scenario_name: str, workload_name: str, workload_path: str, test_procedure: str, workload_params: Optional[str] = None, extra_params = None, extra_args: Optional[list] = None, index_name: Optional[str] = None, enable_telemetry: bool = False) -> Tuple[bool, str]:
         """Runs the complete OpenSearch Benchmark workload wrapper process.
         
         Parameter merge order (later overrides earlier):
         1. workload_params (from JSON file in workload)
         2. self.default_params (from dataset.yaml default_params)
         3. extra_params (from parameter sweeps or CLI)
+        
+        Args:
+            scenario_name: Name of the scenario
+            workload_name: Name of the workload
+            workload_path: Path to the workload
+            test_procedure: Test procedure to run
+            workload_params: Workload parameters
+            extra_params: Extra parameters to merge
+            extra_args: Additional CLI arguments
+            index_name: Index name for telemetry collection
+            enable_telemetry: Whether to collect pre/post test telemetry
         """
+        # Collect pre-test telemetry if enabled
+        if enable_telemetry and index_name:
+            self.telemetry_collector.collect_pre_test_telemetry(scenario_name, index_name)
+        
+        # Record test start time
+        test_start_time = time.time()
+        
         # Clean remote logs before starting a fresh run path
         self.clear_remote_logs()
         
@@ -306,6 +345,9 @@ class BenchmarkExecutor:
             if process.returncode != 0:
                 raise subprocess.CalledProcessError(process.returncode, cmd, result_stdout)
             
+            # Calculate test duration
+            test_duration = time.time() - test_start_time
+            
             # Post-run telemetry gathering pipeline
             self.download_artifacts(result_stdout, scenario_name)
             
@@ -314,21 +356,53 @@ class BenchmarkExecutor:
             output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_text(result_stdout, encoding="utf-8")
             
+            # Collect post-test telemetry if enabled
+            if enable_telemetry and index_name:
+                self.telemetry_collector.collect_post_test_telemetry(
+                    scenario_name, index_name, test_duration
+                )
+            
             return True, result_stdout
             
         except subprocess.CalledProcessError as e:
+            # Calculate test duration even on failure
+            test_duration = time.time() - test_start_time
+            
             error_log = f"ERROR:\nReturn Code: {e.returncode}\n\nOUTPUT:\n{e.stdout if e.stdout else '(no output captured)'}"
             print(f"\n❌ BENCHMARK FAILED with return code {e.returncode}\n")
             err_file = self.results_dir / scenario_name / "crash_error.log"
             err_file.parent.mkdir(parents=True, exist_ok=True)
             err_file.write_text(error_log, encoding="utf-8")
+            
+            # Collect post-test telemetry even on failure (helps diagnose issues)
+            if enable_telemetry and index_name:
+                print("  📊 Collecting post-failure telemetry for diagnostics...")
+                self.telemetry_collector.collect_post_test_telemetry(
+                    scenario_name, index_name, test_duration
+                )
+            
             return False, error_log
         except Exception as e:
+            # Calculate test duration even on exception
+            test_duration = time.time() - test_start_time
+            
             error_log = f"UNEXPECTED ERROR:\n{str(e)}"
             print(f"\n❌ UNEXPECTED ERROR: {str(e)}\n")
             err_file = self.results_dir / scenario_name / "crash_error.log"
             err_file.parent.mkdir(parents=True, exist_ok=True)
             err_file.write_text(error_log, encoding="utf-8")
+            
+            # Collect post-test telemetry even on exception
+            if enable_telemetry and index_name:
+                print("  📊 Collecting post-failure telemetry for diagnostics...")
+                try:
+                    self.telemetry_collector.collect_post_test_telemetry(
+                        scenario_name, index_name, test_duration
+                    )
+                except Exception as telemetry_error:
+                    print(f"  ⚠️  Telemetry collection failed: {telemetry_error}")
+            
+            return False, error_log
 
     def collect_telemetry(self, index_name):
         """Collects comprehensive cluster telemetry and saves to cluster-telemetry-state directory.

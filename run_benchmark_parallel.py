@@ -13,6 +13,7 @@ from typing import List, Dict, Any
 import concurrent.futures
 from lib.config_manager import ConfigManager
 from lib.dashboard_generator import DashboardGenerator
+from lib.telemetry_collector import TelemetryCollector
 
 
 class ParallelBenchmarkRunner:
@@ -24,6 +25,93 @@ class ParallelBenchmarkRunner:
         self.logs_dir = self.results_root / "parallel-logs"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.start_time = datetime.now()
+        
+        # Initialize centralized telemetry collector for parallel mode
+        # This collects from ALL namespaces at the root results directory
+        telemetry_config = config.cluster_config.get("telemetry", {})
+        self.telemetry_enabled = telemetry_config.get("enabled", True)
+        
+        # Create a multi-namespace telemetry collector
+        # We'll collect from all target engine namespaces
+        self.namespaces = [f"os-{engine}" for engine in config.target_engines]
+        
+        if self.telemetry_enabled:
+            # Use first namespace for initialization, but we'll collect from all
+            self.telemetry_collector = TelemetryCollector(
+                namespace=self.namespaces[0],  # Primary namespace
+                results_dir=self.results_root,  # Root results directory
+                cluster_endpoint=config.cluster_endpoint,
+                enabled=True,
+                pre_run_log_lines=telemetry_config.get("pre_run_log_lines", 1000),
+                post_run_log_lines=telemetry_config.get("post_run_log_lines", 5000)
+            )
+        
+    def collect_centralized_telemetry_pre_run(self):
+        """
+        Collect telemetry from ALL namespaces before parallel execution starts.
+        This captures the initial state of all clusters in one place.
+        """
+        if not self.telemetry_enabled:
+            return
+        
+        print("📊 Collecting pre-run telemetry from all namespaces...")
+        
+        try:
+            # Collect from all namespaces
+            for namespace in self.namespaces:
+                print(f"   Collecting from {namespace}...")
+                # Temporarily switch namespace for collection
+                original_namespace = self.telemetry_collector.namespace
+                self.telemetry_collector.namespace = namespace
+                self.telemetry_collector.log_collector.namespace = namespace
+                
+                # Collect cluster state and logs for this namespace
+                self.telemetry_collector.collect_pre_test_telemetry(
+                    scenario_name=f"parallel-run-{namespace}",
+                    index_name="all-scenarios"
+                )
+                
+                # Restore original namespace
+                self.telemetry_collector.namespace = original_namespace
+                self.telemetry_collector.log_collector.namespace = original_namespace
+            
+            print("✅ Pre-run telemetry collection complete")
+        except Exception as e:
+            print(f"⚠️  Warning: Pre-run telemetry collection failed: {e}")
+    
+    def collect_centralized_telemetry_post_run(self, total_duration: float):
+        """
+        Collect telemetry from ALL namespaces after parallel execution completes.
+        This captures the final state and any errors from all clusters.
+        """
+        if not self.telemetry_enabled:
+            return
+        
+        print("\n📊 Collecting post-run telemetry from all namespaces...")
+        
+        try:
+            # Collect from all namespaces
+            for namespace in self.namespaces:
+                print(f"   Collecting from {namespace}...")
+                # Temporarily switch namespace for collection
+                original_namespace = self.telemetry_collector.namespace
+                self.telemetry_collector.namespace = namespace
+                self.telemetry_collector.log_collector.namespace = namespace
+                
+                # Collect cluster state and logs for this namespace
+                self.telemetry_collector.collect_post_test_telemetry(
+                    scenario_name=f"parallel-run-{namespace}",
+                    index_name="all-scenarios",
+                    test_duration_seconds=total_duration
+                )
+                
+                # Restore original namespace
+                self.telemetry_collector.namespace = original_namespace
+                self.telemetry_collector.log_collector.namespace = original_namespace
+            
+            print("✅ Post-run telemetry collection complete")
+        except Exception as e:
+            print(f"⚠️  Warning: Post-run telemetry collection failed: {e}")
         
     def run_engine_benchmark(self, engine: str) -> Dict[str, Any]:
         """
@@ -138,10 +226,15 @@ class ParallelBenchmarkRunner:
         print(f"Scenarios: {', '.join(self.config.target_scenarios)}")
         print(f"Results: {self.results_root}")
         print(f"Logs: {self.logs_dir}")
+        if self.telemetry_enabled:
+            print(f"Telemetry: Enabled (centralized at root)")
         print("=" * 80)
         print()
         print("💡 Tip: Use './view_logs.py' to monitor progress in real-time")
         print()
+        
+        # Collect pre-run telemetry from all namespaces
+        self.collect_centralized_telemetry_pre_run()
         
         # Create status file for monitoring
         status_file = self.logs_dir / "status.txt"
@@ -184,6 +277,9 @@ class ParallelBenchmarkRunner:
             f.write(f"Completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write(f"Total Duration: {total_duration:.2f}s\n")
             f.write(f"Status: COMPLETED\n")
+        
+        # Collect post-run telemetry from all namespaces
+        self.collect_centralized_telemetry_post_run(total_duration)
         
         return results
     

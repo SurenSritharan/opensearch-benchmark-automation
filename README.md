@@ -5,13 +5,15 @@ A modular benchmark automation framework for testing OpenSearch vector search pe
 ## 🚀 Features
 
 - **Multi-Engine Support**: Test FAISS, Lucene, and JVector engines in a single run
-- **Comprehensive Scenarios**: 
+- **Parallel Execution**: Run all engines simultaneously with background logging (NEW!)
+- **Comprehensive Scenarios**:
   - Index creation and validation
   - Bulk vector ingestion
   - Force merge operations
   - Search concurrency testing with multiple client configurations
 - **Organized Results**: All benchmark results stored in timestamped directories under `results/`
 - **Enhanced Output**: Clear visual separators and progress indicators for each scenario
+- **Real-time Monitoring**: Dedicated log viewer for monitoring parallel execution
 - **Profiling Support**: Automatic CPU flame graph generation using async-profiler
 - **Telemetry Collection**: Comprehensive cluster health, stats, and performance metrics
 - **Kubernetes Integration**: Designed to work with OpenSearch clusters deployed on GKE
@@ -28,47 +30,43 @@ A modular benchmark automation framework for testing OpenSearch vector search pe
 
 ```
 opensearch-benchmark-automation/
-├── run_benchmark.py              # Main Python benchmark orchestrator
-├── run-benchmark.sh              # Shell wrapper script
+├── run_benchmark.py              # Main Python benchmark orchestrator (sequential)
+├── run_benchmark_parallel.py     # Parallel execution wrapper
+├── view_logs.py                  # Real-time log viewer
+├── run-benchmark.sh              # Shell wrapper script (sequential)
+├── run-benchmark-parallel.sh     # Shell wrapper script (parallel)
+├── setup-venv.sh                 # Virtual environment setup
 ├── requirements.txt              # Python dependencies
 ├── lib/
 │   ├── benchmark_executor.py    # Benchmark execution and OSB command management
 │   ├── config_manager.py        # Configuration and argument parsing
 │   ├── dataset_manager.py       # Dataset and workload management
-│   └── profiling_manager.py     # Profiling orchestration
+│   ├── profiling_manager.py     # Profiling orchestration
+│   ├── metrics_collector.py     # GKE metrics collection
+│   ├── telemetry_collector.py   # Cluster telemetry collection
+│   ├── server_log_collector.py  # OpenSearch log collection
+│   ├── dashboard_generator.py   # Dashboard generation
+│   └── kubectl_helper.py        # Kubernetes helper utilities
 ├── config/
 │   ├── datasets.yaml            # Dataset configurations
 │   └── cluster.yaml             # Cluster connection settings
-├── workloads/
-│   ├── vectorsearch/            # Official vectorsearch workload extensions
-│   │   ├── indices/             # Custom index templates
-│   │   │   ├── jvector-index.json
-│   │   │   ├── faiss-index.json
-│   │   │   └── lucene-index.json
-│   │   ├── test_procedures/     # Custom test procedures
-│   │   │   └── search-only-no-warmup.json
-│   │   └── params/              # Workload parameters
-│   │       ├── jvector-cohere-1m-768-dp.json
-│   │       ├── faiss-cohere-1m-768-dp.json
-│   │       └── lucene-cohere-1m-768-dp.json
-│   └── msmarco/                 # Custom workload definition
-│       ├── workload.json
-│       ├── workload.py
-│       ├── indices/             # Custom index templates
-│       │   ├── jvector-index.json
-│       │   ├── faiss-index.json
-│       │   └── lucene-index.json
-│       ├── params/              # Workload parameters
-│       └── test_procedures/     # Test procedure definitions
 ├── gke-manifest/
-│   ├── deploy-jvector-cluster.sh
 │   ├── deploy-separated-cluster.sh
-│   ├── opensearch-cluster-faiss.yaml
-│   ├── opensearch-cluster-lucene.yaml
-│   ├── opensearch-jvector-statefulset.yaml
-│   └── opensearch-benchmark-client.yaml
+│   ├── deploy-namespace-cluster.sh
+│   ├── deploy-all-clusters.sh
+│   ├── opensearch-jvector-cluster-manager.yaml
+│   ├── opensearch-jvector-data-nodes.yaml
+│   ├── opensearch-standard-cluster-manager.yaml
+│   ├── opensearch-standard-data-nodes.yaml
+│   ├── opensearch-benchmark-client.yaml
+│   ├── README-SEPARATED-CLUSTER.md
+│   └── README-NAMESPACE-DEPLOYMENT.md
 ├── scripts/
-│   └── check-index-stats.sh    # Utility scripts
+│   ├── check-index-stats.sh
+│   ├── check-shard-info.sh
+│   ├── check-async-profiler.sh
+│   ├── collect-gke-metrics.sh
+│   └── test-index-creation.sh
 └── results/                     # Benchmark results (gitignored)
 ```
 
@@ -77,30 +75,88 @@ opensearch-benchmark-automation/
 - **`lib/`**: Core Python modules for benchmark orchestration
   - `benchmark_executor.py`: Manages OSB command execution and result collection
   - `config_manager.py`: Handles configuration loading and CLI argument parsing
-  - `dataset_manager.py`: Manages datasets, workloads, and template injection
+  - `dataset_manager.py`: Manages datasets and workload configurations
   - `profiling_manager.py`: Orchestrates profiling during benchmark runs
+  - `metrics_collector.py`: Collects GKE metrics during benchmarks
+  - `telemetry_collector.py`: Collects cluster health and performance telemetry
+  - `server_log_collector.py`: Captures OpenSearch server logs
+  - `dashboard_generator.py`: Generates interactive dashboards
+  - `kubectl_helper.py`: Kubernetes operations helper
 - **`config/`**: Configuration files
-  - `datasets.yaml`: Dataset definitions (official and custom workloads)
+  - `datasets.yaml`: Dataset definitions and test procedures
   - `cluster.yaml`: Cluster connection settings
-- **`workloads/`**: Workload definitions, parameters, and custom index templates
-  - `{workload_name}/indices/`: Engine-specific index templates (jvector, faiss, lucene)
-  - `{workload_name}/params/`: Workload parameter files
-  - `{workload_name}/test_procedures/`: Custom test procedure definitions
-  - For official workloads: Contains extensions (indices, params) to pre-installed workloads
-  - For custom workloads: Contains complete workload definition (workload.json, workload.py, etc.)
 - **`gke-manifest/`**: Kubernetes deployment manifests for OpenSearch clusters
+  - Deployment scripts for separated and multi-namespace architectures
+  - StatefulSet manifests for cluster managers and data nodes
+  - Benchmark client pod configuration
+- **`scripts/`**: Utility scripts for cluster management and diagnostics
 - **`results/`**: Timestamped benchmark results and telemetry (gitignored)
+
+**Note**: Workload definitions are stored in the [opensearch-benchmark-workloads](https://github.com/SurenSritharan/opensearch-benchmark-workloads) repository, which is automatically cloned to `/datasets/opensearch-benchmark-workloads/` on the benchmark client pod.
 
 ## 🎯 Usage
 
-### Basic Usage
+### Installation
 
-Run benchmarks for all engines:
+First, install Python dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+### Quick Start
+
+**Option 1: Parallel Execution (Recommended for multiple engines)**
+
+Run all engines simultaneously with background logging:
+```bash
+# Run all engines in parallel
+./run-benchmark-parallel.sh
+
+# Monitor progress in another terminal
+./view_logs.py --follow-all
+```
+
+**Option 2: Sequential Execution (Original)**
+
+Run benchmarks sequentially with live stdout:
 ```bash
 ./run-benchmark.sh
 ```
 
-### Command-Line Options
+### Parallel Execution (NEW!)
+
+For detailed parallel execution guide, see [PARALLEL_EXECUTION_GUIDE.md](PARALLEL_EXECUTION_GUIDE.md)
+
+**Run benchmarks in parallel:**
+```bash
+# All engines with all scenarios
+./run-benchmark-parallel.sh --engine all --scenario all
+
+# Specific engines only
+./run-benchmark-parallel.sh --engine jvector,faiss --scenario search
+
+# With custom settings
+./run-benchmark-parallel.sh --dataset msmarco --clients 50,100 --disable-profiling
+```
+
+**Monitor progress:**
+```bash
+# Show status
+./view_logs.py
+
+# Follow specific engine
+./view_logs.py --tail faiss --follow
+
+# Follow all engines
+./view_logs.py --follow-all
+
+# Check for errors
+./view_logs.py --errors
+```
+
+### Sequential Execution (Original)
+
+**Command-Line Options:**
 
 ```bash
 ./run-benchmark.sh [OPTIONS]
@@ -227,193 +283,108 @@ Open the HTML files in any web browser to analyze CPU hotspots and call stacks.
 Datasets are configured in `config/datasets.yaml`.
 
 **Available Datasets:**
-- **cohere-1m**: 768-dimensional vectors (default) - Uses OpenSearch Benchmark's official vectorsearch workload with custom index templates
-- **msmarco**: 1024-dimensional vectors - Custom workload with automatic data download
+- **cohere-1m**: 768-dimensional vectors - Cohere embeddings dataset
+- **msmarco**: 1024-dimensional vectors (default) - MS MARCO passage ranking dataset with automatic data download
 
-#### Dataset Types
+All datasets use workloads from the [opensearch-benchmark-workloads](https://github.com/SurenSritharan/opensearch-benchmark-workloads) repository, which is automatically cloned to `/datasets/opensearch-benchmark-workloads/` on the benchmark client pod.
 
-The framework supports two types of datasets:
+#### Adding a New Dataset
 
-1. **Official Workloads** (`is_official: true`)
-   - Uses pre-installed workloads from `/root/opensearch-benchmark-workloads/`
-   - Supports custom index templates for engine-specific configurations (e.g., jvector)
-   - Example: cohere-1m dataset
-
-2. **Custom Workloads** (`is_official: false`)
-   - Uses custom workload definitions from `workloads/` directory
-   - Supports automatic data file downloads
-   - Example: msmarco dataset
-
-#### Adding an Official Workload Dataset
-
-For datasets using OpenSearch Benchmark's official workloads:
+To add a new dataset, configure it in `config/datasets.yaml`:
 
 ```yaml
 datasets:
   your-dataset:
     dimension: 768
-    format: hdf5
-    space_type: "innerproduct"
+    format: hdf5  # or fvec, etc.
+    space_type: "innerproduct"  # or "cosinesimil", "l2", etc.
     description: "Your dataset description"
-    workload_name: "vectorsearch"  # Official workload name
-    is_official: true
-    corpus_name: "your-corpus"     # Corpus name in the workload
+    workload_name: "vectorsearch"  # Must match folder name in opensearch-benchmark-workloads
+    index_name: "your-index-name"  # Optional: custom index name
+    data_dir: "/datasets/your-dataset"  # Where data files are stored
+    data_files:  # Optional: files to download
+      - name: "vectors.hdf5"
+        url: "https://example.com/vectors.hdf5"
+        size: "~1GB"
     param_files:
       faiss: "params/faiss-your-dataset.json"
       lucene: "params/lucene-your-dataset.json"
       jvector: "params/jvector-your-dataset.json"
-    test_procedures:  # Optional - override defaults
-      index: "no-train-test-index-only"
-      bulk: "no-train-test"
-      search: "search-only"
-```
-
-**Custom Index Templates for Official Workloads:**
-
-To use custom index templates with official workloads (e.g., to add jvector support):
-
-1. Create indices directory: `workloads/{workload_name}/indices/`
-2. Add engine-specific templates: `jvector-index.json`, `faiss-index.json`, `lucene-index.json`
-3. Templates are automatically injected into the official workload at runtime
-
-**Custom Test Procedures for Official Workloads:**
-
-To customize test procedures (e.g., skip warmup tasks, modify schedules):
-
-1. Create test_procedures directory: `workloads/{workload_name}/test_procedures/`
-2. Add custom procedure files: `your-custom-procedure.json`
-3. Reference in `config/datasets.yaml` under `test_procedures`
-4. Procedures are automatically injected into the official workload at runtime
-
-Example structure:
-```
-workloads/
-└── vectorsearch/
-    ├── indices/
-    │   ├── jvector-index.json
-    │   ├── faiss-index.json
-    │   └── lucene-index.json
-    ├── test_procedures/
-    │   └── search-only-no-warmup.json
-    └── params/
-        ├── jvector-cohere-1m-768-dp.json
-        ├── faiss-cohere-1m-768-dp.json
-        └── lucene-cohere-1m-768-dp.json
-```
-
-**Custom Test Procedure Format:**
-
-Test procedures must follow OpenSearch Benchmark's schema:
-
-```json
-{
-    "name": "your-procedure-name",
-    "default": false,
-    "description": "Description of what this procedure does",
-    "schedule": [
-        {
-            "name": "task-name",
-            "operation": {
-                "name": "operation-name",
-                "operation-type": "vector-search",
-                // ... operation parameters
-            },
-            "clients": 1
-        }
-    ]
-}
-```
-
-**Example: Skip Warmup Task**
-
-The `search-only-no-warmup.json` procedure demonstrates skipping the warmup-indices task:
-
-```yaml
-# In config/datasets.yaml
-test_procedures:
-  search: "search-only-no-warmup"  # Uses custom procedure
-```
-
-This allows you to go directly to search queries without warming up the index first.
-
-The framework will:
-- Use the official workload from `/root/opensearch-benchmark-workloads/vectorsearch/`
-- Inject custom templates from `workloads/vectorsearch/indices/` into the official workload's `indices/` directory
-- Inject custom test procedures from `workloads/vectorsearch/test_procedures/` into the official workload's `test_procedures/` directory
-- Run benchmarks with `--workload-path=/root/opensearch-benchmark-workloads/vectorsearch`
-
-#### Adding a Custom Workload Dataset
-
-For datasets requiring custom workloads and data files:
-
-1. Create workload directory: `workloads/your-dataset/`
-2. Add workload files: `workload.json`, `workload.py`, test procedures
-3. Configure in `config/datasets.yaml`:
-
-```yaml
-datasets:
-  your-dataset:
-    dimension: 1024
-    format: fvec
-    space_type: "cosinesimil"
-    description: "Your custom dataset"
-    workload_name: "your-dataset"
-    is_official: false
-    custom_workload: "workloads/your-dataset"
-    data_dir: "/datasets/your-dataset"
-    data_files:
-      - name: "vectors.fvec"
-        url: "https://example.com/vectors.fvec"
-        range: "0-4100000000"  # Optional: byte range for partial download
-        size: "~4GB"           # Optional: human-readable size
-      - name: "distances.fvec"
-        url: "https://example.com/distances.fvec"
-    param_files:
-      jvector: "params/jvector-params.json"
-      faiss: "params/faiss-params.json"
-      lucene: "params/lucene-params.json"
     test_procedures:
-      index: "index-only"
-      bulk: "bulk-ingest"
-      search: "search-only"
+      - name: "create-index-only"
+      - name: "bulk-ingest-only"
+      - name: "search-only"
+        parameter_sweeps:  # Optional: parameter variations
+          - params:
+              query_clients: 50
+              query_count: 25000
 ```
 
-**How Custom Workloads Work:**
-1. Framework detects custom workload configuration (`is_official: false`)
-2. Downloads data files to benchmark client pod (if not already present)
-3. Copies workload directory to `/root/custom-workloads/{workload_name}/` on pod
-4. Runs benchmark using `--workload-path=/root/custom-workloads/{workload_name}`
+**Key Configuration Fields:**
+- `workload_name`: Must match a workload directory in the opensearch-benchmark-workloads repository
+- `data_files`: Optional list of files to download before running benchmarks
+- `param_files`: Engine-specific parameter files in the workload's `params/` directory
+- `test_procedures`: List of test procedures to run, with optional parameter sweeps
+- `default_params`: Default parameters passed to all test procedures (can be overridden by parameter sweeps)
 
 **Example: MS MARCO Dataset**
-The msmarco dataset demonstrates custom workload usage:
-- Automatically downloads 3 data files (~4.1GB total)
-- Uses custom workload in `workloads/msmarco/`
-- Data stored in `/datasets/msmarco/` on benchmark client pod
-- Custom index templates in `config/index_templates/msmarco/`
+The msmarco dataset demonstrates the configuration:
+- Automatically downloads 3 data files (~4.1GB total) to `/datasets/msmarco/`
+- Uses the `msmarco` workload from opensearch-benchmark-workloads
+- Defines parameter sweeps for search tests with different client counts
+- Stores engine-specific parameters in `workloads/msmarco/params/`
 
 ### Engine-Specific Parameters
 
-Workload parameters are defined in `lib/workload-params.sh`:
+Workload parameters are defined in the parameter files under `workloads/{workload_name}/params/`:
 - Index settings (shards, replicas)
 - Vector dimensions (automatically set based on selected dataset)
 - Engine-specific configurations (ef_construction, m, etc.)
 - Search parameters
 
+Each engine has its own parameter file (e.g., `faiss-cohere-1m-768-dp.json`, `jvector-cohere-1m-768-dp.json`)
+
 ## 🚢 Deployment
 
 ### GKE Deployment
 
-Use the provided manifest files to deploy OpenSearch clusters:
+The project supports two deployment architectures:
+
+#### 1. Separated Cluster Architecture (Recommended)
+Deploy a single cluster with separated cluster manager and data nodes:
 
 ```bash
-# Deploy JVector cluster
-./gke-manifest/deploy-jvector-cluster.sh
+# Deploy to a specific namespace (os-jvector, os-faiss, or os-lucene)
+./gke-manifest/deploy-separated-cluster.sh
 
-# Or apply manifests directly
-kubectl apply -f gke-manifest/opensearch-cluster-faiss.yaml
-kubectl apply -f gke-manifest/opensearch-cluster-lucene.yaml
-kubectl apply -f gke-manifest/opensearch-jvector-statefulset.yaml
+# This deploys:
+# - 1 dedicated cluster manager node
+# - 3 data + ingest nodes
 ```
+
+See [README-SEPARATED-CLUSTER.md](gke-manifest/README-SEPARATED-CLUSTER.md) for details.
+
+#### 2. Multi-Namespace Deployment
+Deploy separate clusters for each engine across three namespaces:
+
+```bash
+# Deploy to specific namespace
+./gke-manifest/deploy-namespace-cluster.sh os-jvector
+./gke-manifest/deploy-namespace-cluster.sh os-faiss
+./gke-manifest/deploy-namespace-cluster.sh os-lucene
+
+# Or deploy all at once
+./gke-manifest/deploy-all-clusters.sh
+```
+
+See [README-NAMESPACE-DEPLOYMENT.md](gke-manifest/README-NAMESPACE-DEPLOYMENT.md) for details.
+
+#### Available Manifests
+- `opensearch-jvector-cluster-manager.yaml` - JVector cluster manager
+- `opensearch-jvector-data-nodes.yaml` - JVector data nodes
+- `opensearch-standard-cluster-manager.yaml` - Standard cluster manager (FAISS/Lucene)
+- `opensearch-standard-data-nodes.yaml` - Standard data nodes (FAISS/Lucene)
+- `opensearch-benchmark-client.yaml` - Benchmark client pod
 
 ## 📝 Output Format
 

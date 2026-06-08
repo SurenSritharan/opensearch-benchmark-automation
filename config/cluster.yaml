@@ -33,4 +33,13 @@ metrics:
   interval_seconds: 10  # Seconds between metric samples (default: 10)
   generate_graphs: true  # Automatically generate graphs after collection (default: true)
 
+# Telemetry collection configuration
+# Comprehensive diagnostics including cluster state, server logs, and GKE metrics
+telemetry:
+  enabled: true  # Set to false to disable telemetry collection globally
+  collect_per_scenario: false  # If true, collect telemetry before/after each scenario; if false, only per run
+  pre_run_log_lines: 1000  # Number of log lines to collect before run (default: 1000)
+  post_run_log_lines: 5000  # Number of log lines to collect after run (default: 5000)
+  collect_on_failure: true  # Always collect post-run telemetry even on failures (default: true)
+
 # Made with Bob

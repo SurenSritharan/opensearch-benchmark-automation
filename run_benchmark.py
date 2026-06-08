@@ -6,12 +6,14 @@ import concurrent.futures
 import subprocess
 from typing import Callable, Any, Optional
 from pathlib import Path
+from datetime import datetime
 from lib.config_manager import ConfigManager
 from lib.dataset_manager import DatasetManager
 from lib.benchmark_executor import BenchmarkExecutor
 from lib.profiling_manager import ProfilingManager
 from lib.metrics_collector import MetricsCollector
 from lib.server_log_collector import ServerLogCollector
+from lib.telemetry_collector import TelemetryCollector
 
 def print_header(dataset_name: str):
     """Prints the primary execution header banner at framework startup."""
@@ -225,6 +227,51 @@ def main():
     profiler = ProfilingManager(config)
 
     print_header(dataset.dataset_name)
+    
+    # Initialize centralized telemetry collector for sequential mode
+    # Collects from all target engine namespaces at the root results directory
+    telemetry_config = config.cluster_config.get("telemetry", {})
+    telemetry_enabled = telemetry_config.get("enabled", True)
+    
+    # Get all target namespaces
+    target_namespaces = [f"os-{engine}" for engine in config.target_engines]
+    
+    # Initialize variables for telemetry
+    telemetry_collector = None
+    run_start_time = datetime.now()
+    
+    # Create telemetry collector at results root
+    if telemetry_enabled:
+        telemetry_collector = TelemetryCollector(
+            namespace=target_namespaces[0],  # Primary namespace
+            results_dir=config.results_root,  # Root results directory
+            cluster_endpoint=config.cluster_endpoint,
+            enabled=True,
+            pre_run_log_lines=telemetry_config.get("pre_run_log_lines", 1000),
+            post_run_log_lines=telemetry_config.get("post_run_log_lines", 5000)
+        )
+        
+        # Collect pre-run telemetry from all namespaces
+        print("\n📊 Collecting pre-run telemetry from all namespaces...")
+        
+        for namespace in target_namespaces:
+            print(f"   Collecting from {namespace}...")
+            # Temporarily switch namespace for collection
+            original_namespace = telemetry_collector.namespace
+            telemetry_collector.namespace = namespace
+            telemetry_collector.log_collector.namespace = namespace
+            
+            # Collect cluster state and logs for this namespace
+            telemetry_collector.collect_pre_test_telemetry(
+                scenario_name=f"sequential-run-{namespace}",
+                index_name="all-scenarios"
+            )
+            
+            # Restore original namespace
+            telemetry_collector.namespace = original_namespace
+            telemetry_collector.log_collector.namespace = original_namespace
+        
+        print("✅ Pre-run telemetry collection complete\n")
 
     # Sweep sequentially across target engine nodes (e.g., jvector, faiss, lucene)
     for engine in config.target_engines:
@@ -412,22 +459,31 @@ def main():
             
             
 
-        # Collect cluster telemetry after all scenarios complete for this engine
-        print(f"\n{'='*66}")
-        print(f"📊 Collecting Cluster Telemetry ... ")
-        print(f"{'='*66}")
-        executor.collect_telemetry(index_name=index_name)
+    # Collect post-run telemetry from all namespaces (centralized at root)
+    if telemetry_enabled and telemetry_collector:
+        print("\n📊 Collecting post-run telemetry from all namespaces...")
+        run_end_time = datetime.now()
+        total_duration = (run_end_time - run_start_time).total_seconds()
         
-        # Collect server logs from OpenSearch pods on server-pool
-        try:
-            print(f"\n{'='*66}")
-            print(f"📋 Collecting Server Logs from {ns} ... ")
-            print(f"{'='*66}")
-            log_collector = ServerLogCollector(namespace=ns, results_dir=config.results_root)
-            log_collector.collect_logs()
-        except Exception as e:
-            print(f"⚠️  Warning: Failed to collect server logs: {e}")
-            print(f"   Continuing with benchmark completion...")
+        for namespace in target_namespaces:
+            print(f"   Collecting from {namespace}...")
+            # Temporarily switch namespace for collection
+            original_namespace = telemetry_collector.namespace
+            telemetry_collector.namespace = namespace
+            telemetry_collector.log_collector.namespace = namespace
+            
+            # Collect cluster state and logs for this namespace
+            telemetry_collector.collect_post_test_telemetry(
+                scenario_name=f"sequential-run-{namespace}",
+                index_name="all-scenarios",
+                test_duration_seconds=total_duration
+            )
+            
+            # Restore original namespace
+            telemetry_collector.namespace = original_namespace
+            telemetry_collector.log_collector.namespace = original_namespace
+        
+        print("✅ Post-run telemetry collection complete")
 
     print(
         f"\n✅ Matrix Finished. Output stored in: {config.results_root}"

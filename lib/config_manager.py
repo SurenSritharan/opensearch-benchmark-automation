@@ -207,6 +207,15 @@ class ConfigManager:
         print(f"  Search Tests:     {'✅ YES' if 'search' in self.target_scenarios else '❌ NO'}")
         print(f"  Profiling:        {'✅ ENABLED' if self.profiling_enabled else '❌ DISABLED'}")
         print(f"  Metrics:          {'✅ ENABLED' if self.metrics_enabled else '❌ DISABLED'}")
+        
+        # Show telemetry status with parallel mode indicator
+        telemetry_mode = 'per-scenario' if self.telemetry_per_scenario else 'per-run'
+        if self.is_parallel_mode:
+            telemetry_mode += ', per-engine'
+        print(f"  Telemetry:        {'✅ ENABLED' if self.telemetry_enabled else '❌ DISABLED'} ({telemetry_mode})")
+        
+        if self.is_parallel_mode:
+            print(f"  Execution Mode:   🔀 PARALLEL")
         print("==========================================")
         
         # Build and display the equivalent command line
@@ -315,3 +324,48 @@ class ConfigManager:
     def pod_label_selector(self) -> str:
         """Returns the pod label selector for discovering OpenSearch pods."""
         return self.cluster_config.get("pod_label_selector", "app=opensearch-cluster")
+    
+    @property
+    def telemetry_enabled(self) -> bool:
+        """
+        Returns whether telemetry collection is enabled.
+        Reads from cluster.yaml telemetry.enabled setting.
+        """
+        telemetry_config = self.cluster_config.get("telemetry", {})
+        return telemetry_config.get("enabled", True)  # Default to enabled
+    
+    @property
+    def telemetry_per_scenario(self) -> bool:
+        """
+        Returns whether to collect telemetry per scenario or per run.
+        If True, collects before/after each scenario.
+        If False, collects once at start and end of entire run.
+        """
+        telemetry_config = self.cluster_config.get("telemetry", {})
+        return telemetry_config.get("collect_per_scenario", False)  # Default to per-run
+    
+    @property
+    def telemetry_pre_run_log_lines(self) -> int:
+        """Returns number of log lines to collect before run."""
+        telemetry_config = self.cluster_config.get("telemetry", {})
+        return telemetry_config.get("pre_run_log_lines", 1000)
+    
+    @property
+    def telemetry_post_run_log_lines(self) -> int:
+        """Returns number of log lines to collect after run."""
+        telemetry_config = self.cluster_config.get("telemetry", {})
+        return telemetry_config.get("post_run_log_lines", 5000)
+    
+    @property
+    def telemetry_collect_on_failure(self) -> bool:
+        """Returns whether to collect telemetry even on benchmark failures."""
+        telemetry_config = self.cluster_config.get("telemetry", {})
+        return telemetry_config.get("collect_on_failure", True)  # Default to enabled
+    
+    @property
+    def is_parallel_mode(self) -> bool:
+        """
+        Returns whether this is running in parallel mode.
+        Parallel mode is detected by the presence of --results-dir argument.
+        """
+        return self.args.results_dir is not None
