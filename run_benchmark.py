@@ -11,6 +11,7 @@ from lib.dataset_manager import DatasetManager
 from lib.benchmark_executor import BenchmarkExecutor
 from lib.profiling_manager import ProfilingManager
 from lib.metrics_collector import MetricsCollector
+from lib.server_log_collector import ServerLogCollector
 
 def print_header(dataset_name: str):
     """Prints the primary execution header banner at framework startup."""
@@ -416,6 +417,17 @@ def main():
         print(f"📊 Collecting Cluster Telemetry ... ")
         print(f"{'='*66}")
         executor.collect_telemetry(index_name=index_name)
+        
+        # Collect server logs from OpenSearch pods on server-pool
+        try:
+            print(f"\n{'='*66}")
+            print(f"📋 Collecting Server Logs from {ns} ... ")
+            print(f"{'='*66}")
+            log_collector = ServerLogCollector(namespace=ns, results_dir=config.results_root)
+            log_collector.collect_logs()
+        except Exception as e:
+            print(f"⚠️  Warning: Failed to collect server logs: {e}")
+            print(f"   Continuing with benchmark completion...")
 
     print(
         f"\n✅ Matrix Finished. Output stored in: {config.results_root}"

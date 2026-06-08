@@ -78,6 +78,6 @@ datasets:
     
 
 # Default dataset to use if none specified
-default: cohere-1m
+default: msmarco
 
 # Made with Bob

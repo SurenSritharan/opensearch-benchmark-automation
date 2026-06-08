@@ -8,6 +8,6 @@
 source venv/bin/activate
 
 # Hand off all arguments to the parallel execution script with --yes flag
-python3 run_benchmark_parallel.py --yes "$@"
+python3 run_benchmark_parallel.py "$@"
 
 # Made with Bob
