@@ -65,21 +65,9 @@ Options:
 
 ## 🔧 Configuration
 
-### Global Configuration
-
 Edit `config/cluster.yaml` to modify default behavior:
 
-### Profiling Features
-
-**Profiling Artifacts Generated:**
-- `cpu_flame_graph_*.html` - Interactive CPU flame graphs (async-profiler)
-- `disk_io_*.log` - Disk I/O statistics before/after
-- `jvm_memory_*.log` - JVM heap and native memory snapshots
-
-**Viewing Flame Graphs:**
-Open the HTML files in any web browser to analyze CPU hotspots and call stacks.
-
-### Dataset Configuration
+## Dataset Configuration
 
 Datasets are configured in `config/datasets.yaml`.
 
@@ -87,31 +75,6 @@ Datasets are configured in `config/datasets.yaml`.
 - **cohere-1m**: 768-dimensional vectors (default) - Uses OpenSearch Benchmark's official vectorsearch workload with custom index templates
 - **msmarco**: 1024-dimensional vectors - Custom workload with automatic data download
 
-#### Dataset Types
-
-#### Adding a Workload Dataset
-
-For datasets using OpenSearch Benchmark's official workloads:
-
-```yaml
-datasets:
-  your-dataset:
-    dimension: 768
-    format: hdf5
-    space_type: "innerproduct"
-    description: "Your dataset description"
-    workload_name: "vectorsearch"  # Official workload name
-    is_official: true
-    corpus_name: "your-corpus"     # Corpus name in the workload
-    param_files:
-      faiss: "params/faiss-your-dataset.json"
-      lucene: "params/lucene-your-dataset.json"
-      jvector: "params/jvector-your-dataset.json"
-    test_procedures:  # Optional - override defaults
-      index: "no-train-test-index-only"
-      bulk: "no-train-test"
-      search: "search-only"
-```
 
 ## 🚢 Deployment
 
