@@ -873,10 +873,10 @@ class MetricsCollector:
             # Find search operation metrics (usually the first one)
             search_metrics = op_metrics[0] if op_metrics else {}
             
-            throughput = search_metrics.get('throughput', {})
-            latency = search_metrics.get('latency', {})
-            service_time = search_metrics.get('service_time', {})
-            client_processing = search_metrics.get('client_processing_time', {})
+            throughput = search_metrics.get('throughput') or {}
+            latency = search_metrics.get('latency') or {}
+            service_time = search_metrics.get('service_time') or {}
+            client_processing = search_metrics.get('client_processing_time') or {}
             
             # Search Performance
             html_content += f"""
@@ -884,15 +884,15 @@ class MetricsCollector:
                         <h4>⚡ Search Performance</h4>
                         <div class="summary-row">
                             <span class="label">Mean Throughput:</span>
-                            <span class="value">{throughput.get('mean', 0):.2f} ops/s</span>
+                            <span class="value">{throughput.get('mean', 0) or 0:.2f} ops/s</span>
                         </div>
                         <div class="summary-row">
                             <span class="label">Min Throughput:</span>
-                            <span class="value">{throughput.get('min', 0):.2f} ops/s</span>
+                            <span class="value">{throughput.get('min', 0) or 0:.2f} ops/s</span>
                         </div>
                         <div class="summary-row">
                             <span class="label">Max Throughput:</span>
-                            <span class="value">{throughput.get('max', 0):.2f} ops/s</span>
+                            <span class="value">{throughput.get('max', 0) or 0:.2f} ops/s</span>
                         </div>
                         <div class="summary-row">
                             <span class="label">Error Rate:</span>

@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import List, Dict, Any
 import concurrent.futures
 from lib.config_manager import ConfigManager
+from lib.dashboard_generator import DashboardGenerator
 
 
 class ParallelBenchmarkRunner:
@@ -38,12 +39,14 @@ class ParallelBenchmarkRunner:
         error_file = (self.logs_dir / f"{engine}.error.log").resolve()
         
         # Build command to run benchmark for single engine
+        # Pass the shared results directory to ensure all results go to the same folder
         cmd = [
             sys.executable,  # Use same Python interpreter
             "run_benchmark.py",
             "--engine", engine,
             "--dataset", self.config.args.dataset or "cohere-1m",
             "--quiet",  # Skip confirmation prompt for parallel execution
+            "--results-dir", str(self.results_root),  # Share results directory across all engines
         ]
         
         # Add scenario if specified
@@ -240,6 +243,18 @@ def main():
     
     # Print summary
     runner.print_summary(results)
+    
+    # Generate comparison dashboards if all benchmarks succeeded
+    if all(r.get("success", False) for r in results):
+        try:
+            dashboard_gen = DashboardGenerator(runner.results_root)
+            dashboard_gen.generate_all_dashboards()
+        except Exception as e:
+            print(f"\n⚠️  Warning: Failed to generate dashboards: {e}")
+            print("   Benchmark results are still available in individual directories.")
+    else:
+        print("\n⚠️  Skipping dashboard generation due to benchmark failures.")
+        print("   Fix the failures and re-run to generate comparison dashboards.")
     
     # Exit with error code if any benchmark failed
     if any(not r.get("success", False) for r in results):

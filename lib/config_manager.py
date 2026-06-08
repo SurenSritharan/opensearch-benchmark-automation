@@ -8,16 +8,21 @@ class ConfigManager:
     """Handles CLI parsing, interactive fallback menus, and execution layout boundaries."""
     
     def __init__(self):
-        self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.results_root = Path(f"./results/{self.timestamp}")
+        # Parse command line tokens first to check for --results-dir
+        self.args, unknown = self._parse_flags()
+        
+        # Use provided results directory or create new timestamped one
+        if self.args.results_dir:
+            self.results_root = Path(self.args.results_dir)
+            self.timestamp = self.results_root.name  # Extract timestamp from directory name
+        else:
+            self.timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            self.results_root = Path(f"./results/{self.timestamp}")
         
         # Load dataset specifications to validate selection boundaries dynamically
         self.config_dir = Path("config")
         self.datasets_manifest = self._load_datasets_yaml()
         self.cluster_config = self._load_cluster_yaml()
-        
-        # Parse command line tokens
-        self.args, unknown = self._parse_flags()
         
         # Determine execution runtime mode: Interactive vs Programmatic Flags
         if len(sys.argv) == 1:
@@ -85,6 +90,8 @@ class ConfigManager:
                           help="enable resource metrics collection and graphing")
         parser.add_argument("--quiet", "-q", action="store_true", default=False,
                           help="Skip confirmation prompt and proceed automatically")
+        parser.add_argument("--results-dir", type=str, default=None,
+                          help="Use specific results directory (for parallel execution)")
         parser.add_argument("--help", "-h", action="store_true")
         return parser.parse_known_args()
 

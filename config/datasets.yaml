@@ -62,19 +62,19 @@ datasets:
           - params:
               query_clients: 1
               query_count: 1000
-              warmup_iterations: 2000
+              warmup_iterations: 100 # needs to be smaller than the number of queries for throughput metrics
           - params:
               query_clients: 50
               query_count: 25000
-              warmup_iterations: 2000
+              warmup_iterations: 100
           - params:
               query_clients: 100
               query_count: 50000
-              warmup_iterations: 2000
+              warmup_iterations: 100
           - params:
               query_clients: 200
               query_count: 100000
-              warmup_iterations: 2000
+              warmup_iterations: 100
     
 
 # Default dataset to use if none specified
