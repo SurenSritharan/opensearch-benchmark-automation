@@ -495,7 +495,7 @@ class MetricsCollector:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VIS Actor Dashboard - {scenario_name}</title>
+    <title>OpenSearch Dashboard - {scenario_name}</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         * {{
@@ -764,6 +764,52 @@ class MetricsCollector:
             color: #1890ff;
         }}
         
+        .flame-graphs-section {{
+            background: linear-gradient(135deg, rgba(24, 144, 255, 0.05) 0%, rgba(114, 46, 209, 0.05) 100%);
+            border: 1px solid rgba(24, 144, 255, 0.2);
+            border-radius: 16px;
+            padding: 24px;
+            margin-top: 24px;
+        }}
+        
+        .flame-graphs-title {{
+            font-size: 20px;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.9);
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+        
+        .flame-graph-links {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }}
+        
+        .flame-graph-link {{
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 18px;
+            background: linear-gradient(135deg, rgba(255, 77, 79, 0.2) 0%, rgba(235, 47, 150, 0.2) 100%);
+            border: 1px solid rgba(255, 77, 79, 0.3);
+            border-radius: 8px;
+            color: #ff7875;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }}
+        
+        .flame-graph-link:hover {{
+            background: linear-gradient(135deg, rgba(255, 77, 79, 0.3) 0%, rgba(235, 47, 150, 0.3) 100%);
+            border-color: rgba(255, 77, 79, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(255, 77, 79, 0.3);
+        }}
+        
         .footer {{
             text-align: center;
             color: rgba(255, 255, 255, 0.5);
@@ -858,7 +904,33 @@ class MetricsCollector:
                     </div>
                 </div>
             </div>
-        </div>
+"""
+        
+        # Check for flame graphs in profiles directory
+        profile_dir = output_dir / "profiles"
+        if profile_dir.exists():
+            flame_graphs = sorted([f.name for f in profile_dir.glob("cpu_flame_graph_*.html")])
+            if flame_graphs:
+                html_content += """
+            <div class="flame-graphs-section">
+                <div class="flame-graphs-title">
+                    <span>🔥</span>
+                    <span>CPU Flame Graphs</span>
+                </div>
+                <div class="flame-graph-links">
+"""
+                for fg in flame_graphs:
+                    node_name = fg.replace('cpu_flame_graph_', '').replace('.html', '')
+                    html_content += f"""                    <a href="profiles/{fg}" class="flame-graph-link" target="_blank">
+                        <span>📊</span>
+                        <span>{node_name}</span>
+                    </a>
+"""
+                html_content += """                </div>
+            </div>
+"""
+        
+        html_content += """        </div>
         
         <div id="benchmark-content" class="tab-content">
             <div class="summary-section">
@@ -1131,7 +1203,7 @@ class MetricsCollector:
         
         <div class="footer">
             <p style="font-size: 16px; margin-bottom: 10px; font-weight: 600;">OpenSearch Benchmark Automation</p>
-            <p style="font-size: 13px;">VIS Actor-inspired dashboard powered by Chart.js</p>
+            <p style="font-size: 13px;">OpenSearch dashboard powered by Chart.js</p>
         </div>
     </div>
     

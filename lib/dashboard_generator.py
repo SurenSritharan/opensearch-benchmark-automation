@@ -44,9 +44,11 @@ class DashboardGenerator:
                 
                 scenario_name = scenario_dir.name
                 
-                # Check if it has test_run.json (direct scenario)
+                # Check if it has test_run.json (direct scenario) OR crash_error.log (failed scenario)
                 test_file = scenario_dir / "test_run.json"
-                if test_file.exists():
+                crash_file = scenario_dir / "crash_error.log"
+                
+                if test_file.exists() or crash_file.exists():
                     if scenario_name not in scenarios:
                         scenarios[scenario_name] = {
                             'engines': [],
@@ -119,6 +121,34 @@ class DashboardGenerator:
                             continue
                         
                         test_file = sweep_dir / "test_run.json"
+                        crash_file = sweep_dir / "crash_error.log"
+                        sweep_num = int(sweep_dir.name.split('-')[1])
+                        
+                        # Check for crash/failure first
+                        if crash_file.exists() and not test_file.exists():
+                            # Read crash log content
+                            try:
+                                with open(crash_file, 'r') as f:
+                                    crash_content = f.read()
+                            except Exception as e:
+                                crash_content = f"Could not read crash log: {e}"
+                            
+                            # Check if results.html exists (partial data before crash)
+                            results_html = sweep_dir / "results.html"
+                            has_results_page = results_html.exists()
+                            results_page_path = str(results_html.relative_to(self.results_dir)) if has_results_page else None
+                            
+                            all_data[engine][f'{scenario_type}_sweeps'].append({
+                                'sweep': sweep_num,
+                                'failed': True,
+                                'error': 'Benchmark crashed',
+                                'crash_log': crash_content,
+                                'crash_log_path': str(crash_file.relative_to(self.results_dir)),
+                                'has_results_page': has_results_page,
+                                'results_page_path': results_page_path
+                            })
+                            continue
+                        
                         if test_file.exists():
                             try:
                                 with open(test_file) as f:
@@ -138,7 +168,6 @@ class DashboardGenerator:
                                         p100 = latency.get("100_0") if latency else None
                                         
                                         if throughput and p50:
-                                            sweep_num = int(sweep_dir.name.split('-')[1])
                                             all_data[engine][f'{scenario_type}_sweeps'].append({
                                                 'sweep': sweep_num,
                                                 'throughput': throughput,
@@ -149,13 +178,31 @@ class DashboardGenerator:
                                                 'config': workload_params
                                             })
                             except (json.JSONDecodeError, KeyError, IndexError) as e:
-                                # Skip malformed or incomplete test files
-                                print(f"Warning: Skipping {test_file}: {e}")
+                                # Mark as failed if we can't parse results
+                                all_data[engine][f'{scenario_type}_sweeps'].append({
+                                    'sweep': sweep_num,
+                                    'failed': True,
+                                    'error': f'Failed to parse results: {str(e)}'
+                                })
+                                print(f"Warning: Failed to parse {test_file}: {e}")
                                 continue
                 
                 # Handle direct scenarios (no sweeps)
                 else:
                     test_file = scenario_dir / "test_run.json"
+                    crash_file = scenario_dir / "crash_error.log"
+                    
+                    # Check for crash/failure
+                    if crash_file.exists() and not test_file.exists():
+                        # Benchmark crashed - mark as failed
+                        if scenario_type == 'bulk_ingest':
+                            all_data[engine]['bulk_ingest'] = {'failed': True, 'error': 'Benchmark crashed'}
+                        elif scenario_type == 'search':
+                            all_data[engine]['search'] = {'failed': True, 'error': 'Benchmark crashed'}
+                        elif scenario_type == 'force_merge':
+                            all_data[engine]['force_merge'] = {'failed': True, 'error': 'Benchmark crashed'}
+                        continue
+                    
                     if test_file.exists():
                         try:
                             with open(test_file) as f:
@@ -191,15 +238,41 @@ class DashboardGenerator:
                                         }
                                 
                                 elif scenario_type == 'force_merge':
+                                    # Check if op_metrics has force-merge operation
+                                    found_in_ops = False
                                     for op in data["results"]["op_metrics"]:
                                         if "force-merge" in op.get("operation", "").lower():
                                             all_data[engine]['force_merge'] = {
                                                 'service_time': op.get('service_time', 0)
                                             }
+                                            found_in_ops = True
                                             break
+                                    
+                                    # If not in op_metrics, collect comprehensive metrics from results
+                                    if not found_in_ops:
+                                        results = data["results"]
+                                        all_data[engine]['force_merge'] = {
+                                            'total_time': results.get('total_time', 0) / 1000,  # Convert ms to seconds
+                                            'merge_time': results.get('merge_time', 0) / 1000,
+                                            'merge_count': results.get('merge_count', 0),
+                                            'merge_throttle_time': results.get('merge_throttle_time', 0) / 1000,
+                                            'refresh_time': results.get('refresh_time', 0) / 1000,
+                                            'refresh_count': results.get('refresh_count', 0),
+                                            'flush_time': results.get('flush_time', 0) / 1000,
+                                            'flush_count': results.get('flush_count', 0),
+                                            # Per-shard metrics
+                                            'merge_time_per_shard': results.get('merge_time_per_shard', {}),
+                                            'total_time_per_shard': results.get('total_time_per_shard', {})
+                                        }
                         except (json.JSONDecodeError, KeyError, IndexError) as e:
-                            # Skip malformed or incomplete test files
-                            print(f"Warning: Skipping {test_file}: {e}")
+                            # Mark as failed if we can't parse results
+                            if scenario_type == 'bulk_ingest':
+                                all_data[engine]['bulk_ingest'] = {'failed': True, 'error': str(e)}
+                            elif scenario_type == 'search':
+                                all_data[engine]['search'] = {'failed': True, 'error': str(e)}
+                            elif scenario_type == 'force_merge':
+                                all_data[engine]['force_merge'] = {'failed': True, 'error': str(e)}
+                            print(f"Warning: Failed to parse {test_file}: {e}")
                             continue
         
         return all_data
@@ -214,11 +287,15 @@ class DashboardGenerator:
         )
         force_merge_available = any('force_merge' in all_data.get(e, {}) for e in self.engines)
         
-        # Determine winners for available scenarios
+        # Determine winners for available scenarios (exclude failed benchmarks)
         bulk_winner = None
         if bulk_ingest_available:
-            bulk_winner = max([e for e in self.engines if 'bulk_ingest' in all_data.get(e, {})],
-                            key=lambda e: all_data[e]['bulk_ingest']['throughput'], default=None)
+            successful_bulk = [e for e in self.engines
+                             if 'bulk_ingest' in all_data.get(e, {})
+                             and not all_data[e]['bulk_ingest'].get('failed', False)]
+            if successful_bulk:
+                bulk_winner = max(successful_bulk,
+                                key=lambda e: all_data[e]['bulk_ingest']['throughput'], default=None)
         
         search_winner = None
         if search_available:
@@ -462,10 +539,21 @@ class DashboardGenerator:
             for engine in self.engines:
                 if 'bulk_ingest' in all_data.get(engine, {}):
                     d = all_data[engine]['bulk_ingest']
-                    is_winner = engine == bulk_winner
-                    winner_class = 'winner' if is_winner else ''
                     
-                    html += f'''
+                    # Check if benchmark failed
+                    if d.get('failed'):
+                        html += f'''
+                    <tr onclick="event.stopPropagation(); window.location.href='{self.dataset_name}-{engine}/scenario-2-bulk-ingest/results.html'">
+                        <td><span class="engine-badge {engine}">{engine.upper()}</span></td>
+                        <td colspan="4"><span style="color: #ff4d4f; font-weight: 600;">❌ Benchmark Failed</span> <span style="color: rgba(255, 255, 255, 0.5); font-size: 12px;">({d.get('error', 'Unknown error')})</span></td>
+                        <td><span style="color: #ff4d4f;">View Logs →</span></td>
+                    </tr>
+'''
+                    else:
+                        is_winner = engine == bulk_winner
+                        winner_class = 'winner' if is_winner else ''
+                        
+                        html += f'''
                     <tr onclick="event.stopPropagation(); window.location.href='{self.dataset_name}-{engine}/scenario-2-bulk-ingest/results.html'">
                         <td><span class="engine-badge {engine}">{engine.upper()}</span></td>
                         <td><span class="metric-value {winner_class}">{d['throughput']:.2f}</span><span class="metric-unit">docs/s</span></td>
@@ -482,7 +570,75 @@ class DashboardGenerator:
         </div>
 '''
         
-        # Search Section (only if data exists)
+        # Force Merge Section (only if data exists) - Runs after Bulk Ingest
+        if force_merge_available:
+            html += '''
+        <div class="section">
+            <div class="section-header">
+                <div class="section-title">
+                    <span class="section-icon">🔄</span>
+                    <span>Force Merge Performance</span>
+                    <span class="status-badge complete">✓ Complete</span>
+                </div>
+            </div>
+            <table class="metrics-table">
+                <thead>
+                    <tr>
+                        <th>Engine</th>
+                        <th>Total Time</th>
+                        <th>Merge Time</th>
+                        <th>Merge Count</th>
+                        <th>Throttle Time</th>
+                        <th>Refresh Time</th>
+                        <th>Flush Time</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+'''
+            
+            for engine in self.engines:
+                if 'force_merge' in all_data.get(engine, {}):
+                    d = all_data[engine]['force_merge']
+                    if d.get('failed', False):
+                        html += f'''
+                    <tr style="background: rgba(255, 77, 79, 0.1);">
+                        <td><span class="engine-badge {engine}">{engine.upper()}</span></td>
+                        <td colspan="7"><span style="color: #ff4d4f;">❌ FAILED: {d.get('error', 'Unknown error')}</span></td>
+                    </tr>
+'''
+                    else:
+                        # Handle both old format (service_time) and new format (comprehensive metrics)
+                        if 'total_time' in d:
+                            html += f'''
+                    <tr onclick="window.location.href='{self.dataset_name}-{engine}/scenario-3-force-merge/results.html'">
+                        <td><span class="engine-badge {engine}">{engine.upper()}</span></td>
+                        <td><span class="metric-value">{d['total_time']:.2f}</span><span class="metric-unit">s</span></td>
+                        <td><span class="metric-value">{d['merge_time']:.2f}</span><span class="metric-unit">s</span></td>
+                        <td><span class="metric-value">{d['merge_count']}</span></td>
+                        <td><span class="metric-value">{d['merge_throttle_time']:.2f}</span><span class="metric-unit">s</span></td>
+                        <td><span class="metric-value">{d['refresh_time']:.2f}</span><span class="metric-unit">s</span> <span style="color: rgba(255,255,255,0.5); font-size: 11px;">({d['refresh_count']} ops)</span></td>
+                        <td><span class="metric-value">{d['flush_time']:.2f}</span><span class="metric-unit">s</span> <span style="color: rgba(255,255,255,0.5); font-size: 11px;">({d['flush_count']} ops)</span></td>
+                        <td><span style="color: #1890ff;">View Results →</span></td>
+                    </tr>
+'''
+                        else:
+                            # Old format with just service_time
+                            html += f'''
+                    <tr onclick="window.location.href='{self.dataset_name}-{engine}/scenario-3-force-merge/results.html'">
+                        <td><span class="engine-badge {engine}">{engine.upper()}</span></td>
+                        <td colspan="6"><span class="metric-value">{d.get('service_time', 0):.2f}</span><span class="metric-unit">s</span></td>
+                        <td><span style="color: #1890ff;">View Results →</span></td>
+                    </tr>
+'''
+            
+            html += '''
+                </tbody>
+            </table>
+        </div>
+'''
+        
+        # Search Section (only if data exists) - Runs after Force Merge
         if search_available:
             html += '''
         <div class="section" onclick="window.location.href='search-comparison.html'">
@@ -514,18 +670,54 @@ class DashboardGenerator:
 '''
                     
                     for sweep in sweeps:
-                        # Format sweep configuration for display
-                        config_str = ""
-                        if 'config' in sweep and sweep['config']:
-                            config_items = []
-                            for key, value in sweep['config'].items():
-                                # Include common search parameters
-                                if key in ['k', 'ef_search', 'num_candidates', 'rescore', 'query_k', 'query_count', 'query_clients']:
-                                    config_items.append(f"{key}={value}")
-                            if config_items:
-                                config_str = f"<div style='font-size: 10px; color: rgba(255, 255, 255, 0.4); margin-top: 2px;'>{', '.join(config_items)}</div>"
-                        
-                        html += f'''
+                        # Check if sweep failed
+                        if sweep.get('failed', False):
+                            # Escape crash log for JavaScript
+                            crash_log = sweep.get('crash_log', 'No crash log available')
+                            crash_log_escaped = crash_log.replace('\\', '\\\\').replace("'", "\\'").replace('\n', '\\n').replace('\r', '\\r')
+                            
+                            # Check if results page exists (partial data)
+                            has_results = sweep.get('has_results_page', False)
+                            results_path = sweep.get('results_page_path', '')
+                            
+                            html += f'''
+                    <div class="sweep-card" onclick="event.stopPropagation(); showCrashLog('{engine}', {sweep['sweep']}, '{crash_log_escaped}')" style="background: rgba(255, 77, 79, 0.1); border-color: rgba(255, 77, 79, 0.3); cursor: pointer;">
+                        <div class="sweep-label" style="color: #ff4d4f;">❌ Sweep {sweep['sweep']}</div>
+                        <div class="sweep-value" style="color: #ff4d4f; font-size: 13px;">FAILED</div>
+                        <div style="font-size: 11px; color: #ff7875; margin-top: 4px;">
+                            {sweep.get('error', 'Unknown error')}
+                        </div>
+                        <div style="font-size: 10px; color: rgba(255, 255, 255, 0.4); margin-top: 4px;">
+                            Click to view crash log
+                        </div>
+'''
+                            
+                            # Add link to results page if it exists
+                            if has_results:
+                                html += f'''
+                        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255, 77, 79, 0.3);">
+                            <a href="{results_path}" onclick="event.stopPropagation();" style="color: #1890ff; text-decoration: none; font-size: 11px; display: flex; align-items: center; gap: 4px;">
+                                📊 View Partial Metrics →
+                            </a>
+                        </div>
+'''
+                            
+                            html += '''
+                    </div>
+'''
+                        else:
+                            # Format sweep configuration for display
+                            config_str = ""
+                            if 'config' in sweep and sweep['config']:
+                                config_items = []
+                                for key, value in sweep['config'].items():
+                                    # Include common search parameters
+                                    if key in ['k', 'ef_search', 'num_candidates', 'rescore', 'query_k', 'query_count', 'query_clients']:
+                                        config_items.append(f"{key}={value}")
+                                if config_items:
+                                    config_str = f"<div style='font-size: 10px; color: rgba(255, 255, 255, 0.4); margin-top: 2px;'>{', '.join(config_items)}</div>"
+                            
+                            html += f'''
                     <div class="sweep-card" onclick="event.stopPropagation(); window.location.href='{self.dataset_name}-{engine}/{scenario_name}/sweep-{sweep['sweep']}/results.html'">
                         <div class="sweep-label">Sweep {sweep['sweep']}</div>
                         <div class="sweep-value">{sweep['throughput']:.1f} <span style="font-size: 12px; color: rgba(255, 255, 255, 0.5);">ops/s</span></div>
@@ -545,47 +737,92 @@ class DashboardGenerator:
         </div>
 '''
         
-        # Force Merge Section (only if data exists)
-        if force_merge_available:
-            html += '''
-        <div class="section">
-            <div class="section-header">
-                <div class="section-title">
-                    <span class="section-icon">🔄</span>
-                    <span>Force Merge Performance</span>
-                    <span class="status-badge complete">✓ Complete</span>
-                </div>
-            </div>
-            <table class="metrics-table">
-                <thead>
-                    <tr>
-                        <th>Engine</th>
-                        <th>Service Time</th>
-                        <th>Details</th>
-                    </tr>
-                </thead>
-                <tbody>
-'''
-            
-            for engine in self.engines:
-                if 'force_merge' in all_data.get(engine, {}):
-                    d = all_data[engine]['force_merge']
-                    html += f'''
-                    <tr onclick="window.location.href='{self.dataset_name}-{engine}/scenario-3-force-merge/results.html'">
-                        <td><span class="engine-badge {engine}">{engine.upper()}</span></td>
-                        <td><span class="metric-value">{d['service_time']:.2f}</span><span class="metric-unit">s</span></td>
-                        <td><span style="color: #1890ff;">View Results →</span></td>
-                    </tr>
-'''
-            
-            html += '''
-                </tbody>
-            </table>
-        </div>
-'''
-        
         html += '''
     </div>
+    
+    <!-- Crash Log Modal -->
+    <div id="crashLogModal" style="
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        overflow: auto;
+        background-color: rgba(0,0,0,0.7);
+    ">
+        <div style="
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            margin: 5% auto;
+            padding: 0;
+            border: 1px solid rgba(24, 144, 255, 0.3);
+            border-radius: 12px;
+            width: 80%;
+            max-width: 1000px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        ">
+            <div style="
+                background: rgba(24, 144, 255, 0.1);
+                padding: 20px;
+                border-bottom: 1px solid rgba(24, 144, 255, 0.3);
+                border-radius: 12px 12px 0 0;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            ">
+                <h2 id="crashLogTitle" style="margin: 0; color: #ff4d4f; font-size: 20px;">Crash Log</h2>
+                <span id="closeModal" style="
+                    color: rgba(255, 255, 255, 0.6);
+                    font-size: 28px;
+                    font-weight: bold;
+                    cursor: pointer;
+                    transition: color 0.3s;
+                ">&times;</span>
+            </div>
+            <div style="padding: 20px;">
+                <pre id="crashLogContent" style="
+                    background: rgba(0, 0, 0, 0.3);
+                    color: #ff7875;
+                    padding: 20px;
+                    border-radius: 8px;
+                    overflow-x: auto;
+                    max-height: 500px;
+                    font-family: 'Courier New', monospace;
+                    font-size: 12px;
+                    line-height: 1.5;
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                "></pre>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Function to show crash log modal
+        function showCrashLog(engine, sweepNum, crashLog) {
+            const modal = document.getElementById('crashLogModal');
+            const title = document.getElementById('crashLogTitle');
+            const content = document.getElementById('crashLogContent');
+            
+            title.textContent = `${engine.toUpperCase()} - Sweep ${sweepNum} - Crash Log`;
+            content.textContent = crashLog;
+            
+            modal.style.display = 'block';
+        }
+        
+        // Close modal when clicking X or outside
+        document.getElementById('closeModal').onclick = function() {
+            document.getElementById('crashLogModal').style.display = 'none';
+        }
+        
+        window.onclick = function(event) {
+            const modal = document.getElementById('crashLogModal');
+            if (event.target == modal) {
+                modal.style.display = 'none';
+            }
+        }
+    </script>
 </body>
 </html>'''
         
@@ -620,17 +857,35 @@ class DashboardGenerator:
                 sweeps = all_data[engine]['search_sweeps']
                 scenario_name = all_data[engine].get('search_scenario_name', 'scenario-1-search')
                 if sweeps:
-                    avg_throughput = sum(s['throughput'] for s in sweeps) / len(sweeps)
-                    avg_p50 = sum(s['p50'] for s in sweeps) / len(sweeps)
-                    avg_p99 = sum(s['p99'] for s in sweeps) / len(sweeps)
-                    search_engines.append({
-                        'name': engine,
-                        'throughput': avg_throughput,
-                        'p50': avg_p50,
-                        'p99': avg_p99,
-                        'sweeps': sweeps,
-                        'scenario_name': scenario_name
-                    })
+                    # Separate successful and failed sweeps
+                    successful_sweeps = [s for s in sweeps if not s.get('failed', False)]
+                    failed_sweeps = [s for s in sweeps if s.get('failed', False)]
+                    
+                    # If we have at least one successful sweep, calculate averages
+                    if successful_sweeps:
+                        avg_throughput = sum(s['throughput'] for s in successful_sweeps) / len(successful_sweeps)
+                        avg_p50 = sum(s['p50'] for s in successful_sweeps) / len(successful_sweeps)
+                        avg_p99 = sum(s['p99'] for s in successful_sweeps) / len(successful_sweeps)
+                        search_engines.append({
+                            'name': engine,
+                            'throughput': avg_throughput,
+                            'p50': avg_p50,
+                            'p99': avg_p99,
+                            'sweeps': sweeps,  # Include all sweeps (successful and failed)
+                            'scenario_name': scenario_name,
+                            'has_failures': len(failed_sweeps) > 0
+                        })
+                    elif failed_sweeps:
+                        # All sweeps failed - still add to show the failures
+                        search_engines.append({
+                            'name': engine,
+                            'throughput': 0,
+                            'p50': 0,
+                            'p99': 0,
+                            'sweeps': sweeps,
+                            'scenario_name': scenario_name,
+                            'all_failed': True
+                        })
         
         if not search_engines:
             return ""
@@ -900,8 +1155,9 @@ class DashboardGenerator:
             if not sweeps:
                 continue
             
-            # Find best sweep
-            best_sweep = max(sweeps, key=lambda s: s['throughput'])
+            # Find best sweep (only from successful sweeps)
+            successful_sweeps = [s for s in sweeps if not s.get('failed', False)]
+            best_sweep = max(successful_sweeps, key=lambda s: s['throughput']) if successful_sweeps else None
             
             html += f'''
         <div class="sweep-comparison">
@@ -929,18 +1185,43 @@ class DashboardGenerator:
             scenario_name = engine_data.get('scenario_name', 'scenario-1-search')
             
             for sweep in sorted(sweeps, key=lambda s: s['sweep']):
-                is_best = sweep['sweep'] == best_sweep['sweep']
-                value_class = 'best' if is_best else 'value'
                 sweep_num = sweep['sweep']
                 
-                # Build link to individual sweep results
-                # If there's only one sweep (treated as Sweep 1 from direct search), link directly to scenario results
-                if len(sweeps) == 1 and sweep_num == 1:
-                    sweep_link = f"{self.dataset_name}-{engine}/{scenario_name}/results.html"
+                # Check if this sweep failed
+                if sweep.get('failed', False):
+                    # Escape crash log for JavaScript
+                    crash_log = sweep.get('crash_log', 'No crash log available')
+                    crash_log_escaped = crash_log.replace('\\', '\\\\').replace("'", "\\'").replace('\n', '\\n').replace('\r', '\\r')
+                    
+                    # Check if results page exists
+                    has_results = sweep.get('has_results_page', False)
+                    results_path = sweep.get('results_page_path', '')
+                    
+                    # Build the "View Error Log" or "View Partial Metrics" link
+                    if has_results:
+                        details_link = f'<a href="{results_path}" onclick="event.stopPropagation();" style="color: #1890ff; text-decoration: none;">📊 View Partial Metrics →</a>'
+                    else:
+                        details_link = '<span style="color: #ff4d4f;">View Error Log →</span>'
+                    
+                    html += f'''
+                    <tr onclick="showCrashLog('{engine}', {sweep_num}, '{crash_log_escaped}')" style="cursor: pointer; background: rgba(255, 77, 79, 0.1);">
+                        <td><span class="value" style="color: #ff4d4f;">❌ Sweep {sweep_num}</span></td>
+                        <td colspan="4"><span style="color: #ff4d4f;">FAILED: {sweep.get('error', 'Unknown error')}</span></td>
+                        <td>{details_link}</td>
+                    </tr>
+'''
                 else:
-                    sweep_link = f"{self.dataset_name}-{engine}/{scenario_name}/sweep-{sweep_num}/results.html"
-                
-                html += f'''
+                    is_best = best_sweep and sweep['sweep'] == best_sweep['sweep']
+                    value_class = 'best' if is_best else 'value'
+                    
+                    # Build link to individual sweep results
+                    # If there's only one sweep (treated as Sweep 1 from direct search), link directly to scenario results
+                    if len(sweeps) == 1 and sweep_num == 1:
+                        sweep_link = f"{self.dataset_name}-{engine}/{scenario_name}/results.html"
+                    else:
+                        sweep_link = f"{self.dataset_name}-{engine}/{scenario_name}/sweep-{sweep_num}/results.html"
+                    
+                    html += f'''
                     <tr onclick="window.location.href='{sweep_link}'">
                         <td><span class="{value_class}">Sweep {sweep_num}</span></td>
                         <td><span class="{value_class}">{sweep['throughput']:.1f} ops/s</span></td>
@@ -1139,8 +1420,14 @@ class DashboardGenerator:
                 if not sweeps:
                     continue
                 
-                # Pad data if needed
-                throughput_data = [str(s['throughput']) for s in sorted(sweeps, key=lambda s: s['sweep'])]
+                # Filter out failed sweeps for chart data, use null for failed sweeps
+                throughput_data = []
+                for s in sorted(sweeps, key=lambda s: s['sweep']):
+                    if s.get('failed', False):
+                        throughput_data.append('null')
+                    else:
+                        throughput_data.append(str(s['throughput']))
+                
                 border_color, bg_color = engine_colors.get(engine, ('rgba(255, 255, 255, 1)', 'rgba(255, 255, 255, 0.1)'))
                 
                 html += f'''
@@ -1184,9 +1471,20 @@ class DashboardGenerator:
                 if not sweeps:
                     continue
                 
-                p50_data = [str(s['p50']) for s in sorted(sweeps, key=lambda s: s['sweep'])]
-                p99_data = [str(s['p99']) for s in sorted(sweeps, key=lambda s: s['sweep'])]
-                p100_data = [str(s.get('p100', s['p99'])) for s in sorted(sweeps, key=lambda s: s['sweep'])]
+                # Filter out failed sweeps for chart data
+                p50_data = []
+                p99_data = []
+                p100_data = []
+                for s in sorted(sweeps, key=lambda s: s['sweep']):
+                    if s.get('failed', False):
+                        p50_data.append('null')
+                        p99_data.append('null')
+                        p100_data.append('null')
+                    else:
+                        p50_data.append(str(s['p50']))
+                        p99_data.append(str(s['p99']))
+                        p100_data.append(str(s.get('p100', s['p99'])))
+                
                 border_color, bg_color = engine_colors.get(engine, ('rgba(255, 255, 255, 1)', 'rgba(255, 255, 255, 0.1)'))
                 
                 html += f'''
@@ -1212,7 +1510,14 @@ class DashboardGenerator:
                 if not sweeps:
                     continue
                 
-                p90_data = [str(s.get('p90', s['p99'])) for s in sorted(sweeps, key=lambda s: s['sweep'])]
+                # Filter out failed sweeps for chart data
+                p90_data = []
+                for s in sorted(sweeps, key=lambda s: s['sweep']):
+                    if s.get('failed', False):
+                        p90_data.append('null')
+                    else:
+                        p90_data.append(str(s.get('p90', s['p99'])))
+                
                 border_color, bg_color = engine_colors.get(engine, ('rgba(255, 255, 255, 1)', 'rgba(255, 255, 255, 0.1)'))
                 
                 html += f'''
@@ -1238,7 +1543,14 @@ class DashboardGenerator:
                 if not sweeps:
                     continue
                 
-                p99_data = [str(s['p99']) for s in sorted(sweeps, key=lambda s: s['sweep'])]
+                # Filter out failed sweeps for chart data
+                p99_data = []
+                for s in sorted(sweeps, key=lambda s: s['sweep']):
+                    if s.get('failed', False):
+                        p99_data.append('null')
+                    else:
+                        p99_data.append(str(s['p99']))
+                
                 border_color, bg_color = engine_colors.get(engine, ('rgba(255, 255, 255, 1)', 'rgba(255, 255, 255, 0.1)'))
                 
                 html += f'''
@@ -1264,7 +1576,14 @@ class DashboardGenerator:
                 if not sweeps:
                     continue
                 
-                p100_data = [str(s.get('p100', s['p99'])) for s in sorted(sweeps, key=lambda s: s['sweep'])]
+                # Filter out failed sweeps for chart data
+                p100_data = []
+                for s in sorted(sweeps, key=lambda s: s['sweep']):
+                    if s.get('failed', False):
+                        p100_data.append('null')
+                    else:
+                        p100_data.append(str(s.get('p100', s['p99'])))
+                
                 border_color, bg_color = engine_colors.get(engine, ('rgba(255, 255, 255, 1)', 'rgba(255, 255, 255, 0.1)'))
                 
                 html += f'''
@@ -1312,11 +1631,461 @@ class DashboardGenerator:
 '''
         
         html += '''
+        
+        // Function to show crash log modal
+        function showCrashLog(engine, sweepNum, crashLog) {
+            const modal = document.getElementById('crashLogModal');
+            const title = document.getElementById('crashLogTitle');
+            const content = document.getElementById('crashLogContent');
+            
+            title.textContent = `${engine.toUpperCase()} - Sweep ${sweepNum} - Crash Log`;
+            content.textContent = crashLog;
+            
+            modal.style.display = 'block';
+        }
+        
+        // Close modal when clicking X or outside
+        document.getElementById('closeModal').onclick = function() {
+            document.getElementById('crashLogModal').style.display = 'none';
+        }
+        
+        window.onclick = function(event) {
+            const modal = document.getElementById('crashLogModal');
+            if (event.target == modal) {
+                modal.style.display = 'none';
+            }
+        }
+    </script>
+    
+    <!-- Crash Log Modal -->
+    <div id="crashLogModal" style="
+        display: none;
+        position: fixed;
+        z-index: 1000;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        overflow: auto;
+        background-color: rgba(0,0,0,0.7);
+    ">
+        <div style="
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            margin: 5% auto;
+            padding: 0;
+            border: 1px solid rgba(24, 144, 255, 0.3);
+            border-radius: 12px;
+            width: 80%;
+            max-width: 1000px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        ">
+            <div style="
+                background: rgba(24, 144, 255, 0.1);
+                padding: 20px;
+                border-bottom: 1px solid rgba(24, 144, 255, 0.3);
+                border-radius: 12px 12px 0 0;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            ">
+                <h2 id="crashLogTitle" style="margin: 0; color: #ff4d4f; font-size: 20px;">Crash Log</h2>
+                <span id="closeModal" style="
+                    color: rgba(255, 255, 255, 0.6);
+                    font-size: 28px;
+                    font-weight: bold;
+                    cursor: pointer;
+                    transition: color 0.3s;
+                ">&times;</span>
+            </div>
+            <div style="padding: 20px;">
+                <pre id="crashLogContent" style="
+                    background: rgba(0, 0, 0, 0.3);
+                    color: #ff7875;
+                    padding: 20px;
+                    border-radius: 8px;
+                    overflow-x: auto;
+                    max-height: 500px;
+                    font-family: 'Courier New', monospace;
+                    font-size: 12px;
+                    line-height: 1.5;
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                "></pre>
+            </div>
+        </div>
+    </div>
+</body>
+</html>'''
+        
+        return html
+    def generate_bulk_ingest_comparison(self, all_data: Dict[str, Any]) -> str:
+        """Generate bulk-ingest-comparison.html with detailed bulk ingest metrics."""
+        # Collect bulk ingest data
+        bulk_engines = []
+        for engine in self.engines:
+            if 'bulk_ingest' in all_data.get(engine, {}):
+                bulk_data = all_data[engine]['bulk_ingest']
+                bulk_engines.append({
+                    'name': engine,
+                    'failed': bulk_data.get('failed', False),
+                    'error': bulk_data.get('error', ''),
+                    'throughput': bulk_data.get('throughput', 0),
+                    'p50': bulk_data.get('p50', 0),
+                    'p99': bulk_data.get('p99', 0),
+                    'p100': bulk_data.get('p100', bulk_data.get('p99', 0))
+                })
+        
+        if not bulk_engines:
+            return ""
+        
+        # Find winner among successful benchmarks
+        successful_engines = [e for e in bulk_engines if not e['failed']]
+        winner = max(successful_engines, key=lambda x: x['throughput']) if successful_engines else None
+        
+        html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bulk Ingest Comparison - {self.dataset_name.upper()}</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0a1929 0%, #1a2332 50%, #0f1419 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }}
+        .container {{
+            max-width: 1400px;
+            margin: 0 auto;
+        }}
+        .breadcrumb {{
+            color: rgba(255, 255, 255, 0.6);
+            margin-bottom: 20px;
+            font-size: 14px;
+        }}
+        .breadcrumb a {{
+            color: #1890ff;
+            text-decoration: none;
+        }}
+        .breadcrumb a:hover {{
+            text-decoration: underline;
+        }}
+        .breadcrumb span {{
+            margin: 0 8px;
+        }}
+        .header {{
+            background: linear-gradient(135deg, rgba(24, 144, 255, 0.1) 0%, rgba(114, 46, 209, 0.1) 100%);
+            border: 1px solid rgba(24, 144, 255, 0.2);
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 32px;
+        }}
+        .header h1 {{
+            font-size: 42px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #1890ff 0%, #722ed1 50%, #eb2f96 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 12px;
+        }}
+        .subtitle {{
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 16px;
+        }}
+        .section-title {{
+            font-size: 28px;
+            font-weight: 700;
+            margin: 40px 0 20px 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }}
+        .section-title span {{
+            background: linear-gradient(135deg, #1890ff 0%, #722ed1 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }}
+        .summary-cards {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }}
+        .summary-card {{
+            background: linear-gradient(135deg, rgba(24, 144, 255, 0.08) 0%, rgba(114, 46, 209, 0.08) 100%);
+            border: 1px solid rgba(24, 144, 255, 0.2);
+            border-radius: 12px;
+            padding: 24px;
+            position: relative;
+        }}
+        .summary-card.winner {{
+            border: 2px solid #52c41a;
+            box-shadow: 0 0 20px rgba(82, 196, 26, 0.3);
+        }}
+        .summary-card.winner::before {{
+            content: '🏆 Winner';
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background: linear-gradient(135deg, #52c41a 0%, #73d13d 100%);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }}
+        .engine-badge {{
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 16px;
+        }}
+        .engine-badge.faiss {{ background: linear-gradient(135deg, #ff4d4f 0%, #ff7875 100%); color: white; }}
+        .engine-badge.jvector {{ background: linear-gradient(135deg, #52c41a 0%, #73d13d 100%); color: white; }}
+        .engine-badge.lucene {{ background: linear-gradient(135deg, #1890ff 0%, #40a9ff 100%); color: white; }}
+        .metric-row {{
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(24, 144, 255, 0.1);
+        }}
+        .metric-row:last-child {{
+            border-bottom: none;
+        }}
+        .metric-label {{
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 14px;
+        }}
+        .metric-value {{
+            color: rgba(255, 255, 255, 0.9);
+            font-weight: 600;
+            font-size: 16px;
+        }}
+        .chart-container {{
+            background: linear-gradient(135deg, rgba(24, 144, 255, 0.05) 0%, rgba(114, 46, 209, 0.05) 100%);
+            border: 1px solid rgba(24, 144, 255, 0.2);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 32px;
+        }}
+        .chart-title {{
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            color: rgba(255, 255, 255, 0.9);
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="breadcrumb">
+            <a href="index.html">🏠 Dashboard</a>
+            <span>/</span>
+            <span>Bulk Ingest Comparison</span>
+        </div>
+        
+        <div class="header">
+            <h1>📥 {self.dataset_name.upper()} Bulk Ingest Comparison</h1>
+            <div class="subtitle">Cross-engine analysis of bulk ingestion performance</div>
+        </div>
+        
+        <div class="section-title"><span>📊 Performance Summary</span></div>
+        <div class="summary-cards">
+'''
+        
+        for engine_data in bulk_engines:
+            engine = engine_data['name']
+            
+            # Check if this benchmark failed
+            if engine_data['failed']:
+                html += f'''
+            <div class="summary-card" style="border-color: #ff4d4f;">
+                <span class="engine-badge {engine}">{engine.upper()}</span>
+                <div style="padding: 20px; text-align: center;">
+                    <div style="font-size: 48px; margin-bottom: 12px;">❌</div>
+                    <div style="color: #ff4d4f; font-weight: 600; font-size: 18px; margin-bottom: 8px;">Benchmark Failed</div>
+                    <div style="color: rgba(255, 255, 255, 0.5); font-size: 14px;">{engine_data['error']}</div>
+                </div>
+            </div>
+'''
+            else:
+                is_winner = winner and engine == winner['name']
+                winner_class = ' winner' if is_winner else ''
+                
+                html += f'''
+            <div class="summary-card{winner_class}">
+                <span class="engine-badge {engine}">{engine.upper()}</span>
+                <div class="metric-row">
+                    <span class="metric-label">Throughput</span>
+                    <span class="metric-value">{engine_data['throughput']:.1f} docs/s</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">P50 Latency</span>
+                    <span class="metric-value">{engine_data['p50']:.2f} ms</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">P99 Latency</span>
+                    <span class="metric-value">{engine_data['p99']:.2f} ms</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">P100 Latency</span>
+                    <span class="metric-value">{engine_data['p100']:.2f} ms</span>
+                </div>
+            </div>
+'''
+        
+        html += '''
+        </div>
+        
+        <div class="chart-container">
+            <div class="chart-title">Throughput Comparison</div>
+            <canvas id="throughputChart" style="max-height: 350px;"></canvas>
+        </div>
+        
+        <div class="chart-container">
+            <div class="chart-title">Latency Comparison (P50, P99, P100)</div>
+            <canvas id="latencyChart" style="max-height: 350px;"></canvas>
+        </div>
+    </div>
+    
+    <script>
+        // Throughput Chart
+        const throughputCtx = document.getElementById('throughputChart').getContext('2d');
+        new Chart(throughputCtx, {
+            type: 'bar',
+            data: {
+                labels: ['''
+        
+        html += ', '.join(f"'{e['name'].upper()}'" for e in bulk_engines)
+        html += '''],
+                datasets: [{
+                    label: 'Throughput (docs/s)',
+                    data: ['''
+        
+        html += ', '.join(f"{e['throughput']:.1f}" for e in bulk_engines)
+        html += '''],
+                    backgroundColor: [
+                        'rgba(255, 77, 79, 0.8)',
+                        'rgba(82, 196, 26, 0.8)',
+                        'rgba(24, 144, 255, 0.8)'
+                    ],
+                    borderColor: [
+                        'rgba(255, 77, 79, 1)',
+                        'rgba(82, 196, 26, 1)',
+                        'rgba(24, 144, 255, 1)'
+                    ],
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        titleColor: '#fff',
+                        bodyColor: '#fff',
+                        borderColor: 'rgba(24, 144, 255, 0.5)',
+                        borderWidth: 1
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(24, 144, 255, 0.1)' },
+                        ticks: { color: 'rgba(255, 255, 255, 0.7)' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: 'rgba(255, 255, 255, 0.7)' }
+                    }
+                }
+            }
+        });
+        
+        // Latency Chart
+        const latencyCtx = document.getElementById('latencyChart').getContext('2d');
+        new Chart(latencyCtx, {
+            type: 'bar',
+            data: {
+                labels: ['''
+        
+        html += ', '.join(f"'{e['name'].upper()}'" for e in bulk_engines)
+        html += '''],
+                datasets: [
+                    {
+                        label: 'P50 Latency (ms)',
+                        data: ['''
+        
+        html += ', '.join(f"{e['p50']:.2f}" for e in bulk_engines)
+        html += '''],
+                        backgroundColor: 'rgba(24, 144, 255, 0.6)',
+                        borderColor: 'rgba(24, 144, 255, 1)',
+                        borderWidth: 2
+                    },
+                    {
+                        label: 'P99 Latency (ms)',
+                        data: ['''
+        
+        html += ', '.join(f"{e['p99']:.2f}" for e in bulk_engines)
+        html += '''],
+                        backgroundColor: 'rgba(114, 46, 209, 0.6)',
+                        borderColor: 'rgba(114, 46, 209, 1)',
+                        borderWidth: 2
+                    },
+                    {
+                        label: 'P100 Latency (ms)',
+                        data: ['''
+        
+        html += ', '.join(f"{e['p100']:.2f}" for e in bulk_engines)
+        html += '''],
+                        backgroundColor: 'rgba(235, 47, 150, 0.6)',
+                        borderColor: 'rgba(235, 47, 150, 1)',
+                        borderWidth: 2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: {
+                        labels: { color: 'rgba(255, 255, 255, 0.9)' }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        titleColor: '#fff',
+                        bodyColor: '#fff',
+                        borderColor: 'rgba(24, 144, 255, 0.5)',
+                        borderWidth: 1
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(24, 144, 255, 0.1)' },
+                        ticks: { color: 'rgba(255, 255, 255, 0.7)' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: 'rgba(255, 255, 255, 0.7)' }
+                    }
+                }
+            }
+        });
     </script>
 </body>
 </html>'''
         
         return html
+    
     
     def generate_all_dashboards(self):
         """Generate all dashboard files."""
@@ -1350,13 +2119,27 @@ class DashboardGenerator:
                     f.write(search_html)
                 print(f"✅ Created: {search_file}")
         
-        # TODO: Generate bulk-ingest-comparison.html
+        # Generate bulk ingest comparison if bulk ingest data exists
+        bulk_available = any(
+            'bulk_ingest' in all_data.get(e, {})
+            for e in self.engines
+        )
+        if bulk_available:
+            print("Generating bulk ingest comparison (bulk-ingest-comparison.html)...")
+            bulk_html = self.generate_bulk_ingest_comparison(all_data)
+            if bulk_html:
+                bulk_file = self.results_dir / "bulk-ingest-comparison.html"
+                with open(bulk_file, 'w') as f:
+                    f.write(bulk_html)
+                print(f"✅ Created: {bulk_file}")
         
         print("=" * 80)
         print(f"🎉 Dashboards generated in: {self.results_dir}")
         print(f"   Open: {main_file}")
         if search_available:
             print(f"   Search: {self.results_dir / 'search-comparison.html'}")
+        if bulk_available:
+            print(f"   Bulk Ingest: {self.results_dir / 'bulk-ingest-comparison.html'}")
         print("=" * 80)
 
 # Made with Bob

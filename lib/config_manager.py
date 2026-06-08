@@ -41,6 +41,10 @@ class ConfigManager:
             }}
         with open(yaml_path, "r") as f:
             return yaml.safe_load(f)
+    
+    def _get_default_dataset(self) -> str:
+        """Get the default dataset from datasets.yaml"""
+        return self.datasets_manifest.get("default", "msmarco")
 
     def _load_cluster_yaml(self) -> dict:
         """Load cluster configuration from config/cluster.yaml"""
@@ -140,15 +144,25 @@ class ConfigManager:
             print("❌ Invalid engine selection"); sys.exit(1)
         self.args.engine = engine_map[engine_choice]
 
-        print("\nSelect dataset to use:")
-        print("  1) cohere-1m (768 dimensions) - default")
-        print("  2) msmarco (1024 dimensions)")
+        default_dataset = self._get_default_dataset()
+        datasets = self.datasets_manifest.get("datasets", {})
+        dataset_list = list(datasets.keys())
         
-        dataset_choice = input("\nChoose dataset [1/2] (press Enter for default): ").strip()
-        if dataset_choice == "1" or dataset_choice == "":
-            self.args.dataset = "cohere-1m"
-        elif dataset_choice == "2":
-            self.args.dataset = "msmarco"
+        print("\nSelect dataset to use:")
+        for idx, dataset_name in enumerate(dataset_list, 1):
+            dataset_info = datasets[dataset_name]
+            dimension = dataset_info.get("dimension", "unknown")
+            default_marker = " - default" if dataset_name == default_dataset else ""
+            print(f"  {idx}) {dataset_name} ({dimension} dimensions){default_marker}")
+        
+        max_choice = len(dataset_list)
+        dataset_choice = input(f"\nChoose dataset [1-{max_choice}] (press Enter for default): ").strip()
+        
+        if dataset_choice == "" or dataset_choice == "1":
+            # Default or first option
+            self.args.dataset = default_dataset if dataset_choice == "" else dataset_list[0]
+        elif dataset_choice.isdigit() and 1 <= int(dataset_choice) <= max_choice:
+            self.args.dataset = dataset_list[int(dataset_choice) - 1]
         else:
             print("❌ Invalid dataset selection"); sys.exit(1)
 
@@ -180,7 +194,7 @@ class ConfigManager:
 
     def _display_configuration_and_confirm(self):
         """Displays config metrics and requests execution confirmation."""
-        dataset_name = self.args.dataset or "cohere-1m"
+        dataset_name = self.args.dataset or self._get_default_dataset()
         meta = self.datasets_manifest["datasets"].get(dataset_name, {"dimension": "Unknown", "format": "Unknown", "space_type": "Unknown"})
         
         print("\n==========================================")
