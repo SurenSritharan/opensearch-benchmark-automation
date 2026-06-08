@@ -182,170 +182,89 @@ The OpenSearch Benchmark Automation is a comprehensive testing framework that or
 
 ## Execution Flow State Diagram
 
-```
-                    ┌─────────────┐
-                    │   START     │
-                    └──────┬──────┘
-                           │
-                    ┌──────▼──────┐
-                    │ Parse CLI   │
-                    │ Arguments   │
-                    └──────┬──────┘
-                           │
-                    ┌──────▼──────┐
-                    │ Load Config │
-                    │ Files       │
-                    └──────┬──────┘
-                           │
-                    ┌──────▼──────┐
-                    │ Validate    │
-                    │ Settings    │
-                    └──────┬──────┘
-                           │
-                    ┌──────▼──────┐
-                    │ Display     │
-                    │ Config &    │
-                    │ Confirm     │
-                    └──────┬──────┘
-                           │
-                    ┌──────▼──────┐
-                    │ Initialize  │
-                    │ Components  │
-                    └──────┬──────┘
-                           │
-              ┌────────────▼────────────┐
-              │ Telemetry Enabled?      │
-              └────┬─────────────┬──────┘
-                   │ YES         │ NO
-            ┌──────▼──────┐      │
-            │ Collect     │      │
-            │ Pre-Run     │      │
-            │ Telemetry   │      │
-            └──────┬──────┘      │
-                   │             │
-                   └──────┬──────┘
-                          │
-                   ┌──────▼──────┐
-                   │ FOR EACH    │
-                   │ ENGINE      │
-                   └──────┬──────┘
-                          │
-                   ┌──────▼──────┐
-                   │ FOR EACH    │
-                   │ SCENARIO    │
-                   └──────┬──────┘
-                          │
-         ┌────────────────┼────────────────┐
-         │                │                │
-    ┌────▼────┐    ┌─────▼─────┐   ┌─────▼─────┐
-    │ Index   │    │ Bulk      │   │ Search    │
-    │ Creation│    │ Ingest    │   │ Tests     │
-    └────┬────┘    └─────┬─────┘   └─────┬─────┘
-         │               │               │
-         │        ┌──────▼──────┐        │
-         │        │ Start       │        │
-         │        │ Profiling   │        │
-         │        │ (if enabled)│        │
-         │        └──────┬──────┘        │
-         │               │               │
-         │        ┌──────▼──────┐        │
-         │        │ Start       │        │
-         │        │ Metrics     │        │
-         │        │ Collection  │        │
-         │        └──────┬──────┘        │
-         │               │               │
-         └───────────────┼───────────────┘
-                         │
-                  ┌──────▼──────┐
-                  │ Execute     │
-                  │ Benchmark   │
-                  │ via kubectl │
-                  └──────┬──────┘
-                         │
-                  ┌──────▼──────┐
-                  │ Success?    │
-                  └──┬───────┬──┘
-                     │ YES   │ NO
-              ┌──────▼──┐ ┌──▼──────┐
-              │ Stop   │ │ Capture │
-              │ Metrics│ │ Error   │
-              │ & Prof │ │ Logs    │
-              └──────┬─┘ └──┬──────┘
-                     │      │
-                     └──┬───┘
-                        │
-                 ┌──────▼──────┐
-                 │ Download    │
-                 │ Artifacts   │
-                 │ (test_run,  │
-                 │  logs)      │
-                 └──────┬──────┘
-                        │
-                 ┌──────▼──────┐
-                 │ Collect     │
-                 │ Server Logs │
-                 └──────┬──────┘
-                        │
-                 ┌──────▼──────┐
-                 │ Generate    │
-                 │ Flame Graphs│
-                 │ (if enabled)│
-                 └──────┬──────┘
-                        │
-                 ┌──────▼──────┐
-                 │ Generate    │
-                 │ Metrics     │
-                 │ Graphs      │
-                 └──────┬──────┘
-                        │
-                 ┌──────▼──────┐
-                 │ Generate    │
-                 │ HTML Report │
-                 └──────┬──────┘
-                        │
-                        │
-                 ┌──────▼──────┐
-                 │ More        │
-                 │ Scenarios?  │
-                 └──┬───────┬──┘
-                    │ YES   │ NO
-                    │       │
-                    └───┐   │
-                        │   │
-                 ┌──────▼───▼──┐
-                 │ More        │
-                 │ Engines?    │
-                 └──┬───────┬──┘
-                    │ YES   │ NO
-                    │       │
-                    └───┐   │
-                        │   │
-              ┌─────────▼───▼─────────┐
-              │ Telemetry Enabled?    │
-              └────┬─────────────┬────┘
-                   │ YES         │ NO
-            ┌──────▼──────┐      │
-            │ Collect     │      │
-            │ Post-Run    │      │
-            │ Telemetry   │      │
-            └──────┬──────┘      │
-                   │             │
-                   └──────┬──────┘
-                          │
-                   ┌──────▼──────┐
-                   │ Generate    │
-                   │ Comparison  │
-                   │ Dashboard   │
-                   └──────┬──────┘
-                          │
-                   ┌──────▼──────┐
-                   │ Generate    │
-                   │ Index Page  │
-                   └──────┬──────┘
-                          │
-                   ┌──────▼──────┐
-                   │   END       │
-                   └─────────────┘
+
+```mermaid
+graph TD
+    %% Node Definitions and Flow Transitions
+    Start[Start] --> ParseCLI[Parse CLI Arguments]
+    ParseCLI --> LoadConfig[Load Config Files]
+    LoadConfig --> ValidateSettings[Validate Settings]
+    ValidateSettings --> DisplayConfig[Display Config & Confirm]
+    DisplayConfig --> InitComponents[Initialize Components]
+    InitComponents --> TelemetryCheck1{Telemetry Enabled?}
+
+    TelemetryCheck1 -->|Yes| CollectPreRun[Collect Pre-Run Telemetry]
+    TelemetryCheck1 -->|No| ScenarioBranching{Scenario Type?}
+    CollectPreRun --> ScenarioBranching
+
+    ScenarioBranching -->|Index Creation| IndexCreation[Index Creation]
+    ScenarioBranching -->|Bulk Ingest| BulkIngest[Bulk Ingest]
+    ScenarioBranching -->|Search Tests| SearchTests[Search Tests]
+
+    IndexCreation --> ExecuteBenchmark[Execute Benchmark via kubectl]
+    BulkIngest --> ExecuteBenchmark
+    SearchTests --> ExecuteBenchmark
+
+    ExecuteBenchmark --> SuccessCheck{Success?}
+
+    SuccessCheck -->|Yes| StopMetrics[Stop Metrics & Profiling]
+    SuccessCheck -->|No| CaptureLogs[Capture Error Logs]
+
+    StopMetrics --> DownloadArtifacts[Download Artifacts]
+    CaptureLogs --> DownloadArtifacts
+
+    DownloadArtifacts --> GenFlameGraphs[Generate Flame Graphs]
+    GenFlameGraphs --> GenMetricsGraphs[Generate Metrics Graphs]
+    GenMetricsGraphs --> GenHTMLReport[Generate HTML Report]
+    GenHTMLReport --> MoreScenariosCheck{More Scenarios?}
+
+    MoreScenariosCheck -->|Yes| ScenarioBranching
+    MoreScenariosCheck -->|No| MoreEnginesCheck{More Engines?}
+
+    MoreEnginesCheck -->|Yes| ScenarioBranching
+    MoreEnginesCheck -->|No| TelemetryCheck2{Telemetry Enabled?}
+
+    TelemetryCheck2 -->|Yes| CollectPostRun[Collect Post-Run Telemetry]
+    TelemetryCheck2 -->|No| GenComparison[Generate Comparison Dashboard]
+
+    CollectPostRun --> GenComparison
+    GenComparison --> GenIndexPage[Generate Index Page]
+    GenIndexPage --> Complete[Complete & END]
+
+    %% Styles for Visual Clarity and Palette Balance
+    style Start fill:#C8E6C9,stroke:#388E3C,stroke-width:2px,color:#1B5E20
+    style Complete fill:#C8E6C9,stroke:#388E3C,stroke-width:2px,color:#1B5E20
+
+    %% Decision Diamonds (Yellow)
+    style TelemetryCheck1 fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
+    style ScenarioBranching fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
+    style SuccessCheck fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
+    style MoreScenariosCheck fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
+    style MoreEnginesCheck fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
+    style TelemetryCheck2 fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
+
+    %% CLI Setup Steps (Soft Blue)
+    style ParseCLI fill:#E3F2FD,stroke:#1976D2,stroke-width:1.5px,color:#0D47A1
+    style LoadConfig fill:#E3F2FD,stroke:#1976D2,stroke-width:1.5px,color:#0D47A1
+    style ValidateSettings fill:#E3F2FD,stroke:#1976D2,stroke-width:1.5px,color:#0D47A1
+    style DisplayConfig fill:#E3F2FD,stroke:#1976D2,stroke-width:1.5px,color:#0D47A1
+    style InitComponents fill:#E3F2FD,stroke:#1976D2,stroke-width:1.5px,color:#0D47A1
+
+    %% Execution Scenarios & Benchmarks (Teal)
+    style IndexCreation fill:#E0F7FA,stroke:#0097A7,stroke-width:1.5px,color:#006064
+    style BulkIngest fill:#E0F7FA,stroke:#0097A7,stroke-width:1.5px,color:#006064
+    style SearchTests fill:#E0F7FA,stroke:#0097A7,stroke-width:1.5px,color:#006064
+    style ExecuteBenchmark fill:#E0F7FA,stroke:#0097A7,stroke-width:2px,color:#006064
+
+    %% Failure Pipeline (Soft Red)
+    style CaptureLogs fill:#FFEBEE,stroke:#D32F2F,stroke-width:1.5px,color:#C62828
+
+    %% Reports / Outputs (Soft Purple)
+    style GenFlameGraphs fill:#F3E5F5,stroke:#7B1FA2,stroke-width:1.5px,color:#4A148C
+    style GenMetricsGraphs fill:#F3E5F5,stroke:#7B1FA2,stroke-width:1.5px,color:#4A148C
+    style GenHTMLReport fill:#F3E5F5,stroke:#7B1FA2,stroke-width:1.5px,color:#4A148C
+    style GenComparison fill:#F3E5F5,stroke:#7B1FA2,stroke-width:1.5px,color:#4A148C
+    style GenIndexPage fill:#F3E5F5,stroke:#7B1FA2,stroke-width:1.5px,color:#4A148C
 ```
 
 ---
