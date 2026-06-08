@@ -60,8 +60,12 @@ Options:
 - Performs force merge operation on the index
 - Optimizes segment structure
 
-### 4. Search Concurrency Matrix
-- Tests search performance with varying client counts (10, 20, 30, 40, 50, 60, 70, 80, 90, 100) ([config/datasets.yaml#L61-L77](https://github.com/SurenSritharan/opensearch-benchmark-automation/blob/main/config/datasets.yaml#L61-L77))
+### 4. Search Sweep Matrix
+- Tests search performance with sweep configuratons
+  - [10 clients, 100 warm-up iterations, 10000 queries]
+  - [20 clients, 100 warm-up iterations, 50000 queries]
+
+See for sweep configuration for details: ([config/datasets.yaml#L61-L77](https://github.com/SurenSritharan/opensearch-benchmark-automation/blob/main/config/datasets.yaml#L61-L77))
 
 ## 🔧 Configuration
 
