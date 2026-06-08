@@ -260,16 +260,11 @@ When `ENABLE_PROFILING=true`, the framework automatically:
 - `disk_io_*.log` - Disk I/O statistics before/after
 - `jvm_memory_*.log` - JVM heap and native memory snapshots
 
-**Viewing Flame Graphs:**
-Open the HTML files in any web browser to analyze CPU hotspots and call stacks.
-
 #### Example Flame Graphs
 
-Sample flame graphs showing cosine similarity operations during bulk ingestion are available in [`docs/flame-graphs/`](docs/flame-graphs/):
-
-**Bulk Ingestion (MS MARCO dataset with cosine similarity):**
-- [JVector Bulk Ingest](docs/flame-graphs/jvector-bulk-ingest-cosine.html) - Shows JVector's cosine similarity computation during vector indexing
-- [Lucene Bulk Ingest](docs/flame-graphs/lucene-bulk-ingest-cosine.html) - Shows Lucene's cosine similarity computation during vector indexing
+**Bulk Ingestion (MS MARCO dataset):**
+- [JVector Bulk Ingest](https://htmlpreview.github.io/?https://github.com/SurenSritharan/opensearch-benchmark-automation/blob/telemetry-changes/docs/flame-graphs/jvector-bulk-ingest.html)
+- [Lucene Bulk Ingest](https://htmlpreview.github.io/?https://github.com/SurenSritharan/opensearch-benchmark-automation/blob/telemetry-changes/docs/flame-graphs/lucene-bulk-ingest.html)
 
 These flame graphs highlight the CPU time spent in cosine similarity calculations during index building, which is critical for understanding vector search performance bottlenecks.
 
