@@ -61,7 +61,7 @@ Options:
 - Optimizes segment structure
 
 ### 4. Search Concurrency Matrix
-- Tests search performance with varying client counts (10, 20, 30, 40, 50, 60, 70, 80, 90, 100)
+- Tests search performance with varying client counts (10, 20, 30, 40, 50, 60, 70, 80, 90, 100) ([config/datasets.yaml#L61-L77](https://github.com/SurenSritharan/opensearch-benchmark-automation/blob/main/config/datasets.yaml#L61-L77))
 
 ## 🔧 Configuration
 
