@@ -62,8 +62,13 @@ gke-manifest/
 ├── opensearch-jvector-data-nodes.yaml         # JVector data nodes
 ├── opensearch-standard-cluster-manager.yaml   # Standard cluster manager (template for FAISS/Lucene)
 ├── opensearch-standard-data-nodes.yaml        # Standard data nodes (template for FAISS/Lucene)
-├── deploy-namespace-cluster.sh                # Unified deployment script
-└── README-NAMESPACE-DEPLOYMENT.md             # This file
+├── opensearch-benchmark-client.yaml           # Benchmark client pod
+├── deploy-namespace-cluster.sh                # Deploy single namespace
+├── deploy-all-clusters.sh                     # Deploy all namespaces
+├── destroy-namespace-cluster.sh               # Destroy single namespace
+├── destroy-all-clusters.sh                    # Destroy all namespaces
+├── generate-certs.sh                          # Generate SSL certificates
+└── README.md                                  # This file
 ```
 
 **Note**: The "standard" manifests use `${NAMESPACE}` as a template variable that gets substituted during deployment.

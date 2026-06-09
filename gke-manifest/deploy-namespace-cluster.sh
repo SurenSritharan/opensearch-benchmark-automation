@@ -67,12 +67,22 @@ if ! kubectl get secret opensearch-shared-certs -n $NAMESPACE &> /dev/null; then
             sed "s/namespace: os-jvector/namespace: $NAMESPACE/" | \
             kubectl apply -f -
     else
-        echo "Warning: No shared certificates found. You may need to create them manually."
-        echo "Run the following to generate certificates:"
-        echo "  kubectl create secret generic opensearch-shared-certs -n $NAMESPACE \\"
-        echo "    --from-file=esnode.pem=<path-to-cert> \\"
-        echo "    --from-file=esnode-key.pem=<path-to-key> \\"
-        echo "    --from-file=root-ca.pem=<path-to-ca>"
+        echo "No shared certificates found. Generating new certificates..."
+        # Run generate-certs.sh from the same directory
+        if [ -f "$SCRIPT_DIR/generate-certs.sh" ]; then
+            "$SCRIPT_DIR/generate-certs.sh"
+            # Copy to current namespace if not os-jvector
+            if [ "$NAMESPACE" != "os-jvector" ]; then
+                echo "Copying certificates to $NAMESPACE namespace..."
+                kubectl get secret opensearch-shared-certs -n os-jvector -o yaml | \
+                    sed "s/namespace: os-jvector/namespace: $NAMESPACE/" | \
+                    kubectl apply -f -
+            fi
+        else
+            echo "Warning: generate-certs.sh not found. You may need to create certificates manually."
+            echo "Run the following to generate certificates:"
+            echo "  ./generate-certs.sh"
+        fi
     fi
 else
     echo "Shared certificates already exist in $NAMESPACE"
