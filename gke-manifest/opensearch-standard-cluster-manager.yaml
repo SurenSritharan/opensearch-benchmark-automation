@@ -20,7 +20,7 @@ data:
     
     plugins.security.disabled: false
     plugins.security.allow_default_init_securityindex: true
-    plugins.security.allow_unsafe_democertificates: true
+    plugins.security.allow_unsafe_democertificates: false
     
     plugins.security.ssl.http.enabled: true
     plugins.security.ssl.http.pemcert_filepath: certs/esnode.pem
@@ -34,10 +34,10 @@ data:
     plugins.security.ssl.transport.resolve_hostname: false
     
     plugins.security.authcz.admin_dn:
-      - CN=kirk,OU=client,O=client,L=test,C=de
+      - "CN=admin,OU=Benchmark,O=OpenSearch,L=San Francisco,ST=CA,C=US"
     
     plugins.security.nodes_dn:
-      - "CN=opensearch-node,OU=SSL,O=Test,L=Test,ST=Test,C=DE"
+      - "CN=opensearch-node,OU=Benchmark,O=OpenSearch,L=San Francisco,ST=CA,C=US"
     
     action.auto_create_index: true
 

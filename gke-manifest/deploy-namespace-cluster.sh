@@ -57,35 +57,59 @@ echo "Cleanup complete. Proceeding with fresh deployment..."
 echo ""
 
 # Create shared certificates secret if it doesn't exist
-echo "Checking for shared certificates..."
+echo "Checking for certificates in $NAMESPACE namespace..."
 if ! kubectl get secret opensearch-shared-certs -n $NAMESPACE &> /dev/null; then
-    echo "Creating shared certificates secret..."
-    # Check if certs exist in os-jvector namespace to copy from
-    if kubectl get secret opensearch-shared-certs -n os-jvector &> /dev/null; then
-        echo "Copying certificates from os-jvector namespace..."
-        kubectl get secret opensearch-shared-certs -n os-jvector -o yaml | \
-            sed "s/namespace: os-jvector/namespace: $NAMESPACE/" | \
-            kubectl apply -f -
-    else
-        echo "No shared certificates found. Generating new certificates..."
-        # Run generate-certs.sh from the same directory
-        if [ -f "$SCRIPT_DIR/generate-certs.sh" ]; then
-            "$SCRIPT_DIR/generate-certs.sh"
-            # Copy to current namespace if not os-jvector
-            if [ "$NAMESPACE" != "os-jvector" ]; then
-                echo "Copying certificates to $NAMESPACE namespace..."
-                kubectl get secret opensearch-shared-certs -n os-jvector -o yaml | \
-                    sed "s/namespace: os-jvector/namespace: $NAMESPACE/" | \
-                    kubectl apply -f -
-            fi
-        else
-            echo "Warning: generate-certs.sh not found. You may need to create certificates manually."
-            echo "Run the following to generate certificates:"
-            echo "  ./generate-certs.sh"
+    echo "Generating new certificates for $NAMESPACE namespace..."
+    
+    # Run generate-certs.sh from the same directory
+    if [ -f "$SCRIPT_DIR/generate-certs.sh" ]; then
+        "$SCRIPT_DIR/generate-certs.sh"
+        
+        # Verify certificate files were created
+        CERT_DIR="$SCRIPT_DIR/certs"
+        if [ ! -f "$CERT_DIR/root-ca.pem" ] || [ ! -f "$CERT_DIR/esnode.pem" ] || [ ! -f "$CERT_DIR/admin.pem" ]; then
+            echo "❌ ERROR: Certificate files not found after generation"
+            echo "   Expected files in: $CERT_DIR"
+            echo "   - root-ca.pem, root-ca-key.pem"
+            echo "   - esnode.pem, esnode-key.pem"
+            echo "   - admin.pem, admin-key.pem"
+            exit 1
         fi
+        
+        # Create Kubernetes secret in the target namespace
+        echo "Creating Kubernetes secret in $NAMESPACE namespace..."
+        kubectl create secret generic opensearch-shared-certs \
+            --from-file="$CERT_DIR/root-ca.pem" \
+            --from-file="$CERT_DIR/root-ca-key.pem" \
+            --from-file="$CERT_DIR/esnode.pem" \
+            --from-file="$CERT_DIR/esnode-key.pem" \
+            --from-file="$CERT_DIR/admin.pem" \
+            --from-file="$CERT_DIR/admin-key.pem" \
+            -n $NAMESPACE \
+            --dry-run=client -o yaml | kubectl apply -f -
+        
+        # Verify secret was created
+        if ! kubectl get secret opensearch-shared-certs -n $NAMESPACE &> /dev/null; then
+            echo "❌ ERROR: Failed to create certificates secret in $NAMESPACE namespace"
+            exit 1
+        fi
+        echo "✅ Certificates secret created successfully in $NAMESPACE namespace"
+    else
+        echo "❌ ERROR: generate-certs.sh not found at $SCRIPT_DIR/generate-certs.sh"
+        echo "   Cannot proceed without certificates"
+        exit 1
     fi
+    
+    # Final verification: Ensure secret exists in target namespace
+    echo "Verifying certificates in $NAMESPACE namespace..."
+    if ! kubectl get secret opensearch-shared-certs -n $NAMESPACE &> /dev/null; then
+        echo "❌ ERROR: Certificate secret not found in $NAMESPACE namespace"
+        echo "   Deployment cannot proceed without certificates"
+        exit 1
+    fi
+    echo "✅ Certificates verified in $NAMESPACE namespace"
 else
-    echo "Shared certificates already exist in $NAMESPACE"
+    echo "✅ Shared certificates already exist in $NAMESPACE"
 fi
 
 # Deploy based on namespace type
