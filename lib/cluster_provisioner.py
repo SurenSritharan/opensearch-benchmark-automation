@@ -165,6 +165,9 @@ class ClusterProvisioner:
         
         if is_healthy:
             print(f"  ✅ {namespace}: Running ({pod_count} pods)\n")
+            # Wait for benchmark client to be fully initialized
+            if not self._wait_for_benchmark_client_ready(namespace):
+                return False
             return True
         
         # Cluster needs provisioning
@@ -190,11 +193,76 @@ class ClusterProvisioner:
         is_healthy, pod_count = self.check_cluster_health(namespace)
         if is_healthy:
             print(f"  ✅ {namespace}: Ready ({pod_count} pods)\n")
+            # Wait for benchmark client to be fully initialized
+            if not self._wait_for_benchmark_client_ready(namespace):
+                return False
             return True
         else:
             print(f"  ⚠️  {namespace}: Still starting up (may need more time)")
             print(f"   Monitor with: kubectl get pods -n {namespace} -w\n")
             return False
+    
+    def _wait_for_benchmark_client_ready(self, namespace: str, timeout: int = 180) -> bool:
+        """
+        Wait for the benchmark client pod to be fully initialized.
+        This ensures the git repository has been cloned successfully and the pod is ready for commands.
+        
+        Args:
+            namespace: Kubernetes namespace
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            True if benchmark client is ready, False otherwise
+        """
+        pod_name = "opensearch-benchmark-client"
+        workload_path = "/datasets/opensearch-benchmark-workloads"
+        
+        print(f"  🔄 Waiting for benchmark client to initialize...")
+        
+        start_time = time.time()
+        last_status = ""
+        
+        while time.time() - start_time < timeout:
+            # Check if the git repository has been cloned successfully
+            # We verify:
+            # 1. Directory exists
+            # 2. It's a valid git repository (.git directory exists)
+            # 3. It has at least one commit (not an empty/failed clone)
+            cmd = [
+                "kubectl", "exec", "-n", namespace, pod_name,
+                "--", "sh", "-c",
+                f"test -d {workload_path}/.git && cd {workload_path} && git rev-parse HEAD"
+            ]
+            
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                if result.returncode == 0 and result.stdout.strip():
+                    # Successfully got a git commit hash - repository is ready
+                    commit_hash = result.stdout.strip()[:8]
+                    print(f"  ✅ Benchmark client initialized (commit: {commit_hash})\n")
+                    return True
+                else:
+                    # Command failed or no output - still initializing
+                    current_status = "Cloning repository..."
+                    if current_status != last_status:
+                        print(f"     {current_status}")
+                        last_status = current_status
+            except subprocess.TimeoutExpired:
+                current_status = "Pod not responding yet..."
+                if current_status != last_status:
+                    print(f"     {current_status}")
+                    last_status = current_status
+            except subprocess.CalledProcessError:
+                # Pod exists but command failed - still initializing
+                pass
+            
+            # Wait a bit before checking again
+            time.sleep(5)
+        
+        print(f"  ⚠️  Benchmark client initialization timed out after {timeout}s")
+        print(f"     The workload repository may still be cloning or failed to clone.")
+        print(f"     Check pod logs: kubectl logs -n {namespace} {pod_name}\n")
+        return False
 
 
 # Made with Bob
