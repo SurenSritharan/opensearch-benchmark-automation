@@ -12,6 +12,7 @@ from lib.benchmark_executor import BenchmarkExecutor
 from lib.profiling_manager import ProfilingManager
 from lib.metrics_collector import MetricsCollector
 from lib.server_log_collector import ServerLogCollector
+from lib.cluster_provisioner import ClusterProvisioner
 
 def print_header(dataset_name: str):
     """Prints the primary execution header banner at framework startup."""
@@ -223,12 +224,19 @@ def main():
     config = ConfigManager()
     dataset = DatasetManager(dataset_name=config.args.dataset)
     profiler = ProfilingManager(config)
+    provisioner = ClusterProvisioner()
 
     print_header(dataset.dataset_name)
 
     # Sweep sequentially across target engine nodes (e.g., jvector, faiss, lucene)
     for engine in config.target_engines:
         ns = f"os-{engine}"
+        
+        # Check if cluster is provisioned, provision if needed
+        auto_provision = config.args.quiet if hasattr(config.args, 'quiet') else False
+        if not provisioner.ensure_cluster_ready(ns, auto_provision=auto_provision):
+            print(f"⚠️  Skipping {engine} - cluster not ready\n")
+            continue
         engine_dir = config.results_root / f"{dataset.dataset_name}-{engine}"
         
         # Get default parameters from dataset config
@@ -428,6 +436,10 @@ def main():
         except Exception as e:
             print(f"⚠️  Warning: Failed to collect server logs: {e}")
             print(f"   Continuing with benchmark completion...")
+        
+        # Deprovision cluster if configured
+        if config.auto_deprovision:
+            provisioner.deprovision_namespace(ns)
 
     print(
         f"\n✅ Matrix Finished. Output stored in: {config.results_root}"

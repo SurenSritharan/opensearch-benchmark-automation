@@ -33,4 +33,10 @@ metrics:
   interval_seconds: 10  # Seconds between metric samples (default: 10)
   generate_graphs: true  # Automatically generate graphs after collection (default: true)
 
+# Cluster provisioning configuration
+# Control automatic provisioning and deprovisioning behavior
+provisioning:
+  auto_provision: false  # Automatically provision clusters without prompting (default: false)
+  auto_deprovision: false  # Automatically deprovision cluster after benchmark completes (default: false)
+
 # Made with Bob

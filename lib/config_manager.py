@@ -24,6 +24,11 @@ class ConfigManager:
         self.datasets_manifest = self._load_datasets_yaml()
         self.cluster_config = self._load_cluster_yaml()
         
+        # Get provisioning settings from cluster config or CLI args
+        provisioning_config = self.cluster_config.get("provisioning", {})
+        self.auto_provision = self.args.quiet or provisioning_config.get("auto_provision", False)
+        self.auto_deprovision = self.args.auto_deprovision or provisioning_config.get("auto_deprovision", False)
+        
         # Determine execution runtime mode: Interactive vs Programmatic Flags
         if len(sys.argv) == 1:
             self._run_interactive_menu()
@@ -94,6 +99,8 @@ class ConfigManager:
                           help="enable resource metrics collection and graphing")
         parser.add_argument("--quiet", "-q", action="store_true", default=False,
                           help="Skip confirmation prompt and proceed automatically")
+        parser.add_argument("--auto-deprovision", action="store_true", default=False,
+                          help="Automatically deprovision cluster after benchmark completes")
         parser.add_argument("--results-dir", type=str, default=None,
                           help="Use specific results directory (for parallel execution)")
         parser.add_argument("--help", "-h", action="store_true")
