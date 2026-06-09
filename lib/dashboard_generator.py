@@ -297,6 +297,17 @@ class DashboardGenerator:
                 bulk_winner = max(successful_bulk,
                                 key=lambda e: all_data[e]['bulk_ingest']['throughput'], default=None)
         
+        # Force merge winner: fastest total time (lowest is best)
+        force_merge_winner = None
+        if force_merge_available:
+            successful_merge = [e for e in self.engines
+                              if 'force_merge' in all_data.get(e, {})
+                              and not all_data[e]['force_merge'].get('failed', False)
+                              and 'total_time' in all_data[e]['force_merge']]
+            if successful_merge:
+                force_merge_winner = min(successful_merge,
+                                       key=lambda e: all_data[e]['force_merge']['total_time'], default=None)
+        
         search_winner = None
         if search_available:
             # Check for direct search results first
@@ -610,10 +621,13 @@ class DashboardGenerator:
                     else:
                         # Handle both old format (service_time) and new format (comprehensive metrics)
                         if 'total_time' in d:
+                            is_winner = engine == force_merge_winner
+                            winner_class = 'winner' if is_winner else ''
+                            
                             html += f'''
                     <tr onclick="window.location.href='{self.dataset_name}-{engine}/scenario-3-force-merge/results.html'">
                         <td><span class="engine-badge {engine}">{engine.upper()}</span></td>
-                        <td><span class="metric-value">{d['total_time']:.2f}</span><span class="metric-unit">s</span></td>
+                        <td><span class="metric-value {winner_class}">{d['total_time']:.2f}</span><span class="metric-unit">s</span></td>
                         <td><span class="metric-value">{d['merge_time']:.2f}</span><span class="metric-unit">s</span></td>
                         <td><span class="metric-value">{d['merge_count']}</span></td>
                         <td><span class="metric-value">{d['merge_throttle_time']:.2f}</span><span class="metric-unit">s</span></td>
@@ -640,6 +654,16 @@ class DashboardGenerator:
         
         # Search Section (only if data exists) - Runs after Force Merge
         if search_available:
+            # Determine winners for each sweep number (highest throughput)
+            sweep_winners = {}  # sweep_num -> engine
+            for engine in self.engines:
+                sweeps = all_data.get(engine, {}).get('search_sweeps', [])
+                for sweep in sweeps:
+                    if not sweep.get('failed', False) and 'throughput' in sweep:
+                        sweep_num = sweep['sweep']
+                        if sweep_num not in sweep_winners or sweep['throughput'] > sweep_winners[sweep_num][1]:
+                            sweep_winners[sweep_num] = (engine, sweep['throughput'])
+            
             html += '''
         <div class="section" onclick="window.location.href='search-comparison.html'">
             <div class="section-header">
@@ -706,6 +730,12 @@ class DashboardGenerator:
                     </div>
 '''
                         else:
+                            # Check if this sweep is the winner
+                            sweep_num = sweep['sweep']
+                            is_winner = sweep_num in sweep_winners and sweep_winners[sweep_num][0] == engine
+                            winner_indicator = ' 🏆' if is_winner else ''
+                            winner_style = 'color: #52c41a; font-weight: 700;' if is_winner else ''
+                            
                             # Format sweep configuration for display
                             config_str = ""
                             if 'config' in sweep and sweep['config']:
@@ -720,7 +750,7 @@ class DashboardGenerator:
                             html += f'''
                     <div class="sweep-card" onclick="event.stopPropagation(); window.location.href='{self.dataset_name}-{engine}/{scenario_name}/sweep-{sweep['sweep']}/results.html'">
                         <div class="sweep-label">Sweep {sweep['sweep']}</div>
-                        <div class="sweep-value">{sweep['throughput']:.1f} <span style="font-size: 12px; color: rgba(255, 255, 255, 0.5);">ops/s</span></div>
+                        <div class="sweep-value" style="{winner_style}">{sweep['throughput']:.1f}{winner_indicator} <span style="font-size: 12px; color: rgba(255, 255, 255, 0.5);">ops/s</span></div>
                         <div style="font-size: 11px; color: rgba(255, 255, 255, 0.5); margin-top: 4px;">
                             P50: {sweep['p50']:.1f}ms | P99: {sweep['p99']:.1f}ms
                         </div>
