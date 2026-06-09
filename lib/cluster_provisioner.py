@@ -171,8 +171,8 @@ class ClusterProvisioner:
         print(f"  ❌ {namespace}: Not provisioned\n")
         
         if not auto_provision:
-            response = input(f"Would you like to provision {namespace} now? (yes/no): ").strip().lower()
-            if response != "yes":
+            response = input(f"Would you like to provision {namespace} now? (y/n): ").strip().lower()
+            if response not in ["y", "yes"]:
                 print(f"\n❌ Cluster provisioning skipped. Please provision manually:")
                 print(f"   cd gke-manifest")
                 print(f"   ./deploy-namespace-cluster.sh {namespace}\n")

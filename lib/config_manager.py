@@ -234,7 +234,7 @@ class ConfigManager:
             return
         
         confirm = input("Launch baseline suite sweep? (y/n): ").strip().lower()
-        if confirm != 'y' and confirm != 'yes':
+        if confirm not in ['y', 'yes']:
             print("Execution cancelled.")
             sys.exit(0)
             
