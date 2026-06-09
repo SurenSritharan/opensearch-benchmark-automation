@@ -28,26 +28,45 @@ This deployment uses **two separate StatefulSets** for optimal performance testi
 └─────────────────────────────────────────────┘
 ```
 
-## Services
-
-| Service Name | Type | Selector | Purpose |
-|-------------|------|----------|---------|
-| `opensearch-cluster` | ClusterIP | `app=opensearch-data` | **For benchmarking** - Routes to data nodes only |
-| `opensearch-data` | Headless | `app=opensearch-data` | Data node discovery |
-| `opensearch-cluster-manager` | Headless | `app=opensearch-cluster-manager` | Cluster manager discovery |
-
-## Files
-
-- `opensearch-jvector-cluster-manager.yaml` - Cluster manager StatefulSet
-- `opensearch-jvector-data-nodes.yaml` - Data nodes StatefulSet
-- `deploy-separated-cluster.sh` - Deployment script
-
-## Deployment
+## Quick Start
 
 ```bash
-cd gke-manifest
-./deploy-separated-cluster.sh
+# Deploy single namespace
+./deploy-namespace-cluster.sh os-jvector
+./deploy-namespace-cluster.sh os-faiss
+./deploy-namespace-cluster.sh os-lucene
+
+# Deploy all namespaces
+./deploy-all-clusters.sh
+
+# Destroy single namespace
+./destroy-namespace-cluster.sh os-jvector
+
+# Destroy all namespaces
+./destroy-all-clusters.sh
 ```
+
+### Why FAISS and Lucene Share Configuration
+
+Both FAISS and Lucene use the **same OpenSearch KNN plugin**. The difference is in the **index configuration** (specified when creating indices), not in the cluster setup. 
+
+- ✅ **One set of manifests** works for both os-faiss and os-lucene
+- ✅ **Namespace substitution** handles the deployment differences
+- ✅ **Easier maintenance** - update once, deploy to both
+
+## File Structure
+
+```
+gke-manifest/
+├── opensearch-jvector-cluster-manager.yaml    # JVector cluster manager
+├── opensearch-jvector-data-nodes.yaml         # JVector data nodes
+├── opensearch-standard-cluster-manager.yaml   # Standard cluster manager (template for FAISS/Lucene)
+├── opensearch-standard-data-nodes.yaml        # Standard data nodes (template for FAISS/Lucene)
+├── deploy-namespace-cluster.sh                # Unified deployment script
+└── README-NAMESPACE-DEPLOYMENT.md             # This file
+```
+
+**Note**: The "standard" manifests use `${NAMESPACE}` as a template variable that gets substituted during deployment.
 
 The script will:
 1. Clean up any existing cluster
@@ -56,6 +75,15 @@ The script will:
 4. Deploy data nodes
 5. Wait for all data nodes to be ready
 6. Verify cluster health and node roles
+
+
+## Services
+
+| Service Name | Type | Selector | Purpose |
+|-------------|------|----------|---------|
+| `opensearch-cluster` | ClusterIP | `app=opensearch-data` | **For benchmarking** - Routes to data nodes only |
+| `opensearch-data` | Headless | `app=opensearch-data` | Data node discovery |
+| `opensearch-cluster-manager` | Headless | `app=opensearch-cluster-manager` | Cluster manager discovery |
 
 ## Verification
 
@@ -82,7 +110,7 @@ ip          heap.percent ram.percent cpu load_1m load_5m load_15m node.role node
 
 ## Benchmarking
 
-Use the existing service endpoint:
+Use `opensearch-cluster` service (routes to data nodes only):
 ```bash
 opensearch-benchmark run \
   --target-host=opensearch-cluster:9200 \
@@ -99,7 +127,7 @@ The `opensearch-cluster` service automatically routes **only to data nodes**, en
 
 Scale data nodes independently:
 ```bash
-kubectl scale statefulset opensearch-data -n os-jvector --replicas=5
+kubectl scale statefulset opensearch-data -n os-jvector --replicas=3
 ```
 
 The cluster manager remains unaffected.
@@ -128,3 +156,16 @@ Check pod status:
 ```bash
 kubectl get pods -n os-jvector -l app=opensearch-cluster-manager
 kubectl get pods -n os-jvector -l app=opensearch-data
+```
+
+## Benefits
+
+✅ Separated cluster manager and data nodes  
+✅ Independent data node scaling  
+✅ Template-based deployment (FAISS/Lucene share config)  
+✅ Automated certificate management  
+✅ Production-ready architecture  
+
+---
+
+**Made with Bob**
