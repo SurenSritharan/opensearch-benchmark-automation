@@ -40,11 +40,12 @@ class ParallelBenchmarkRunner:
         
         # Build command to run benchmark for single engine
         # Pass the shared results directory to ensure all results go to the same folder
+        dataset = self.config.args.dataset if self.config.args.dataset else self.config.datasets_manifest.get("default", "msmarco")
         cmd = [
             sys.executable,  # Use same Python interpreter
             "run_benchmark.py",
             "--engine", engine,
-            "--dataset", self.config.args.dataset or "cohere-1m",
+            "--dataset", dataset,
             "--quiet",  # Skip confirmation prompt for parallel execution
             "--results-dir", str(self.results_root),  # Share results directory across all engines
         ]
@@ -133,8 +134,9 @@ class ParallelBenchmarkRunner:
         print("=" * 80)
         print(f"🚀 PARALLEL BENCHMARK EXECUTION")
         print("=" * 80)
+        dataset = self.config.args.dataset if self.config.args.dataset else self.config.datasets_manifest.get("default", "msmarco")
         print(f"Engines: {', '.join(engines)}")
-        print(f"Dataset: {self.config.args.dataset or 'cohere-1m'}")
+        print(f"Dataset: {dataset}")
         print(f"Scenarios: {', '.join(self.config.target_scenarios)}")
         print(f"Results: {self.results_root}")
         print(f"Logs: {self.logs_dir}")
