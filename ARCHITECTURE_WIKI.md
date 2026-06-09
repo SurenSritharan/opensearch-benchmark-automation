@@ -201,21 +201,29 @@ graph TD
     ScenarioBranching -->|Bulk Ingest| BulkIngest[Bulk Ingest]
     ScenarioBranching -->|Search Tests| SearchTests[Search Tests]
 
-    IndexCreation --> ExecuteBenchmark[Execute Benchmark via kubectl]
-    BulkIngest --> ExecuteBenchmark
-    SearchTests --> ExecuteBenchmark
+    IndexCreation --> StartParallelExecution[Start Parallel Execution]
+    BulkIngest --> StartParallelExecution
+    SearchTests --> StartParallelExecution
 
-    ExecuteBenchmark --> SuccessCheck{Success?}
+    StartParallelExecution --> ExecuteBenchmark[Execute Benchmark]
+    StartParallelExecution --> StartProfiling[Start Profiling Thread]
+    StartParallelExecution --> StartMetrics[Start Metrics Collection]
 
-    SuccessCheck -->|Yes| StopMetrics[Stop Metrics & Profiling]
+    ExecuteBenchmark --> BenchmarkComplete[Benchmark Complete]
+    StartProfiling --> ProfilingComplete[Profiling Complete]
+    StartMetrics --> MetricsComplete[Metrics Complete]
+
+    BenchmarkComplete --> WaitForThreads[Wait for All Threads]
+    ProfilingComplete --> WaitForThreads
+    MetricsComplete --> WaitForThreads
+
+    WaitForThreads --> SuccessCheck{Success?}
+
+    SuccessCheck -->|Yes| DownloadArtifacts[Download Artifacts]
     SuccessCheck -->|No| CaptureLogs[Capture Error Logs]
 
-    StopMetrics --> DownloadArtifacts[Download Artifacts]
-    CaptureLogs --> DownloadArtifacts
-
-    DownloadArtifacts --> GenFlameGraphs[Generate Flame Graphs]
-    GenFlameGraphs --> GenMetricsGraphs[Generate Metrics Graphs]
-    GenMetricsGraphs --> GenHTMLReport[Generate HTML Report]
+    DownloadArtifacts --> GenHTMLReport[Generate HTML Report]
+    CaptureLogs --> GenHTMLReport
     GenHTMLReport --> MoreScenariosCheck{More Scenarios?}
 
     MoreScenariosCheck -->|Yes| ScenarioBranching
@@ -539,10 +547,7 @@ opensearch-benchmark-automation/
 └── Documentation/
     ├── README.md
     ├── ARCHITECTURE_WIKI.md  # This file
-    ├── TELEMETRY_COLLECTION_GUIDE.md
-    ├── METRICS_COLLECTION_GUIDE.md
-    ├── PROFILING_TROUBLESHOOTING.md
-    └── PARALLEL_EXECUTION_GUIDE.md
+
 ```
 
 ---
