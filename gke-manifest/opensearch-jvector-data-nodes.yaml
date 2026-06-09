@@ -59,6 +59,9 @@ data:
     knn.cache.item.expiry.enabled: false
     knn.cache.item.expiry.minutes: "180m"
     knn.circuit_breaker.triggered: "false"
+
+    prometheus.indices: false    
+    prometheus.nodes.filter: "_local"
 ---
 apiVersion: v1
 kind: Service
@@ -116,20 +119,23 @@ spec:
         cloud.google.com/gke-nodepool: server-pool
       
       initContainers:
-        - name: install-jvector-plugin
+        - name: install-plugins
           image: opensearchproject/opensearch:3.6.0
+          env:
+            - name: JVECTOR_PLUGIN_VERSION
+              value: "3.6.0.0"
+            - name: PROMETHEUS_PLUGIN_VERSION
+              value: "3.6.0.0"
           command:
             - bash
             - -c
             - |
               set -e
-              echo "Installing JVector Plugin on data node..."
-              
-              # Copy base plugins from image to shared volume
+              echo "Staging base OpenSearch plugins for version ${OPENSEARCH_VERSION}..."
               cp -r /usr/share/opensearch/plugins/* /mnt/plugins/
               
-              # Download JVector plugin
-              curl -sL https://repo1.maven.org/maven2/org/opensearch/plugin/opensearch-jvector-plugin/3.6.0.0/opensearch-jvector-plugin-3.6.0.0.zip -o /tmp/jvector.zip
+              echo "Downloading and installing JVector Plugin..."
+              curl -sL "https://repo1.maven.org/maven2/org/opensearch/plugin/opensearch-jvector-plugin/${JVECTOR_PLUGIN_VERSION}/opensearch-jvector-plugin-${JVECTOR_PLUGIN_VERSION}.zip" -o /tmp/jvector.zip
               
               # Remove conflicting plugins
               rm -rf /mnt/plugins/opensearch-neural-search
@@ -140,6 +146,15 @@ spec:
               cd /mnt/plugins/opensearch-jvector
               jar xf /tmp/jvector.zip
               echo "JVector plugin installed successfully!"
+
+              echo "Downloading and installing Prometheus Exporter..."
+              curl -sL "https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/${PROMETHEUS_PLUGIN_VERSION}/prometheus-exporter-${PROMETHEUS_PLUGIN_VERSION}.zip" -o /tmp/prometheus-exporter.zip
+              
+              mkdir -p /mnt/plugins/prometheus-exporter
+              cd /mnt/plugins/prometheus-exporter
+              jar xf /tmp/prometheus-exporter.zip
+              echo "Prometheus plugin installed successfully!"
+              
           volumeMounts:
             - name: plugins
               mountPath: /mnt/plugins
