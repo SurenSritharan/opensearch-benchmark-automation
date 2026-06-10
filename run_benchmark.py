@@ -429,10 +429,10 @@ def main():
         # Collect server logs from OpenSearch pods on server-pool
         try:
             print(f"\n{'='*66}")
-            print(f"📋 Collecting Server Logs from {ns} ... ")
+            print(f"📋 Collecting Server Logs and GC Logs from {ns} ... ")
             print(f"{'='*66}")
             log_collector = ServerLogCollector(namespace=ns, results_dir=config.results_root)
-            log_collector.collect_logs()
+            log_collector.collect_all_logs()
         except Exception as e:
             print(f"⚠️  Warning: Failed to collect server logs: {e}")
             print(f"   Continuing with benchmark completion...")
