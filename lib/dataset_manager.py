@@ -83,7 +83,7 @@ class DatasetManager:
         with open(path, "r") as f:
             return yaml.safe_load(f)
 
-    def pull_workload_repo(self, namespace: str, pod_name: str = "opensearch-benchmark-client"):
+    def pull_workload_repo(self, namespace: str, pod_name: str = "opensearch-benchmark-client-0"):
         """Pull latest changes from the workload repository on the pod."""
         
         remote_base = self.base_workload_path

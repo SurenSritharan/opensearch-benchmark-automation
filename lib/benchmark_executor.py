@@ -16,7 +16,7 @@ class BenchmarkExecutor:
         self.engine = engine
         self.namespace = namespace
         self.results_dir = results_dir
-        self.pod_name = "opensearch-benchmark-client"
+        self.pod_name = "opensearch-benchmark-client-0"
         self.config = config
         self.dataset_name = dataset_name
         self.default_params = default_params or {}

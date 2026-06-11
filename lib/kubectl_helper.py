@@ -2,8 +2,7 @@
 
 import subprocess
 import json
-from typing import List, Dict, Any, Optional
-
+from typing import List, Dict, Any, Optional, Tuple
 
 class KubectlHelper:
     """Provides clean, reusable methods for common kubectl operations."""
@@ -112,5 +111,150 @@ class KubectlHelper:
             return result.stdout.strip()
         except subprocess.CalledProcessError:
             return "Unknown"
+    
+    @staticmethod
+    def get_deployments(namespace: str) -> List[Dict[str, Any]]:
+        """
+        Get list of deployments in a namespace.
+        
+        Args:
+            namespace: Kubernetes namespace
+            
+        Returns:
+            List of deployment objects as dictionaries
+        """
+        cmd = ["kubectl", "get", "deployments", "-n", namespace, "-o", "json"]
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            deployments_data = json.loads(result.stdout)
+            return deployments_data.get("items", [])
+        except subprocess.CalledProcessError as e:
+            print(f"  ❌ Failed to list deployments: {e.stderr}")
+            return []
+        except json.JSONDecodeError as e:
+            print(f"  ❌ Failed to parse kubectl output: {str(e)}")
+            return []
+    
+    @staticmethod
+    def get_statefulsets(namespace: str) -> List[Dict[str, Any]]:
+        """
+        Get list of statefulsets in a namespace.
+        
+        Args:
+            namespace: Kubernetes namespace
+            
+        Returns:
+            List of statefulset objects as dictionaries
+        """
+        cmd = ["kubectl", "get", "statefulsets", "-n", namespace, "-o", "json"]
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            statefulsets_data = json.loads(result.stdout)
+            return statefulsets_data.get("items", [])
+        except subprocess.CalledProcessError as e:
+            print(f"  ❌ Failed to list statefulsets: {e.stderr}")
+            return []
+        except json.JSONDecodeError as e:
+            print(f"  ❌ Failed to parse kubectl output: {str(e)}")
+            return []
+    
+    @staticmethod
+    def scale_deployment(namespace: str, deployment_name: str, replicas: int) -> bool:
+        """
+        Scale a deployment to the specified number of replicas.
+        
+        Args:
+            namespace: Kubernetes namespace
+            deployment_name: Name of the deployment
+            replicas: Desired number of replicas
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        cmd = [
+            "kubectl", "scale", "deployment", deployment_name,
+            "-n", namespace,
+            f"--replicas={replicas}"
+        ]
+        
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"  ❌ Failed to scale deployment {deployment_name}: {e.stderr}")
+            return False
+    
+    @staticmethod
+    def scale_statefulset(namespace: str, statefulset_name: str, replicas: int) -> bool:
+        """
+        Scale a statefulset to the specified number of replicas.
+        
+        Args:
+            namespace: Kubernetes namespace
+            statefulset_name: Name of the statefulset
+            replicas: Desired number of replicas
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        cmd = [
+            "kubectl", "scale", "statefulset", statefulset_name,
+            "-n", namespace,
+            f"--replicas={replicas}"
+        ]
+        
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"  ❌ Failed to scale statefulset {statefulset_name}: {e.stderr}")
+            return False
+    
+    @staticmethod
+    def get_replica_info(namespace: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Get replica information for all deployments and statefulsets in a namespace.
+        
+        Args:
+            namespace: Kubernetes namespace
+            
+        Returns:
+            Tuple of (deployments_info, statefulsets_info) where each is a list of dicts
+            containing name, current_replicas, and desired_replicas
+        """
+        deployments_info = []
+        statefulsets_info = []
+        
+        # Get deployments
+        deployments = KubectlHelper.get_deployments(namespace)
+        for deployment in deployments:
+            name = deployment.get("metadata", {}).get("name", "unknown")
+            spec = deployment.get("spec", {})
+            status = deployment.get("status", {})
+            
+            deployments_info.append({
+                "name": name,
+                "desired_replicas": spec.get("replicas", 0),
+                "current_replicas": status.get("replicas", 0),
+                "ready_replicas": status.get("readyReplicas", 0)
+            })
+        
+        # Get statefulsets
+        statefulsets = KubectlHelper.get_statefulsets(namespace)
+        for statefulset in statefulsets:
+            name = statefulset.get("metadata", {}).get("name", "unknown")
+            spec = statefulset.get("spec", {})
+            status = statefulset.get("status", {})
+            
+            statefulsets_info.append({
+                "name": name,
+                "desired_replicas": spec.get("replicas", 0),
+                "current_replicas": status.get("replicas", 0),
+                "ready_replicas": status.get("readyReplicas", 0)
+            })
+        
+        return deployments_info, statefulsets_info
 
 # Made with Bob

@@ -126,6 +126,8 @@ spec:
               value: "3.6.0.0"
             - name: PROMETHEUS_PLUGIN_VERSION
               value: "3.6.0.0"
+            - name: GCS_PLUGIN_VERSION
+              value: "3.6.0"
           command:
             - bash
             - -c
@@ -154,6 +156,14 @@ spec:
               cd /mnt/plugins/prometheus-exporter
               jar xf /tmp/prometheus-exporter.zip
               echo "Prometheus plugin installed successfully!"
+
+              echo "Downloading and installing Repository GCS Plugin..."
+              curl -sL "https://artifacts.opensearch.org/releases/plugins/repository-gcs/${GCS_PLUGIN_VERSION}/repository-gcs-${GCS_PLUGIN_VERSION}.zip" -o /tmp/repository-gcs.zip
+              
+              mkdir -p /mnt/plugins/repository-gcs
+              cd /mnt/plugins/repository-gcs
+              jar xf /tmp/repository-gcs.zip
+              echo "Repository GCS plugin installed successfully!"
               
           volumeMounts:
             - name: plugins
@@ -237,7 +247,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - name: OPENSEARCH_JAVA_OPTS
-              value: "-Xms13g -Xmx13g --add-modules jdk.incubator.vector"
+              value: "-Xms13g -Xmx13g"
             - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
               value: "admin"
             - name: DISABLE_INSTALL_DEMO_CONFIG
@@ -266,12 +276,34 @@ spec:
               mountPath: /usr/share/opensearch/config/certs
             - name: async-profiler
               mountPath: /opt/async-profiler
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - |
+                  # Check the API endpoint. We don't care if it's green/yellow yet; 
+                  # we just need to know the HTTPS server is awake and accepting credentials.
+                  curl --fail -s -k \
+                    --cert /usr/share/opensearch/config/certs/admin.pem \
+                    --key /usr/share/opensearch/config/certs/admin-key.pem \
+                    https://localhost:9200/_cluster/health?local=true
+            # 30 tries * 10 seconds = Gives OpenSearch up to 5 full minutes to boot up completely
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+
           readinessProbe:
             exec:
               command:
                 - sh
                 - -c
-                - "curl -k -u admin:admin https://localhost:9200/_cluster/health?local=true | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"
+                - |
+                  # Fails if status is red.
+                curl -s -k \
+                  --cert /usr/share/opensearch/config/certs/admin.pem \
+                  --key /usr/share/opensearch/config/certs/admin-key.pem \
+                  https://localhost:9200/_cluster/health?local=true | grep -qE '"status":"(green|yellow)"'
             initialDelaySeconds: 60
             periodSeconds: 10
             timeoutSeconds: 5
@@ -281,7 +313,11 @@ spec:
               command:
                 - sh
                 - -c
-                - "curl -k -u admin:admin https://localhost:9200/_cluster/health?local=true | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"
+                - |
+                  curl --fail -s -k \
+                    --cert /usr/share/opensearch/config/certs/admin.pem \
+                    --key /usr/share/opensearch/config/certs/admin-key.pem \
+                    https://localhost:9200/_cluster/health?local=true
             initialDelaySeconds: 90
             periodSeconds: 20
             timeoutSeconds: 5

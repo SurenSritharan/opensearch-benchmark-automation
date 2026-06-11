@@ -21,7 +21,7 @@ data:
     
     plugins.security.disabled: false
     plugins.security.allow_default_init_securityindex: true
-    plugins.security.allow_unsafe_democertificates: true
+    plugins.security.allow_unsafe_democertificates: false
     
     plugins.security.ssl.http.enabled: true
     plugins.security.ssl.http.pemcert_filepath: certs/esnode.pem
@@ -58,7 +58,9 @@ data:
     knn.cache.item.expiry.enabled: false
     knn.cache.item.expiry.minutes: "180m"
     knn.circuit_breaker.triggered: "false"
-    
+
+    prometheus.indices: false    
+    prometheus.nodes.filter: "_local"
 ---
 apiVersion: v1
 kind: Service
@@ -218,12 +220,34 @@ spec:
               mountPath: /usr/share/opensearch/config/certs
             - name: async-profiler
               mountPath: /opt/async-profiler
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - |
+                  # Check the API endpoint. We don't care if it's green/yellow yet; 
+                  # we just need to know the HTTPS server is awake and accepting credentials.
+                  curl --fail -s -k \
+                    --cert /usr/share/opensearch/config/certs/admin.pem \
+                    --key /usr/share/opensearch/config/certs/admin-key.pem \
+                    https://localhost:9200/_cluster/health?local=true
+            # 30 tries * 10 seconds = Gives OpenSearch up to 5 full minutes to boot up completely
+            failureThreshold: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+
           readinessProbe:
             exec:
               command:
                 - sh
                 - -c
-                - "curl -k -u admin:admin https://localhost:9200/_cluster/health?local=true | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"
+                - |
+                  # Fails if status is red.
+                curl -s -k \
+                  --cert /usr/share/opensearch/config/certs/admin.pem \
+                  --key /usr/share/opensearch/config/certs/admin-key.pem \
+                  https://localhost:9200/_cluster/health?local=true | grep -qE '"status":"(green|yellow)"'
             initialDelaySeconds: 60
             periodSeconds: 10
             timeoutSeconds: 5
@@ -233,7 +257,11 @@ spec:
               command:
                 - sh
                 - -c
-                - "curl -k -u admin:admin https://localhost:9200/_cluster/health?local=true | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"
+                - |
+                  curl --fail -s -k \
+                    --cert /usr/share/opensearch/config/certs/admin.pem \
+                    --key /usr/share/opensearch/config/certs/admin-key.pem \
+                    https://localhost:9200/_cluster/health?local=true
             initialDelaySeconds: 90
             periodSeconds: 20
             timeoutSeconds: 5

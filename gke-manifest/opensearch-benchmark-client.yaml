@@ -1,6 +1,15 @@
-# OpenSearch Benchmark Client
-# Deploy to any namespace by specifying it with kubectl apply -n <namespace>
-# Example: kubectl apply -f opensearch-benchmark-client-only.yaml -n os-jvector
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-benchmark-client
+  labels:
+    app: opensearch-benchmark
+    component: client
+spec:
+  clusterIP: None
+  selector:
+    app: opensearch-benchmark
+    component: client
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -15,83 +24,108 @@ spec:
       storage: 100Gi
 ---
 apiVersion: v1
-kind: Pod
+kind: PersistentVolumeClaim
+metadata:
+  name: benchmark-results-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-rwo
+  resources:
+    requests:
+      storage: 50Gi # Adjust size as needed for historical JSON/log retention
+---
+apiVersion: apps/v1
+kind: StatefulSet
 metadata:
   name: opensearch-benchmark-client
   labels:
     app: opensearch-benchmark
     component: client
 spec:
-  nodeSelector:
-    cloud.google.com/gke-nodepool: client-pool
-  
-  containers:
-  - name: benchmark
-    image: python:3.11-slim
-    # Using tini ensures child/zombie processes are automatically reaped
-    # Start with standard bash so the container can boot up and install tools
-    command: ["/bin/bash", "-c"]
-    args:
-      - |
-        set -e
+  serviceName: "opensearch-benchmark-client"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opensearch-benchmark
+      component: client
+  template:
+    metadata:
+      labels:
+        app: opensearch-benchmark
+        component: client
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: client-pool
+      
+      containers:
+      - name: benchmark
+        image: python:3.11-slim
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -e
 
-        echo "Updating package sources..."
-        apt-get update -y -qq || echo "Proceeding despite minor apt update warnings..."
+            echo "Updating package sources..."
+            apt-get update -y -qq || echo "Proceeding despite minor apt update warnings..."
+            
+            echo "Installing core dependencies and build tools..."
+            apt-get install -y -qq git curl wget vim libhdf5-dev gcc python3-dev jq nmon procps tini
+            
+            echo "Installing OpenSearch Benchmark"
+            pip install --quiet opensearch-benchmark h5py numpy scikit-learn opensearch-py
+
+            # Create high-speed benchmark directory on NVMe
+            mkdir -p /datasets/opensearch-benchmark
+            # Ensure the results mount path exists
+            mkdir -p /results
+
+            # Clone opensearch-benchmark-workloads repository directly onto high-speed NVMe storage
+            if [ ! -d "/datasets/opensearch-benchmark-workloads/.git" ]; then
+              echo "Cloning opensearch-benchmark-workloads to NVMe..."
+              git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-workloads.git /datasets/opensearch-benchmark-workloads
+            else
+              echo "Workloads already exist on NVMe storage."
+            fi
+            
+            echo "Setup complete! Workspace is preserved server-side."
+            # Tini is used to reap child/zombie processes automatically
+            # CRITICAL: 'exec' replaces the current bash process with tini dynamically,
+            # making tini PID 1 for the remainder of the container's lifecycle.
+            exec /usr/bin/tini -- sleep infinity
         
-        echo "Installing core dependencies and build tools..."
-        apt-get install -y -qq git curl wget vim libhdf5-dev gcc python3-dev jq nmon procps tini
+        env:
+        - name: BENCHMARK_HOME
+          value: "/datasets/opensearch-benchmark"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: NO_COLOR
+          value: "1"
+        - name: TERM
+          value: "dumb"
         
-        echo "Installing OpenSearch Benchmark"
-        pip install --quiet opensearch-benchmark h5py numpy scikit-learn
-
-        # Create high-speed benchmark directory on NVMe
-        mkdir -p /datasets/opensearch-benchmark
-
-        # Clone opensearch-benchmark-workloads repository directly onto high-speed NVMe storage
-        if [ ! -d "/datasets/opensearch-benchmark-workloads/.git" ]; then
-          echo "Cloning opensearch-benchmark-workloads to NVMe..."
-          git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-workloads.git /datasets/opensearch-benchmark-workloads
-        else
-          echo "Workloads already exist on NVMe storage."
-        fi
+        resources:
+          requests:
+            memory: "48Gi"
+            cpu: "12"
+          limits:
+            memory: "48Gi"
+            cpu: "16"
         
-        echo "Setup complete!"
-        # Tini is used to reap child/zombie processes automatically
-        # CRITICAL: 'exec' replaces the current bash process with tini dynamically,
-        # making tini PID 1 for the remainder of the container's lifecycle.
-        exec /usr/bin/tini -- sleep infinity
-    
-    env:
-    # Point BENCHMARK_HOME to NVMe storage so track data caches run on fast disk
-    - name: BENCHMARK_HOME
-      value: "/datasets/opensearch-benchmark"
-    - name: PYTHONUNBUFFERED
-      value: "1"
-    - name: NO_COLOR
-      value: "1"
-    - name: TERM
-      value: "dumb"
-    
-    resources:
-      requests:
-        memory: "48Gi"
-        cpu: "12"
-      limits:
-        memory: "48Gi"
-        cpu: "16"
-    
-    volumeMounts:
-    - name: datasets
-      mountPath: /datasets
-    - name: results
-      mountPath: /results
-    
-  volumes:
-  - name: datasets
-    persistentVolumeClaim:
-      claimName: benchmark-nvme-storage
-  - name: results
-    emptyDir:
-      sizeLimit: 10Gi
-
-  restartPolicy: "Never"
+        volumeMounts:
+        - name: datasets
+          mountPath: /datasets
+        - name: results
+          mountPath: /results
+        
+        ports:
+        - containerPort: 9000
+          name: osb-daemon
+        
+      volumes:
+      - name: datasets
+        persistentVolumeClaim:
+          claimName: benchmark-nvme-storage
+      - name: results
+        persistentVolumeClaim:
+          claimName: benchmark-results-storage
