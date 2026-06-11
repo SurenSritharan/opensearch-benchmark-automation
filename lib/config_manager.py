@@ -175,22 +175,25 @@ class ConfigManager:
 
         print("\nSelect scenarios to run (use numbers, comma-separated):")
         print("  1) Index Creation & Data Ingestion")
-        print("  2) Force Merge")
-        print("  3) Search Tests (concurrency sweep)")
-        print("  4) All Scenarios (1+2+3)")
+        print("  2) Refresh")
+        print("  3) Force Merge")
+        print("  4) Search Tests (concurrency sweep)")
+        print("  5) All Scenarios (1+2+3)")
         
-        scenario_choices = input("\nEnter scenario choices (e.g., 1,3 or 4 for all): ").strip()
+        scenario_choices = input("\nEnter scenario choices (e.g., 1,3 or 5 for all): ").strip()
         selected_tokens = [t.strip() for t in scenario_choices.split(",")]
         
         scenarios = []
-        if "4" in selected_tokens:
-            scenarios = ["index", "merge", "search"]
+        if "5" in selected_tokens:
+            scenarios = ["index", "refresh", "merge", "search"]
         else:
             if "1" in selected_tokens:
                 scenarios.append("index")
             if "2" in selected_tokens:
-                scenarios.append("merge")
+                scenarios.append("refresh")
             if "3" in selected_tokens:
+                scenarios.append("merge")
+            if "4" in selected_tokens:
                 scenarios.append("search")
             
         if not scenarios:
@@ -210,6 +213,7 @@ class ConfigManager:
         print(f"  Targeted Engines: {', '.join(self.target_engines)}")
         print(f"  Dataset:          {dataset_name} ({meta.get('dimension')}D, format: {meta.get('format')}, space: {meta.get('space_type')})")
         print(f"  Index Creation:   {'✅ YES' if 'index' in self.target_scenarios else '❌ NO'}")
+        print(f"  Refresh:          {'✅ YES' if 'refresh' in self.target_scenarios else '❌ NO'}")
         print(f"  Force Merge:      {'✅ YES' if 'merge' in self.target_scenarios else '❌ NO'}")
         print(f"  Search Tests:     {'✅ YES' if 'search' in self.target_scenarios else '❌ NO'}")
         print(f"  Profiling:        {'✅ ENABLED' if self.profiling_enabled else '❌ DISABLED'}")
@@ -286,15 +290,16 @@ class ConfigManager:
 
     @property
     def target_scenarios(self) -> list:
-        scenario_str = self.args.scenario or "index,merge,search"
+        scenario_str = self.args.scenario or "index,refresh,merge,search"
         if "all" in scenario_str:
             return ["index", "merge", "search"]
         
         # Standardizes various aliases from the shell script seamlessly
         aliases = {
             "indexing": "index", "create-index": "index", "1": "index",
-            "force-merge": "merge", "2": "merge",
-            "search-only": "search", "3": "search"
+            "refresh": "refresh", "refresh-index": "refresh", "2": "refresh",
+            "force-merge": "merge", "3": "merge",
+            "search-only": "search", "4": "search"
         }
         
         raw_scenarios = [s.strip() for s in scenario_str.split(",")]

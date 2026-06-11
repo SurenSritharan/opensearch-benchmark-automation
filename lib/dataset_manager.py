@@ -28,11 +28,11 @@ class DatasetManager:
         """Filter test procedures based on user-selected scenarios.
         
         Args:
-            target_scenarios: List of scenario names (e.g., ['index', 'search', 'merge'])
+            target_scenarios: List of scenario names (e.g., ['index', 'search', 'refresh', 'merge'])
         
         Returns:
             List of tuples: (test_procedure_name, scenario_type, procedure_config)
-            where scenario_type is one of: 'create-index', 'bulk', 'search', 'merge'
+            where scenario_type is one of: 'create-index', 'bulk', 'search', 'merge', 'refresh'
             and procedure_config is the full procedure dict (may contain parameter_sweeps)
         """
         filtered = []
@@ -57,6 +57,9 @@ class DatasetManager:
                 if 'index' in target_scenarios:
                     filtered.append((proc_name, 'ingest', proc_config))
             
+            elif 'refresh' in proc_lower:
+                if 'refresh' in target_scenarios:
+                    filtered.append((proc_name, 'refresh', proc_config))
             elif 'search' in proc_lower:
                 if 'search' in target_scenarios:
                     filtered.append((proc_name, 'search', proc_config))

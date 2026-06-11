@@ -285,7 +285,11 @@ def main():
             continue
         
         # Execute test procedures in order
+        skip_remaining = False
         for idx, (test_procedure, scenario_type, proc_config) in enumerate(filtered_procedures):
+            if skip_remaining:
+                break
+                
             # Get parameter sweeps from procedure config (if any)
             parameter_sweeps = proc_config.get("parameter_sweeps", [])
             
@@ -315,6 +319,7 @@ def main():
                     
                     if not success:
                         print(f"\n❌ Index creation failed for {engine}. Skipping remaining scenarios.\n")
+                        skip_remaining = True
                         break
                     
                     # Validate index mapping
@@ -325,6 +330,7 @@ def main():
                         print(f"\n❌ Index validation failed: {message}")
                         print(f"   The index was created but does not have the proper knn_vector mapping.")
                         print(f"   This indicates an issue with the index template. Skipping remaining scenarios.\n")
+                        skip_remaining = True
                         break
                     
                     print(f"  ✅ Index mapping validated successfully")
@@ -358,6 +364,7 @@ def main():
                     
                     if not success:
                         print(f"\n❌ Bulk ingestion failed for {engine}. Skipping remaining scenarios.\n")
+                        skip_remaining = True
                         break
             
             elif scenario_type == 'merge':
@@ -389,6 +396,39 @@ def main():
                     
                     if not success:
                         print(f"\n❌ Force merge failed for {engine}. Skipping remaining scenarios.\n")
+                        skip_remaining = True
+                        break
+            
+            elif scenario_type == 'refresh':
+                print_separator(f"Refresh Index [{engine}]")
+                for sweep_idx, sweep_config in enumerate(parameter_sweeps, 1):
+                    params = sweep_config.get("params", {})
+                    if params:
+                        param_desc = ", ".join(f"{k}={v}" for k, v in params.items())
+                        print(f"  ▶ Refreshing index with {param_desc}...")
+                    else:
+                        print(f"  ▶ Refreshing index...")
+                    
+                    success = run_benchmark_with_profiling(
+                        executor=executor,
+                        profiler=profiler,
+                        metrics_collector=metrics_collector,
+                        namespace=ns,
+                        scenario_name=f"scenario-{idx+1}-refresh" + (f"/sweep-{sweep_idx}" if len(parameter_sweeps) > 1 else ""),
+                        workload_name=workload_name,
+                        workload_path=workload_path,
+                        test_procedure=test_procedure,
+                        workload_params=workload_params,
+                        extra_params=params if params else None,
+                        extra_args=[],
+                        enable_profiling=config.profiling_enabled,
+                        warmup_seconds=10,
+                        profile_duration=30,
+                    )
+                    
+                    if not success:
+                        print(f"\n❌ Refresh failed for {engine}. Skipping remaining scenarios.\n")
+                        skip_remaining = True
                         break
             
             elif scenario_type == 'search':
