@@ -227,6 +227,68 @@ def main():
     provisioner = ClusterProvisioner()
 
     print_header(dataset.dataset_name)
+    
+    # Provision metrics store if enabled and not already deployed
+    if config.metrics_store_enabled:
+        metrics_store_ns = "os-metrics"
+        print(f"\n{'='*66}")
+        print(f"📊 Checking Metrics Store Status...")
+        print(f"{'='*66}")
+        
+        auto_provision = config.args.quiet if hasattr(config.args, 'quiet') else False
+        if not provisioner.ensure_cluster_ready(metrics_store_ns, auto_provision=auto_provision):
+            print(f"⚠️  Metrics store not available - results will only be stored locally")
+            print(f"   To deploy metrics store, run: ./gke-manifest/deploy-metrics-store.sh\n")
+        else:
+            print(f"✅ Metrics store is ready in namespace: {metrics_store_ns}")
+            
+            # Auto-deploy dashboards if configured
+            if config.metrics_store_deploy_dashboards:
+                print(f"\n📊 Checking OpenSearch Dashboards Status...")
+                try:
+                    # Check if dashboards are already deployed
+                    result = subprocess.run(
+                        ["kubectl", "get", "deployment", "opensearch-dashboards", "-n", metrics_store_ns],
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    if result.returncode != 0:
+                        # Dashboards not deployed, deploy them
+                        print(f"   Deploying OpenSearch Dashboards...")
+                        deploy_result = subprocess.run(
+                            ["./gke-manifest/deploy-dashboards.sh"],
+                            capture_output=True,
+                            text=True
+                        )
+                        
+                        if deploy_result.returncode == 0:
+                            print(f"✅ OpenSearch Dashboards deployed successfully")
+                            # Extract and display the dashboard URL from the output
+                            for line in deploy_result.stdout.split('\n'):
+                                if 'URL:' in line or 'port-forward' in line:
+                                    print(f"   {line.strip()}")
+                        else:
+                            print(f"⚠️  Failed to deploy dashboards automatically")
+                            print(f"   You can deploy manually: ./gke-manifest/deploy-dashboards.sh")
+                    else:
+                        print(f"✅ OpenSearch Dashboards already deployed")
+                        # Get the service info
+                        svc_result = subprocess.run(
+                            ["kubectl", "get", "svc", "opensearch-dashboards", "-n", metrics_store_ns,
+                             "-o", "jsonpath={.status.loadBalancer.ingress[0].ip}"],
+                            capture_output=True,
+                            text=True
+                        )
+                        if svc_result.stdout.strip():
+                            print(f"   Dashboard URL: http://{svc_result.stdout.strip()}:5601")
+                        else:
+                            print(f"   Use port-forward: kubectl port-forward -n {metrics_store_ns} svc/opensearch-dashboards 5601:5601")
+                
+                except Exception as e:
+                    print(f"⚠️  Could not check/deploy dashboards: {e}")
+            
+            print()  # Empty line for spacing
 
     # Sweep sequentially across target engine nodes (e.g., jvector, faiss, lucene)
     for engine in config.target_engines:

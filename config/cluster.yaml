@@ -22,21 +22,47 @@ pod_label_selector: "app=opensearch-data"
 # Profiling configuration
 # Enable or disable async-profiler flame graph generation during benchmarks
 profiling:
-  enabled: true  # Set to false to disable profiling globally
+  enabled: false  # Set to false to disable profiling globally
   warmup_seconds: 0  # Seconds to wait before starting profiling (default: 60)
   duration_seconds: 45  # Duration of profiling window in seconds (default: 45)
+  collect_gc_logs: true  # Collect GC log files from data nodes (default: true)
 
 # Metrics collection configuration
 # Enable or disable GKE resource metrics collection and graphing
 metrics:
-  enabled: true  # Set to false to disable metrics collection globally
+  enabled: false  # Set to false to disable metrics collection globally
   interval_seconds: 10  # Seconds between metric samples (default: 10)
   generate_graphs: true  # Automatically generate graphs after collection (default: true)
 
 # Cluster provisioning configuration
 # Control automatic provisioning and deprovisioning behavior
 provisioning:
-  auto_provision: false  # Automatically provision clusters without prompting (default: false)
-  auto_deprovision: false  # Automatically deprovision cluster after benchmark completes (default: false)
+  auto_provision: true  # Automatically provision clusters without prompting (default: false)
+  auto_deprovision: true  # Automatically deprovision cluster after benchmark completes (default: false)
+
+# Metrics Store configuration
+# Centralized OpenSearch instance for storing benchmark results across multiple runs
+metrics_store:
+  enabled: true  # Set to false to disable metrics store integration
+  endpoint: "opensearch-metrics-store.os-metrics.svc.cluster.local:9200"  # Cross-namespace FQDN
+  username: "admin"
+  password: "admin"
+  store_only: false  # Set to true to ONLY store in metrics store (no local results directory)
+  deploy_dashboards: true  # Automatically deploy OpenSearch Dashboards for visualization
+  # Results will be stored in date-based indices for easy management:
+  # - benchmark-results-YYYY.MM: Benchmark execution results and metrics
+  # - benchmark-telemetry-YYYY.MM: Cluster health and telemetry data
+  # - benchmark-metrics-YYYY.MM: Resource utilization metrics (CPU, memory, etc.)
+  #
+  # When store_only is true:
+  # - All results are stored ONLY in the cloud metrics store
+  # - No local results directory is created
+  # - All data remains on the cloud (benchmark client pod and metrics store)
+  # - Query results via metrics store API or OpenSearch Dashboards
+  #
+  # When deploy_dashboards is true:
+  # - OpenSearch Dashboards will be automatically deployed with the metrics store
+  # - Access dashboards via LoadBalancer IP or port-forward
+  # - Create visualizations and dashboards for performance analysis
 
 # Made with Bob

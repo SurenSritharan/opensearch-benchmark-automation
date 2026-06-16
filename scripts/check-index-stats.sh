@@ -63,7 +63,7 @@ echo "=========================================="
 echo ""
 
 # Check if benchmark client pod exists
-if ! kubectl get pod -n "$NAMESPACE" opensearch-benchmark-client &>/dev/null; then
+if ! kubectl get pod -n "$NAMESPACE" opensearch-benchmark-client-0 &>/dev/null; then
   echo "❌ Error: opensearch-benchmark-client pod not found in namespace $NAMESPACE"
   echo ""
   echo "Available pods in $NAMESPACE:"
@@ -73,7 +73,7 @@ fi
 
 # Get list of all indices
 echo "📋 Fetching available indices..."
-INDICES_OUTPUT=$(kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client -- \
+INDICES_OUTPUT=$(kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client-0 -- \
   curl -sk -u admin:admin "https://opensearch-cluster:9200/_cat/indices?v&h=index,health,status,docs.count,store.size" 2>/dev/null)
 
 if [ -z "$INDICES_OUTPUT" ]; then
@@ -140,13 +140,13 @@ echo ""
 
 echo "📊 Index Overview:"
 echo "-------------------"
-kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client -- \
+kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client-0 -- \
   curl -sk -u admin:admin "https://opensearch-cluster:9200/_cat/indices/${INDEX_NAME}?v&h=index,health,status,pri,rep,docs.count,store.size,pri.store.size"
 
 echo ""
 echo "📈 Detailed Index Stats:"
 echo "------------------------"
-kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client -- \
+kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client-0 -- \
   curl -sk -u admin:admin "https://opensearch-cluster:9200/${INDEX_NAME}/_stats?pretty" 2>/dev/null | jq '{
     index: .indices | keys[0],
     total: {
@@ -162,7 +162,7 @@ kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client -- \
 echo ""
 echo "⚙️  Index Settings:"
 echo "-------------------"
-kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client -- \
+kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client-0 -- \
   curl -sk -u admin:admin "https://opensearch-cluster:9200/${INDEX_NAME}/_settings?pretty" 2>/dev/null | jq '.[] | {
     number_of_shards: .settings.index.number_of_shards,
     number_of_replicas: .settings.index.number_of_replicas,
@@ -173,13 +173,13 @@ kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client -- \
 echo ""
 echo "🗺️  Index Mapping (Vector Field):"
 echo "----------------------------------"
-kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client -- \
+kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client-0 -- \
   curl -sk -u admin:admin "https://opensearch-cluster:9200/${INDEX_NAME}/_mapping?pretty" 2>/dev/null | jq '.[] | .mappings.properties | to_entries[] | select(.value.type == "knn_vector")'
 
 echo ""
 echo "🔍 Cluster Health:"
 echo "------------------"
-kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client -- \
+kubectl exec -n "$NAMESPACE" -c benchmark opensearch-benchmark-client-0 -- \
   curl -sk -u admin:admin "https://opensearch-cluster:9200/_cluster/health?pretty" 2>/dev/null | jq '{
     cluster_name,
     status,

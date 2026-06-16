@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Tuple, List, Optional, Any
 from lib.kubectl_helper import KubectlHelper
+from lib.metrics_store_client import MetricsStoreClient
 
 
 class BenchmarkExecutor:
@@ -25,6 +26,35 @@ class BenchmarkExecutor:
         # Extract cluster settings from config
         self.cluster_endpoint = config.cluster_endpoint
         self.client_options = config.client_options
+        
+        # Initialize metrics store client if enabled
+        self.metrics_store = None
+        if config.metrics_store_enabled:
+            self.metrics_store = MetricsStoreClient(
+                metrics_store_endpoint=config.metrics_store_endpoint,
+                username=config.metrics_store_username,
+                password=config.metrics_store_password,
+                enabled=True
+            )
+            # Ensure index templates are created on first use
+            self._ensure_metrics_store_templates()
+    
+    def _ensure_metrics_store_templates(self):
+        """Ensure metrics store index templates are created."""
+        if not self.metrics_store:
+            return
+        
+        try:
+            # Check if metrics store is accessible
+            if self.metrics_store.check_health(namespace=self.namespace, pod_name=self.pod_name):
+                # Create index templates if they don't exist
+                self.metrics_store.create_index_template(
+                    namespace=self.namespace,
+                    pod_name=self.pod_name
+                )
+        except Exception as e:
+            print(f"⚠️  Could not initialize metrics store templates: {e}")
+            print(f"   Metrics store may not be accessible yet")
 
     def _exec_subprocess(self, container: str, cmd: list) -> str:
         """Runs a direct, non-blocking kubectl exec command via kubectl helper."""
@@ -314,6 +344,15 @@ class BenchmarkExecutor:
             output_file.parent.mkdir(parents=True, exist_ok=True)
             output_file.write_text(result_stdout, encoding="utf-8")
             
+            # Store results in metrics store if enabled
+            if self.metrics_store:
+                self._store_results_in_metrics_store(
+                    scenario_name=scenario_name,
+                    test_procedure=test_procedure,
+                    workload_params=current_workload_params,
+                    results_dir=self.results_dir / scenario_name
+                )
+            
             return True, result_stdout
             
         except subprocess.CalledProcessError as e:
@@ -329,6 +368,7 @@ class BenchmarkExecutor:
             err_file = self.results_dir / scenario_name / "crash_error.log"
             err_file.parent.mkdir(parents=True, exist_ok=True)
             err_file.write_text(error_log, encoding="utf-8")
+            return False, error_log
 
     def collect_telemetry(self, index_name):
         """Collects comprehensive cluster telemetry and saves to cluster-telemetry-state directory.
@@ -379,4 +419,61 @@ class BenchmarkExecutor:
         # Segment information
         save_curl_output(f"/_cat/segments/{index_name}?v", "segments.txt", "segment info")
         
-        print(f"  ✅ Telemetry data saved to: {telemetry_dir.relative_to(self.results_dir.parent.parent)}")
+    
+    def _store_results_in_metrics_store(self, 
+                                       scenario_name: str,
+                                       test_procedure: str,
+                                       workload_params: Optional[str],
+                                       results_dir: Path):
+        """
+        Store benchmark results in the metrics store for historical analysis.
+        
+        Args:
+            scenario_name: Name of the scenario
+            test_procedure: Test procedure name
+            workload_params: Workload parameters used
+            results_dir: Directory containing the results
+        """
+        if not self.metrics_store:
+            return
+        
+        try:
+            # Read test_run.json if it exists
+            test_run_file = results_dir / "test_run.json"
+            if not test_run_file.exists():
+                print(f"⚠️  No test_run.json found for {scenario_name}, skipping metrics store upload")
+                return
+            
+            with open(test_run_file, 'r') as f:
+                test_run_data = json.load(f)
+            
+            # Extract run ID from test_run data
+            run_id = test_run_data.get("test-execution-id", "unknown")
+            
+            # Parse workload params
+            params_dict = {}
+            if workload_params:
+                try:
+                    params_dict = json.loads(workload_params)
+                except json.JSONDecodeError:
+                    params_dict = {"raw": workload_params}
+            
+            # Store the benchmark result
+            success = self.metrics_store.store_benchmark_result(
+                run_id=run_id,
+                dataset=self.dataset_name or "unknown",
+                engine=self.engine,
+                scenario=scenario_name,
+                test_procedure=test_procedure,
+                workload_params=params_dict,
+                results=test_run_data,
+                namespace=self.namespace,
+                pod_name=self.pod_name
+            )
+            
+            if success:
+                print(f"✅ Results stored in metrics store (run_id: {run_id})")
+            
+        except Exception as e:
+            print(f"⚠️  Failed to store results in metrics store: {e}")
+            # Don't fail the benchmark if metrics store upload fails

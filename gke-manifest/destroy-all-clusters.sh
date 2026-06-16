@@ -30,8 +30,9 @@ for ns in "${NAMESPACES[@]}"; do
     echo "  - $ns"
 done
 echo ""
-echo -e "${YELLOW}WARNING: This action cannot be undone!${NC}"
-echo -e "${YELLOW}All data, configurations, and resources will be permanently deleted.${NC}"
+echo -e "${YELLOW}WARNING: Cluster resources will be deleted!${NC}"
+echo -e "${GREEN}NOTE: PVCs will be preserved by default (data is safe).${NC}"
+echo -e "${YELLOW}To also delete PVCs, you must manually run destroy-namespace-cluster.sh with --delete-pvcs${NC}"
 echo ""
 
 # Check for --force flag
@@ -54,9 +55,31 @@ for ns in "${NAMESPACES[@]}"; do
     echo ""
 done
 
+# Scale down metrics store (preserving data) instead of destroying
+echo -e "${YELLOW}Scaling down metrics store (preserving data): os-metrics${NC}"
+if kubectl get namespace os-metrics &> /dev/null; then
+    # Scale down metrics store StatefulSet
+    if kubectl get statefulset opensearch-metrics-store -n os-metrics &> /dev/null; then
+        kubectl scale statefulset opensearch-metrics-store -n os-metrics --replicas=0
+        echo -e "${GREEN}  ✓ Metrics store scaled down to 0 replicas${NC}"
+    fi
+    
+    # Scale down dashboards if they exist
+    if kubectl get deployment opensearch-dashboards -n os-metrics &> /dev/null; then
+        kubectl scale deployment opensearch-dashboards -n os-metrics --replicas=0
+        echo -e "${GREEN}  ✓ Dashboards scaled down to 0 replicas${NC}"
+    fi
+    
+    echo -e "${GREEN}  💾 Metrics data preserved in PersistentVolumeClaims${NC}"
+    echo ""
+else
+    echo -e "${YELLOW}  ℹ️  Metrics store namespace not found, skipping${NC}"
+    echo ""
+fi
+
 echo ""
 echo -e "${GREEN}=========================================="
-echo "✓ All clusters destroyed"
+echo "✓ All clusters destroyed/scaled down"
 echo -e "==========================================${NC}"
 echo ""
 echo "Note: Namespace deletion is asynchronous and may take a few minutes to complete."

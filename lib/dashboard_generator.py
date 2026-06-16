@@ -167,8 +167,22 @@ class DashboardGenerator:
                                         p99 = latency.get("99_0") if latency else None
                                         p100 = latency.get("100_0") if latency else None
                                         
+                                        # Extract recall metrics if available
+                                        recall_at_k = None
+                                        recall_at_1 = None
+                                        if "correctness_metrics" in data["results"]:
+                                            for correctness_op in data["results"]["correctness_metrics"]:
+                                                if correctness_op.get("operation") == op.get("operation"):
+                                                    recall_at_k_data = correctness_op.get("recall@k", {})
+                                                    recall_at_1_data = correctness_op.get("recall@1", {})
+                                                    if recall_at_k_data:
+                                                        recall_at_k = recall_at_k_data.get("mean")
+                                                    if recall_at_1_data:
+                                                        recall_at_1 = recall_at_1_data.get("mean")
+                                                    break
+                                        
                                         if throughput and p50:
-                                            all_data[engine][f'{scenario_type}_sweeps'].append({
+                                            sweep_data = {
                                                 'sweep': sweep_num,
                                                 'throughput': throughput,
                                                 'p50': p50,
@@ -176,7 +190,14 @@ class DashboardGenerator:
                                                 'p99': p99,
                                                 'p100': p100,
                                                 'config': workload_params
-                                            })
+                                            }
+                                            # Add recall metrics if available
+                                            if recall_at_k is not None:
+                                                sweep_data['recall_at_k'] = recall_at_k
+                                            if recall_at_1 is not None:
+                                                sweep_data['recall_at_1'] = recall_at_1
+                                            
+                                            all_data[engine][f'{scenario_type}_sweeps'].append(sweep_data)
                             except (json.JSONDecodeError, KeyError, IndexError) as e:
                                 # Mark as failed if we can't parse results
                                 all_data[engine][f'{scenario_type}_sweeps'].append({
@@ -228,7 +249,7 @@ class DashboardGenerator:
                                     latency = metrics.get("latency", {})
                                     
                                     if throughput and latency:
-                                        all_data[engine]['search'] = {
+                                        search_data = {
                                             'throughput': throughput,
                                             'p50': latency.get("50_0"),
                                             'p90': latency.get("90_0"),
@@ -236,6 +257,20 @@ class DashboardGenerator:
                                             'p100': latency.get("100_0"),
                                             'config': data.get("workload-params", {})
                                         }
+                                        
+                                        # Extract recall metrics if available
+                                        if "correctness_metrics" in data["results"]:
+                                            for correctness_op in data["results"]["correctness_metrics"]:
+                                                if correctness_op.get("operation") == metrics.get("operation"):
+                                                    recall_at_k_data = correctness_op.get("recall@k", {})
+                                                    recall_at_1_data = correctness_op.get("recall@1", {})
+                                                    if recall_at_k_data and recall_at_k_data.get("mean") is not None:
+                                                        search_data['recall_at_k'] = recall_at_k_data.get("mean")
+                                                    if recall_at_1_data and recall_at_1_data.get("mean") is not None:
+                                                        search_data['recall_at_1'] = recall_at_1_data.get("mean")
+                                                    break
+                                        
+                                        all_data[engine]['search'] = search_data
                                 
                                 elif scenario_type == 'force_merge':
                                     # Check if op_metrics has force-merge operation
@@ -873,6 +908,8 @@ class DashboardGenerator:
                     'p50': search_data['p50'],
                     'p99': search_data['p99'],
                     'p100': search_data.get('p100', 0),
+                    'recall_at_k': search_data.get('recall_at_k'),
+                    'recall_at_1': search_data.get('recall_at_1'),
                     'config': search_data.get('config', {})
                 }]
                 search_engines.append({
@@ -880,6 +917,8 @@ class DashboardGenerator:
                     'throughput': search_data['throughput'],
                     'p50': search_data['p50'],
                     'p99': search_data['p99'],
+                    'recall_at_k': search_data.get('recall_at_k'),
+                    'recall_at_1': search_data.get('recall_at_1'),
                     'sweeps': sweeps,
                     'scenario_name': scenario_name
                 })
@@ -896,7 +935,14 @@ class DashboardGenerator:
                         avg_throughput = sum(s['throughput'] for s in successful_sweeps) / len(successful_sweeps)
                         avg_p50 = sum(s['p50'] for s in successful_sweeps) / len(successful_sweeps)
                         avg_p99 = sum(s['p99'] for s in successful_sweeps) / len(successful_sweeps)
-                        search_engines.append({
+                        
+                        # Calculate average recall metrics if available
+                        recall_at_k_values = [s.get('recall_at_k') for s in successful_sweeps if s.get('recall_at_k') is not None]
+                        recall_at_1_values = [s.get('recall_at_1') for s in successful_sweeps if s.get('recall_at_1') is not None]
+                        avg_recall_at_k = sum(recall_at_k_values) / len(recall_at_k_values) if recall_at_k_values else None
+                        avg_recall_at_1 = sum(recall_at_1_values) / len(recall_at_1_values) if recall_at_1_values else None
+                        
+                        engine_data = {
                             'name': engine,
                             'throughput': avg_throughput,
                             'p50': avg_p50,
@@ -904,7 +950,13 @@ class DashboardGenerator:
                             'sweeps': sweeps,  # Include all sweeps (successful and failed)
                             'scenario_name': scenario_name,
                             'has_failures': len(failed_sweeps) > 0
-                        })
+                        }
+                        if avg_recall_at_k is not None:
+                            engine_data['recall_at_k'] = avg_recall_at_k
+                        if avg_recall_at_1 is not None:
+                            engine_data['recall_at_1'] = avg_recall_at_1
+                        
+                        search_engines.append(engine_data)
                     elif failed_sweeps:
                         # All sweeps failed - still add to show the failures
                         search_engines.append({
@@ -1143,6 +1195,10 @@ class DashboardGenerator:
             is_winner = engine == winner['name']
             winner_class = ' winner' if is_winner else ''
             
+            # Add recall metrics if available
+            recall_at_k = engine_data.get('recall_at_k')
+            recall_at_1 = engine_data.get('recall_at_1')
+            
             html += f'''
             <div class="summary-card{winner_class}">
                 <span class="engine-badge {engine}">{engine.upper()}</span>
@@ -1157,7 +1213,23 @@ class DashboardGenerator:
                 <div class="metric-row">
                     <span class="metric-label">P99 Latency</span>
                     <span class="metric-value">{engine_data['p99']:.2f} ms</span>
-                </div>
+                </div>'''
+            
+            if recall_at_k is not None:
+                html += f'''
+                <div class="metric-row">
+                    <span class="metric-label">Recall@k</span>
+                    <span class="metric-value">{recall_at_k:.1%}</span>
+                </div>'''
+            
+            if recall_at_1 is not None:
+                html += f'''
+                <div class="metric-row">
+                    <span class="metric-label">Recall@1</span>
+                    <span class="metric-value">{recall_at_1:.1%}</span>
+                </div>'''
+            
+            html += '''
             </div>
 '''
         
@@ -1205,6 +1277,8 @@ class DashboardGenerator:
                         <th>P50 Latency</th>
                         <th>P99 Latency</th>
                         <th>P100 Latency</th>
+                        <th>Recall@k</th>
+                        <th>Recall@1</th>
                         <th>Details</th>
                     </tr>
                 </thead>
@@ -1236,7 +1310,7 @@ class DashboardGenerator:
                     html += f'''
                     <tr onclick="showCrashLog('{engine}', {sweep_num}, '{crash_log_escaped}')" style="cursor: pointer; background: rgba(255, 77, 79, 0.1);">
                         <td><span class="value" style="color: #ff4d4f;">❌ Sweep {sweep_num}</span></td>
-                        <td colspan="4"><span style="color: #ff4d4f;">FAILED: {sweep.get('error', 'Unknown error')}</span></td>
+                        <td colspan="6"><span style="color: #ff4d4f;">FAILED: {sweep.get('error', 'Unknown error')}</span></td>
                         <td>{details_link}</td>
                     </tr>
 '''
@@ -1251,6 +1325,12 @@ class DashboardGenerator:
                     else:
                         sweep_link = f"{self.dataset_name}-{engine}/{scenario_name}/sweep-{sweep_num}/results.html"
                     
+                    # Get recall metrics for this sweep
+                    recall_at_k = sweep.get('recall_at_k')
+                    recall_at_1 = sweep.get('recall_at_1')
+                    recall_at_k_display = f'{recall_at_k:.1%}' if recall_at_k is not None else 'N/A'
+                    recall_at_1_display = f'{recall_at_1:.1%}' if recall_at_1 is not None else 'N/A'
+                    
                     html += f'''
                     <tr onclick="window.location.href='{sweep_link}'">
                         <td><span class="{value_class}">Sweep {sweep_num}</span></td>
@@ -1258,6 +1338,8 @@ class DashboardGenerator:
                         <td><span class="value">{sweep['p50']:.2f} ms</span></td>
                         <td><span class="value">{sweep['p99']:.2f} ms</span></td>
                         <td><span class="value">{sweep.get('p100', 0):.2f} ms</span></td>
+                        <td><span class="value">{recall_at_k_display}</span></td>
+                        <td><span class="value">{recall_at_1_display}</span></td>
                         <td><span style="color: #1890ff;">View Results →</span></td>
                     </tr>
 '''
@@ -1265,6 +1347,16 @@ class DashboardGenerator:
             html += '''
                 </tbody>
             </table>
+        </div>
+'''
+        
+        # Add recall comparison chart if any engine has recall metrics
+        has_recall = any(e.get('recall_at_k') is not None or e.get('recall_at_1') is not None for e in search_engines)
+        if has_recall:
+            html += '''
+        <div class="chart-container">
+            <div class="chart-title">Recall Comparison</div>
+            <canvas id="recallChart" style="max-height: 350px;"></canvas>
         </div>
 '''
         
@@ -1411,6 +1503,101 @@ class DashboardGenerator:
                         beginAtZero: true,
                         grid: { color: 'rgba(24, 144, 255, 0.1)' },
                         ticks: { color: 'rgba(255, 255, 255, 0.7)' }
+                    },
+                    x: {
+                        grid: { display: false },
+                        ticks: { color: 'rgba(255, 255, 255, 0.7)' }
+                    }
+                }
+            }
+        });
+'''
+        
+        # Add recall chart JavaScript if recall metrics are available
+        if has_recall:
+            html += '''
+        
+        // Recall Chart
+        const recallCtx = document.getElementById('recallChart').getContext('2d');
+        new Chart(recallCtx, {
+            type: 'bar',
+            data: {
+                labels: ['''
+            
+            html += ', '.join(f"'{e['name'].upper()}'" for e in search_engines)
+            html += '''],
+                datasets: [
+                    {
+                        label: 'Recall@k',
+                        data: ['''
+            
+            # Add recall@k data, use null for engines without recall data
+            recall_k_values = []
+            for e in search_engines:
+                recall_k = e.get('recall_at_k')
+                if recall_k is not None:
+                    recall_k_values.append(f"{recall_k * 100:.2f}")  # Convert to percentage
+                else:
+                    recall_k_values.append('null')
+            html += ', '.join(recall_k_values)
+            
+            html += '''],
+                        backgroundColor: 'rgba(114, 46, 209, 0.6)',
+                        borderColor: 'rgba(114, 46, 209, 1)',
+                        borderWidth: 2
+                    },
+                    {
+                        label: 'Recall@1',
+                        data: ['''
+            
+            # Add recall@1 data
+            recall_1_values = []
+            for e in search_engines:
+                recall_1 = e.get('recall_at_1')
+                if recall_1 is not None:
+                    recall_1_values.append(f"{recall_1 * 100:.2f}")  # Convert to percentage
+                else:
+                    recall_1_values.append('null')
+            html += ', '.join(recall_1_values)
+            
+            html += '''],
+                        backgroundColor: 'rgba(235, 47, 150, 0.6)',
+                        borderColor: 'rgba(235, 47, 150, 1)',
+                        borderWidth: 2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: {
+                        labels: { color: 'rgba(255, 255, 255, 0.9)' }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                        titleColor: '#fff',
+                        bodyColor: '#fff',
+                        borderColor: 'rgba(24, 144, 255, 0.5)',
+                        borderWidth: 1,
+                        callbacks: {
+                            label: function(context) {
+                                return context.dataset.label + ': ' + context.parsed.y.toFixed(1) + '%';
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100,
+                        grid: { color: 'rgba(24, 144, 255, 0.1)' },
+                        ticks: {
+                            color: 'rgba(255, 255, 255, 0.7)',
+                            callback: function(value) {
+                                return value + '%';
+                            }
+                        }
                     },
                     x: {
                         grid: { display: false },

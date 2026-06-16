@@ -115,14 +115,43 @@ class ClusterProvisioner:
     
     def provision_namespace(self, namespace: str) -> bool:
         """
-        Provision a specific OpenSearch cluster namespace using deploy-namespace-cluster.sh.
+        Provision a specific OpenSearch cluster namespace.
+        Uses deploy-metrics-store.sh for os-metrics, deploy-namespace-cluster.sh for others.
         
         Args:
-            namespace: Kubernetes namespace to provision (e.g., "os-jvector")
+            namespace: Kubernetes namespace to provision (e.g., "os-jvector", "os-metrics")
             
         Returns:
             True if provisioning succeeded, False otherwise
         """
+        # Special handling for metrics store namespace
+        if namespace == "os-metrics":
+            metrics_deploy_script = self.project_root / "gke-manifest" / "deploy-metrics-store.sh"
+            if not metrics_deploy_script.exists():
+                print(f"\n❌ Metrics store deploy script not found: {metrics_deploy_script}")
+                print("   Please check that the script exists in gke-manifest/\n")
+                return False
+            
+            try:
+                print(f"\n🚀 Provisioning metrics store: {namespace}")
+                print("   Using script: deploy-metrics-store.sh\n")
+                
+                # Run the metrics store deploy script
+                result = subprocess.run(
+                    [str(metrics_deploy_script)],
+                    cwd=str(metrics_deploy_script.parent),
+                    check=True,
+                    text=True
+                )
+                
+                return True
+                
+            except subprocess.CalledProcessError as e:
+                print(f"\n❌ Failed to provision metrics store {namespace}")
+                print("   Please check the error messages above.\n")
+                return False
+        
+        # Standard benchmark cluster provisioning
         if not self.deploy_script.exists():
             print(f"\n❌ Deploy script not found: {self.deploy_script}")
             print("   Please check that the script exists in gke-manifest/\n")
@@ -149,10 +178,12 @@ class ClusterProvisioner:
     
     def deprovision_namespace(self, namespace: str) -> bool:
         """
-        Deprovision a specific OpenSearch cluster namespace using destroy-namespace-cluster.sh.
+        Deprovision a specific OpenSearch cluster namespace.
+        For metrics store (os-metrics), scales down to 0 replicas to preserve data.
+        For benchmark clusters, uses destroy-namespace-cluster.sh.
         
         Args:
-            namespace: Kubernetes namespace to deprovision (e.g., "os-jvector")
+            namespace: Kubernetes namespace to deprovision (e.g., "os-jvector", "os-metrics")
             
         Returns:
             True if deprovisioning succeeded, False otherwise
@@ -162,6 +193,39 @@ class ClusterProvisioner:
             print(f"\n  ℹ️  Namespace {namespace} does not exist, nothing to deprovision\n")
             return True
         
+        # Special handling for metrics store - scale down instead of destroy
+        if namespace == "os-metrics":
+            print(f"\n💾 Scaling down metrics store: {namespace}")
+            print("   (Preserving PersistentVolumeClaims to retain metrics data)")
+            
+            try:
+                # Scale down metrics store StatefulSet
+                scale_cmd = ["kubectl", "scale", "statefulset", "opensearch-metrics-store",
+                           "-n", namespace, "--replicas=0"]
+                subprocess.run(scale_cmd, check=True, capture_output=True, text=True)
+                print(f"  ✅ Metrics store scaled down to 0 replicas")
+                
+                # Scale down dashboards if they exist
+                try:
+                    scale_dash_cmd = ["kubectl", "scale", "deployment", "opensearch-dashboards",
+                                    "-n", namespace, "--replicas=0"]
+                    subprocess.run(scale_dash_cmd, check=True, capture_output=True, text=True)
+                    print(f"  ✅ Dashboards scaled down to 0 replicas")
+                except subprocess.CalledProcessError:
+                    # Dashboards might not exist, that's okay
+                    pass
+                
+                print(f"\n  💡 Metrics data preserved in PersistentVolumeClaims")
+                print(f"     To restore: kubectl scale statefulset opensearch-metrics-store -n {namespace} --replicas=1")
+                print()
+                return True
+                
+            except subprocess.CalledProcessError as e:
+                print(f"\n❌ Failed to scale down metrics store {namespace}")
+                print(f"   Error: {e.stderr if e.stderr else 'Unknown error'}\n")
+                return False
+        
+        # Standard benchmark cluster deprovisioning (full destroy)
         if not self.destroy_script.exists():
             print(f"\n❌ Destroy script not found: {self.destroy_script}")
             print("   Please check that the script exists in gke-manifest/\n")
@@ -395,6 +459,10 @@ class ClusterProvisioner:
         Returns:
             True if benchmark client is ready, False otherwise
         """
+        # Skip benchmark client check for metrics store namespace
+        if namespace == "os-metrics":
+            return True
+        
         # First ensure the StatefulSet is deployed
         if not self._ensure_benchmark_client_deployed(namespace):
             return False

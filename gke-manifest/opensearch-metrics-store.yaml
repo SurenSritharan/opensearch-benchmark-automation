@@ -1,23 +1,16 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: opensearch-data-config
+  name: opensearch-metrics-store-config
+  namespace: os-metrics
 data:
   opensearch.yml: |
-    cluster.name: opensearch-cluster
+    cluster.name: opensearch-metrics-store
     network.host: 0.0.0.0
     
-    node.roles: [data, ingest]
+    node.roles: [cluster_manager, data, ingest]
     
-    discovery.seed_hosts:
-      - opensearch-cluster-manager-0.opensearch-cluster-manager.${NAMESPACE}.svc.cluster.local
-      - opensearch-data-0.opensearch-data.${NAMESPACE}.svc.cluster.local
-      - opensearch-data-1.opensearch-data.${NAMESPACE}.svc.cluster.local
-      - opensearch-data-2.opensearch-data.${NAMESPACE}.svc.cluster.local
-    
-    
-    discovery.seed_resolver.timeout: 10s
-    discovery.seed_resolver.max_concurrent_resolvers: 3
+    discovery.type: single-node
     
     plugins.security.disabled: false
     plugins.security.allow_default_init_securityindex: true
@@ -42,36 +35,28 @@ data:
     
     action.auto_create_index: true
     
-    cluster.routing.allocation.disk.threshold_enabled: true
-    cluster.routing.allocation.disk.watermark.low: 80%
-    cluster.routing.allocation.disk.watermark.high: 85%
-    cluster.routing.allocation.disk.watermark.flood_stage: 90%
-    
-    thread_pool.write.size: 8
-    thread_pool.write.queue_size: 2000
-    thread_pool.search.size: 13
-    thread_pool.search.queue_size: 2000
-    
-    knn.algo_param.index_thread_qty: 8
-    knn.memory.circuit_breaker.enabled: true
-    knn.memory.circuit_breaker.limit: 90%
-    knn.cache.item.expiry.enabled: false
-    knn.cache.item.expiry.minutes: "180m"
-    knn.circuit_breaker.triggered: "false"
-
-    prometheus.indices: false    
-    prometheus.nodes.filter: "_local"
+    # Optimize for metrics storage
+    cluster.routing.allocation.disk.threshold_enabled: "true"
+    cluster.routing.allocation.disk.watermark.low: "85%"
+    cluster.routing.allocation.disk.watermark.high: "90%"
+    cluster.routing.allocation.disk.watermark.flood_stage: "95%"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: os-metrics
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: opensearch-data
+  name: opensearch-metrics-store
+  namespace: os-metrics
   labels:
-    app: opensearch-data
+    app: opensearch-metrics-store
 spec:
-  clusterIP: None
+  type: ClusterIP
   selector:
-    app: opensearch-data
+    app: opensearch-metrics-store
   ports:
     - name: http
       port: 9200
@@ -80,89 +65,32 @@ spec:
       port: 9300
       targetPort: 9300
 ---
-apiVersion: v1
-kind: Service
-metadata:
-  name: opensearch-cluster
-  labels:
-    app: opensearch-data
-spec:
-  type: ClusterIP
-  selector:
-    app: opensearch-data
-  ports:
-    - name: http
-      port: 9200
-      targetPort: 9200
----
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: opensearch-data
+  name: opensearch-metrics-store
+  namespace: os-metrics
 spec:
-  serviceName: opensearch-data
-  replicas: 3
-  podManagementPolicy: Parallel
+  serviceName: opensearch-metrics-store
+  replicas: 1
   selector:
     matchLabels:
-      app: opensearch-data
+      app: opensearch-metrics-store
   template:
     metadata:
       labels:
-        app: opensearch-data
-        node-role: data
+        app: opensearch-metrics-store
     spec:
       nodeSelector:
         cloud.google.com/gke-nodepool: server-pool
       
       initContainers:
-        - name: install-async-profiler
-          image: busybox:1.36
-          command:
-            - sh
-            - -c
-            - |
-              set -e
-              echo "Installing async-profiler..."
-              
-              # Detect architecture
-              ARCH=$(uname -m)
-              if [ "$ARCH" = "x86_64" ]; then
-                PROFILER_ARCH="linux-x64"
-              elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-                PROFILER_ARCH="linux-arm64"
-              else
-                echo "Unsupported architecture: $ARCH"
-                exit 1
-              fi
-              
-              # Download and install async-profiler
-              cd /tmp
-              wget -q https://github.com/async-profiler/async-profiler/releases/download/v4.4/async-profiler-4.4-${PROFILER_ARCH}.tar.gz
-              tar -xzf async-profiler-4.4-${PROFILER_ARCH}.tar.gz
-              mkdir -p /mnt/async-profiler
-              mv async-profiler-4.4-${PROFILER_ARCH}/* /mnt/async-profiler/
-              chmod +x /mnt/async-profiler/bin/asprof
-              echo "async-profiler installed successfully!"
-          securityContext:
-            runAsUser: 0
-            runAsNonRoot: false
-          volumeMounts:
-            - name: async-profiler
-              mountPath: /mnt/async-profiler
-        
         - name: sysctl
           image: busybox:1.36
           command:
             - sh
             - -c
-            - |
-              set -ex
-              # Required for OpenSearch memory locking
-              sysctl -w vm.max_map_count=262144
-              
-              # Required for async-profiler to read kernel space events without crashing
-              sysctl -w kernel.perf_event_paranoid=1
+            - "sysctl -w vm.max_map_count=262144"
           securityContext:
             privileged: true
             runAsUser: 0
@@ -188,24 +116,24 @@ spec:
             runAsNonRoot: true
           env:
             - name: cluster.name
-              value: "opensearch-cluster"
+              value: "opensearch-metrics-store"
             - name: node.name
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
             - name: OPENSEARCH_JAVA_OPTS
-              value: "-Xms13g -Xmx13g"
+              value: "-Xms4g -Xmx4g"
             - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
               value: "admin"
             - name: DISABLE_INSTALL_DEMO_CONFIG
-              value: "true"
+              value: "false"
           resources:
             requests:
-              memory: "27Gi"
-              cpu: "7000m"
+              memory: "8Gi"
+              cpu: "2000m"
             limits:
-              memory: "27Gi"
-              cpu: "8000m"
+              memory: "8Gi"
+              cpu: "4000m"
           ports:
             - containerPort: 9200
               name: http
@@ -219,15 +147,13 @@ spec:
               subPath: opensearch.yml
             - name: certs
               mountPath: /usr/share/opensearch/config/certs
-            - name: async-profiler
-              mountPath: /opt/async-profiler
           startupProbe:
             exec:
               command:
                 - sh
                 - -c
                 - |
-                  # Check the API endpoint. We don't care if it's green/yellow yet; 
+                  # Check the API endpoint. We don't care if it's green/yellow yet;
                   # we just need to know the HTTPS server is awake and accepting credentials.
                   curl --fail -s -k \
                     --cert /usr/share/opensearch/config/certs/admin.pem \
@@ -245,10 +171,10 @@ spec:
                 - -c
                 - |
                   # Fails if status is red.
-                curl -s -k \
-                  --cert /usr/share/opensearch/config/certs/admin.pem \
-                  --key /usr/share/opensearch/config/certs/admin-key.pem \
-                  https://localhost:9200/_cluster/health?local=true | grep -qE '"status":"(green|yellow)"'
+                  curl -s -k \
+                    --cert /usr/share/opensearch/config/certs/admin.pem \
+                    --key /usr/share/opensearch/config/certs/admin-key.pem \
+                    https://localhost:9200/_cluster/health?local=true | grep -qE '"status":"(green|yellow)"'
             initialDelaySeconds: 60
             periodSeconds: 10
             timeoutSeconds: 5
@@ -270,12 +196,10 @@ spec:
       volumes:
         - name: config
           configMap:
-            name: opensearch-data-config
+            name: opensearch-metrics-store-config
         - name: certs
           secret:
             secretName: opensearch-shared-certs
-        - name: async-profiler
-          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -284,6 +208,6 @@ spec:
         storageClassName: premium-rwo
         resources:
           requests:
-            storage: 600Gi
+            storage: 200Gi
 
 # Made with Bob

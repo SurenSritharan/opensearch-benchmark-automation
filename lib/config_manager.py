@@ -327,3 +327,33 @@ class ConfigManager:
     def pod_label_selector(self) -> str:
         """Returns the pod label selector for discovering OpenSearch pods."""
         return self.cluster_config.get("pod_label_selector", "app=opensearch-cluster")
+    
+    @property
+    def metrics_store_enabled(self) -> bool:
+        """Returns whether metrics store integration is enabled."""
+        metrics_store_config = self.cluster_config.get("metrics_store", {})
+        return metrics_store_config.get("enabled", False)
+    
+    @property
+    def metrics_store_endpoint(self) -> str:
+        """Returns the metrics store endpoint (cross-namespace FQDN)."""
+        metrics_store_config = self.cluster_config.get("metrics_store", {})
+        return metrics_store_config.get("endpoint", "opensearch-metrics-store.os-metrics.svc.cluster.local:9200")
+    
+    @property
+    def metrics_store_username(self) -> str:
+        """Returns the metrics store username."""
+        metrics_store_config = self.cluster_config.get("metrics_store", {})
+        return metrics_store_config.get("username", "admin")
+    
+    @property
+    def metrics_store_password(self) -> str:
+        """Returns the metrics store password."""
+        metrics_store_config = self.cluster_config.get("metrics_store", {})
+        return metrics_store_config.get("password", "admin")
+    
+    @property
+    def metrics_store_deploy_dashboards(self) -> bool:
+        """Returns whether to automatically deploy OpenSearch Dashboards."""
+        metrics_store_config = self.cluster_config.get("metrics_store", {})
+        return metrics_store_config.get("deploy_dashboards", False)

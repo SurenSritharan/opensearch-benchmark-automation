@@ -106,6 +106,7 @@ metadata:
 spec:
   serviceName: opensearch-data
   replicas: 3
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       app: opensearch-data
@@ -299,11 +300,12 @@ spec:
                 - sh
                 - -c
                 - |
-                  # Fails if status is red.
-                curl -s -k \
-                  --cert /usr/share/opensearch/config/certs/admin.pem \
-                  --key /usr/share/opensearch/config/certs/admin-key.pem \
-                  https://localhost:9200/_cluster/health?local=true | grep -qE '"status":"(green|yellow)"'
+                  # Check if OpenSearch is responding (don't check cluster status)
+                  # This allows StatefulSet to create subsequent pods even if cluster is red
+                  curl --fail -s -k \
+                    --cert /usr/share/opensearch/config/certs/admin.pem \
+                    --key /usr/share/opensearch/config/certs/admin-key.pem \
+                    https://localhost:9200/_cluster/health?local=true > /dev/null
             initialDelaySeconds: 60
             periodSeconds: 10
             timeoutSeconds: 5
