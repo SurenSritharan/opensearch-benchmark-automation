@@ -469,7 +469,7 @@ class BenchmarkExecutor:
                 test_run_data = json.load(f)
             
             # Extract run ID from test_run data
-            run_id = test_run_data.get("test-execution-id", "unknown")
+            run_id = test_run_data.get("test-run-id", "unknown")
             
             # Parse workload params
             params_dict = {}
