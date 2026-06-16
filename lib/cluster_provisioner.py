@@ -48,12 +48,15 @@ class ClusterProvisioner:
     @staticmethod
     def check_cluster_health(namespace: str, verbose: bool = False) -> Tuple[bool, int]:
         """
-        Check if OpenSearch cluster is healthy and running in a namespace.
-        Pods must be both Running AND Ready to be considered healthy.
+        Check if a namespace is fully ready by verifying all StatefulSets have their pods Running and Ready.
+        
+        A namespace is healthy when:
+        - All StatefulSets have desired_replicas == ready_replicas
+        - All pods from those StatefulSets are Running and Ready (1/1)
         
         Args:
             namespace: Kubernetes namespace name
-            verbose: If True, print detailed pod status information
+            verbose: If True, print detailed readiness information
             
         Returns:
             Tuple of (is_healthy, ready_pod_count)
@@ -61,56 +64,95 @@ class ClusterProvisioner:
         if not ClusterProvisioner.check_namespace_exists(namespace):
             return False, 0
         
-        # Get all pods in the namespace
-        cmd = [
-            "kubectl", "get", "pods",
-            "-n", namespace,
-            "-o", "json"
-        ]
-        
         try:
+            # Get StatefulSet information
+            statefulsets_info = KubectlHelper.get_replica_info(namespace)[1]
+            if not statefulsets_info:
+                if verbose:
+                    print("     No StatefulSets found")
+                return False, 0
+            
+            # Get all pods in namespace
+            cmd = ["kubectl", "get", "pods", "-n", namespace, "-o", "json"]
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             pods_data = json.loads(result.stdout)
             pods = pods_data.get("items", [])
             
             if not pods:
+                if verbose:
+                    print("     No pods found")
                 return False, 0
             
-            # Count pods that are both Running and Ready
+            # Check StatefulSet readiness
+            all_statefulsets_ready = True
+            ready_statefulsets = 0
+            total_expected_pods = 0
+            
+            for statefulset in statefulsets_info:
+                name = statefulset["name"]
+                desired = statefulset["desired_replicas"]
+                ready = statefulset["ready_replicas"]
+                current = statefulset["current_replicas"]
+                
+                total_expected_pods += desired
+                
+                if desired > 0 and desired == ready:
+                    ready_statefulsets += 1
+                    if verbose:
+                        print(f"     ✅ {name}: {ready}/{desired} replicas ready")
+                else:
+                    all_statefulsets_ready = False
+                    if verbose:
+                        print(f"     ⏳ {name}: {ready}/{desired} replicas ready ({current} current)")
+            
+            # Check individual pod status
             ready_pods = 0
             running_not_ready = 0
             other_status = 0
             
             for pod in pods:
-                pod_name = pod.get("metadata", {}).get("name", "unknown")
+                pod_name = pod.get("metadata", {}).get("name", "")
                 phase = pod.get("status", {}).get("phase", "")
                 conditions = pod.get("status", {}).get("conditions", [])
                 
-                # Check if pod is Ready
-                is_ready = False
-                for condition in conditions:
-                    if condition.get("type") == "Ready" and condition.get("status") == "True":
-                        is_ready = True
-                        break
+                # Check if pod is managed by a StatefulSet (has ordinal suffix)
+                is_statefulset_pod = any(pod_name.startswith(ss["name"] + "-") for ss in statefulsets_info)
+                
+                if not is_statefulset_pod:
+                    continue  # Skip non-StatefulSet pods
+                
+                is_ready = any(
+                    condition.get("type") == "Ready" and condition.get("status") == "True"
+                    for condition in conditions
+                )
                 
                 if phase == "Running" and is_ready:
                     ready_pods += 1
                     if verbose:
-                        print(f"     ✅ {pod_name}: Running and Ready")
+                        print(f"     ✅ {pod_name}: Running and Ready (1/1)")
                 elif phase == "Running" and not is_ready:
                     running_not_ready += 1
                     if verbose:
-                        print(f"     ⏳ {pod_name}: Running but not Ready")
+                        print(f"     ⏳ {pod_name}: Running but not Ready (0/1)")
                 else:
                     other_status += 1
                     if verbose:
                         print(f"     ⚠️  {pod_name}: {phase}")
             
-            if verbose and (running_not_ready > 0 or other_status > 0):
-                print(f"     Status: {ready_pods} ready, {running_not_ready} starting, {other_status} other")
+            if verbose:
+                print(f"     StatefulSet readiness: {ready_statefulsets}/{len(statefulsets_info)} ready")
+                print(f"     Pod readiness: {ready_pods}/{total_expected_pods} ready")
             
-            return ready_pods > 0, ready_pods
-        except (subprocess.CalledProcessError, json.JSONDecodeError):
+            # Cluster is healthy if all StatefulSets are ready AND all expected pods are ready
+            is_healthy = all_statefulsets_ready and ready_pods == total_expected_pods
+            
+            return is_healthy, ready_pods
+            
+        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+            if verbose:
+                print(f"     ❌ Error checking cluster health: {e}")
+            return False, 0
+        except Exception:
             return False, 0
     
     def provision_namespace(self, namespace: str) -> bool:
@@ -180,7 +222,7 @@ class ClusterProvisioner:
         """
         Deprovision a specific OpenSearch cluster namespace.
         For metrics store (os-metrics), scales down to 0 replicas to preserve data.
-        For benchmark clusters, uses destroy-namespace-cluster.sh.
+        For benchmark clusters, scales StatefulSets down to 0 replicas to preserve PVC-backed data.
         
         Args:
             namespace: Kubernetes namespace to deprovision (e.g., "os-jvector", "os-metrics")
@@ -225,29 +267,33 @@ class ClusterProvisioner:
                 print(f"   Error: {e.stderr if e.stderr else 'Unknown error'}\n")
                 return False
         
-        # Standard benchmark cluster deprovisioning (full destroy)
-        if not self.destroy_script.exists():
-            print(f"\n❌ Destroy script not found: {self.destroy_script}")
-            print("   Please check that the script exists in gke-manifest/\n")
-            return False
+        # Standard benchmark cluster deprovisioning (preserve PVCs)
+        print(f"\n💾 Deprovisioning cluster: {namespace}")
+        print("   Scaling StatefulSets to 0 replicas to preserve PVC-backed data")
         
         try:
-            print(f"\n🗑️  Deprovisioning cluster: {namespace}")
-            print("   Using script: destroy-namespace-cluster.sh\n")
+            scaled_resources = []
             
-            # Run the destroy script with --force flag to skip confirmation
-            result = subprocess.run(
-                [str(self.destroy_script), namespace, "--force"],
-                cwd=str(self.destroy_script.parent),
-                check=True,
-                text=True
-            )
+            statefulsets_info = KubectlHelper.get_statefulsets(namespace)
+            if not statefulsets_info:
+                print(f"  ℹ️  No StatefulSets found in {namespace}")
+                return True
             
+            for statefulset in statefulsets_info:
+                statefulset_name = statefulset.get("metadata", {}).get("name", "unknown")
+                if KubectlHelper.scale_statefulset(namespace, statefulset_name, 0):
+                    scaled_resources.append(f"statefulset/{statefulset_name}")
+            
+            if scaled_resources:
+                print(f"  ✅ Scaled down resources: {', '.join(scaled_resources)}")
+            print(f"  💾 PVCs preserved in namespace {namespace}")
+            print(f"     To inspect: kubectl get pvc -n {namespace}")
+            print()
             return True
             
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
             print(f"\n❌ Failed to deprovision cluster {namespace}")
-            print("   Please check the error messages above.\n")
+            print(f"   Error: {str(e)}\n")
             return False
     
     def _try_scale_existing_resources(self, namespace: str) -> bool:
@@ -267,6 +313,18 @@ class ClusterProvisioner:
         print(f"  🔍 Checking for existing scaled-down resources in {namespace}...")
         
         deployments_info, statefulsets_info = KubectlHelper.get_replica_info(namespace)
+        
+        # Check if required StatefulSets exist for benchmark clusters (not metrics store)
+        if namespace != "os-metrics":
+            required_statefulsets = ["opensearch-data", "opensearch-cluster-manager", "opensearch-benchmark-client"]
+            existing_statefulset_names = [ss["name"] for ss in statefulsets_info]
+            
+            missing_statefulsets = [name for name in required_statefulsets if name not in existing_statefulset_names]
+            
+            if missing_statefulsets:
+                print(f"     ⚠️  Missing required StatefulSets: {', '.join(missing_statefulsets)}")
+                print(f"     Full provisioning required")
+                return False
         
         # Debug: Show what we found
         total_resources = len(deployments_info) + len(statefulsets_info)
@@ -323,43 +381,20 @@ class ClusterProvisioner:
         is_healthy, pod_count = self.check_cluster_health(namespace)
         
         if is_healthy:
-            print(f"  ✅ {namespace}: Running ({pod_count} pods)\n")
+            print(f"  ✅ {namespace}: Running ({pod_count} StatefulSets ready)\n")
             # Wait for benchmark client to be fully initialized
             if not self._wait_for_benchmark_client_ready(namespace):
                 return False
             return True
         
         # Cluster not healthy - check if we can scale existing resources
-        print(f"  ⚠️  {namespace}: No running pods detected")
+        print(f"  ⚠️  {namespace}: Not fully ready")
         
         if self._try_scale_existing_resources(namespace):
-            # Resources were scaled up, wait for them to start with progress updates
-            print(f"  ⏳ Waiting for scaled resources to become ready (timeout: 6 minutes)...")
+            # Resources were scaled up, wait with intelligent health monitoring
+            print(f"  ⏳ Waiting for scaled resources to become ready...")
             
-            max_wait_time = 360  # 6 minutes
-            check_interval = 15  # Check every 15 seconds
-            elapsed_time = 0
-            
-            while elapsed_time < max_wait_time:
-                time.sleep(check_interval)
-                elapsed_time += check_interval
-                
-                # Show detailed status every check
-                is_healthy, pod_count = self.check_cluster_health(namespace, verbose=True)
-                if is_healthy:
-                    print(f"  ✅ {namespace}: Ready after scaling ({pod_count} pods) - took {elapsed_time}s\n")
-                    # Wait for benchmark client to be fully initialized
-                    if not self._wait_for_benchmark_client_ready(namespace):
-                        return False
-                    return True
-                else:
-                    print(f"     Waiting... ({elapsed_time}s / {max_wait_time}s)")
-            
-            # Timeout reached
-            print(f"  ⚠️  Resources scaled but not ready after {max_wait_time}s.")
-            print(f"     The pods may still be initializing. Check status with:")
-            print(f"     kubectl get pods -n {namespace} -w\n")
-            return False
+            return self._wait_for_cluster_ready_with_health_checks(namespace)
         
         # No existing resources to scale - cluster needs provisioning
         print(f"  ❌ {namespace}: Not provisioned\n")
@@ -376,22 +411,10 @@ class ClusterProvisioner:
         if not self.provision_namespace(namespace):
             return False
         
-        # Wait for pods to start
+        # Wait for cluster to be ready with intelligent health monitoring
         print("Waiting for cluster to be ready...\n")
-        time.sleep(15)
         
-        # Verify cluster is now running
-        is_healthy, pod_count = self.check_cluster_health(namespace)
-        if is_healthy:
-            print(f"  ✅ {namespace}: Ready ({pod_count} pods)\n")
-            # Wait for benchmark client to be fully initialized
-            if not self._wait_for_benchmark_client_ready(namespace):
-                return False
-            return True
-        else:
-            print(f"  ⚠️  {namespace}: Still starting up (may need more time)")
-            print(f"   Monitor with: kubectl get pods -n {namespace} -w\n")
-            return False
+        return self._wait_for_cluster_ready_with_health_checks(namespace)
     
     def _ensure_benchmark_client_deployed(self, namespace: str) -> bool:
         """
@@ -516,6 +539,142 @@ class ClusterProvisioner:
         print(f"     The workload repository may still be cloning or failed to clone.")
         print(f"     Check pod logs: kubectl logs -n {namespace} {pod_name}\n")
         return False
+    
+    def _wait_for_cluster_ready_with_health_checks(self, namespace: str) -> bool:
+        """
+        Wait for cluster to be ready with intelligent health monitoring.
+        Performs OpenSearch cluster health checks in addition to pod readiness.
+        
+        Args:
+            namespace: Kubernetes namespace
+            
+        Returns:
+            True if cluster is healthy, False otherwise
+        """
+        base_timeout = 900  # 15 minutes maximum
+        check_interval = 15
+        elapsed_time = 0
+        last_pod_count = 0
+        no_progress_time = 0
+        max_no_progress = 180  # 3 minutes without progress
+        
+        # Track different stages of initialization
+        stages = {
+            "pods_scheduled": False,
+            "pods_running": False,
+            "opensearch_responding": False,
+            "cluster_formed": False
+        }
+        
+        while elapsed_time < base_timeout:
+            time.sleep(check_interval)
+            elapsed_time += check_interval
+            
+            # Stage 1: Check pod scheduling and readiness
+            is_healthy, pod_count = self.check_cluster_health(namespace, verbose=True)
+            
+            # Track progress
+            if pod_count > last_pod_count:
+                print(f"     ✅ Progress: {pod_count} pods ready (was {last_pod_count})")
+                last_pod_count = pod_count
+                no_progress_time = 0
+                stages["pods_running"] = True
+            else:
+                no_progress_time += check_interval
+            
+            # Stage 2: If pods are running, check OpenSearch cluster health
+            if pod_count > 0 and not stages["opensearch_responding"]:
+                opensearch_healthy = self._check_opensearch_cluster_health(namespace)
+                if opensearch_healthy:
+                    print(f"     ✅ OpenSearch cluster is responding")
+                    stages["opensearch_responding"] = True
+                    stages["cluster_formed"] = True
+                    no_progress_time = 0  # Reset on OpenSearch progress
+            
+            # Success condition: All pods ready AND OpenSearch healthy
+            if is_healthy:
+                if stages["opensearch_responding"]:
+                    print(f"  ✅ {namespace}: Fully ready ({pod_count} pods, OpenSearch healthy) - took {elapsed_time}s\n")
+                else:
+                    print(f"  ✅ {namespace}: Pods ready ({pod_count} pods) - took {elapsed_time}s")
+                    print(f"     Verifying OpenSearch cluster health...")
+                    # Give OpenSearch a moment to fully initialize
+                    time.sleep(10)
+                    if self._check_opensearch_cluster_health(namespace):
+                        print(f"  ✅ OpenSearch cluster healthy\n")
+                    else:
+                        print(f"  ⚠️  Pods ready but OpenSearch cluster not responding yet\n")
+                
+                # Wait for benchmark client
+                if not self._wait_for_benchmark_client_ready(namespace):
+                    return False
+                return True
+            
+            # Early failure detection
+            if no_progress_time >= max_no_progress:
+                print(f"     ⚠️  No progress for {no_progress_time}s")
+                print(f"     Current stage: {self._get_current_stage(stages)}")
+                print(f"     Check: kubectl get pods -n {namespace}")
+                print(f"     Events: kubectl get events -n {namespace} --sort-by='.lastTimestamp' | tail -20")
+                return False
+            
+            # Status update
+            remaining = base_timeout - elapsed_time
+            stage_info = self._get_current_stage(stages)
+            print(f"     Waiting... ({elapsed_time}s elapsed, {remaining}s remaining, {pod_count} pods ready, {stage_info})")
+        
+        # Timeout
+        print(f"  ⚠️  Cluster not ready after {base_timeout}s")
+        print(f"     Final stage: {self._get_current_stage(stages)}")
+        return False
+    
+    def _check_opensearch_cluster_health(self, namespace: str) -> bool:
+        """
+        Check OpenSearch cluster health via API.
+        
+        Args:
+            namespace: Kubernetes namespace
+            
+        Returns:
+            True if OpenSearch cluster is responding and healthy
+        """
+        try:
+            # Try to get cluster health from any data node
+            cmd = [
+                "kubectl", "exec", "-n", namespace,
+                "opensearch-data-0", "--",
+                "curl", "-sk", "-u", "admin:admin",
+                "--cert", "/usr/share/opensearch/config/certs/admin.pem",
+                "--key", "/usr/share/opensearch/config/certs/admin-key.pem",
+                "https://localhost:9200/_cluster/health"
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0 and result.stdout:
+                # Parse JSON response
+                health = json.loads(result.stdout)
+                status = health.get("status", "unknown")
+                num_nodes = health.get("number_of_nodes", 0)
+                
+                # Cluster is healthy if status is green/yellow and has nodes
+                return status in ["green", "yellow"] and num_nodes > 0
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+            pass
+        
+        return False
+    
+    def _get_current_stage(self, stages: dict) -> str:
+        """Get human-readable current initialization stage."""
+        if stages["cluster_formed"]:
+            return "cluster formed"
+        elif stages["opensearch_responding"]:
+            return "OpenSearch responding"
+        elif stages["pods_running"]:
+            return "pods running"
+        elif stages["pods_scheduled"]:
+            return "pods scheduled"
+        else:
+            return "waiting for pods"
 
 
 # Made with Bob
