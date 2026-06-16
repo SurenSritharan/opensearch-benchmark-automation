@@ -174,11 +174,13 @@ class BenchmarkExecutor:
         namespace: str,
         pod_name: str,
         workload_params: Optional[str],
-        extra_params: Optional[dict[str, Any]] = None
+        extra_params: Optional[dict[str, Any]] = None,
+        ground_truth_files: Optional[dict[int, str]] = None
     ) -> Optional[str]:
         """
         Retrieves and parses base configurations from a remote JSON file, a raw JSON string,
         or a comma-separated key-value string, then merges them with runtime overrides.
+        Also handles dynamic ground truth file selection based on query_k.
         """
         merged_dict: dict[str, Any] = {}
         has_valid_base = False
@@ -230,6 +232,18 @@ class BenchmarkExecutor:
             if extra_params:
                 merged_dict.update(extra_params)
             
+            # Dynamically select ground truth file based on k value
+            # This happens AFTER all params are merged so we can see the final k value
+            # Check for both 'query_k' (from parameter sweeps) and 'k' (from workload operations)
+            k_value = merged_dict.get('query_k') or merged_dict.get('k')
+            
+            if ground_truth_files and k_value:
+                if k_value in ground_truth_files:
+                    merged_dict['ground_truth_file'] = ground_truth_files[k_value]
+                    print(f"  📊 Using ground truth file for k={k_value}: {ground_truth_files[k_value]}")
+                else:
+                    print(f"  ⚠️  Warning: No ground truth file found for k={k_value}, available k values: {list(ground_truth_files.keys())}")
+            
             # Always output a clean, unified, minified JSON block back to OpenSearch Benchmark
             return json.dumps(merged_dict, separators=(',', ':'))
         
@@ -254,11 +268,18 @@ class BenchmarkExecutor:
         if extra_params:
             merged_extra_params.update(extra_params)
         
+        # Extract ground_truth_files mapping BEFORE popping (keep a reference)
+        # Don't pass it as a workload parameter, but pass it to retrieve_and_merge_params
+        ground_truth_files = merged_extra_params.get('ground_truth_files', None)
+        if 'ground_truth_files' in merged_extra_params:
+            merged_extra_params.pop('ground_truth_files')
+        
         updated_workload_params = self.retrieve_and_merge_params(
             namespace=self.namespace,
             pod_name=self.pod_name,
             workload_params=workload_params,
-            extra_params=merged_extra_params if merged_extra_params else None
+            extra_params=merged_extra_params if merged_extra_params else None,
+            ground_truth_files=ground_truth_files
         )
         
         # Build command array
