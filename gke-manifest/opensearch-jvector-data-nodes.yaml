@@ -119,6 +119,30 @@ spec:
       nodeSelector:
         cloud.google.com/gke-nodepool: server-pool
       
+      affinity:
+        podAntiAffinity:
+          # REQUIRED: Never schedule two data nodes on same physical node
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - opensearch-data
+              topologyKey: kubernetes.io/hostname
+          
+          # PREFERRED: Avoid co-locating with metrics store
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - opensearch-metrics-store
+                topologyKey: kubernetes.io/hostname
+
       initContainers:
         - name: install-plugins
           image: opensearchproject/opensearch:3.6.0
