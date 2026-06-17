@@ -2325,6 +2325,21 @@ class DashboardGenerator:
         return html
     
     
+    def generate_scenario_comparison(self, scenario_name: str, scenario_data: Dict[str, Any]) -> str:
+        """Generate comparison page for a specific scenario."""
+        # Use the existing generate_search_comparison but with filtered data
+        # Create a temporary all_data dict with only this scenario's data
+        filtered_data = {}
+        for engine in self.engines:
+            filtered_data[engine] = {}
+            scenario_key = f'{scenario_name}_sweeps'
+            if scenario_key in scenario_data.get(engine, {}):
+                # Map scenario-specific data to the expected 'search_sweeps' key
+                filtered_data[engine]['search_sweeps'] = scenario_data[engine][scenario_key]
+                filtered_data[engine]['search_scenario_name'] = scenario_name
+        
+        return self.generate_search_comparison(filtered_data)
+    
     def generate_all_dashboards(self):
         """Generate all dashboard files."""
         print("\n" + "=" * 80)
@@ -2343,18 +2358,33 @@ class DashboardGenerator:
             f.write(main_html)
         print(f"✅ Created: {main_file}")
         
-        # Generate search comparison if search data exists
-        search_available = any(
-            'search' in all_data.get(e, {}) or 'search_sweeps' in all_data.get(e, {})
-            for e in self.engines
-        )
-        if search_available:
-            print("Generating search comparison (search-comparison.html)...")
-            search_html = self.generate_search_comparison(all_data)
-            if search_html:
+        # Find all search scenarios
+        search_scenarios = set()
+        for engine in self.engines:
+            for key in all_data.get(engine, {}).keys():
+                if key.endswith('_sweeps') and 'search' in key:
+                    scenario_name = key.replace('_sweeps', '')
+                    search_scenarios.add(scenario_name)
+        
+        # Generate per-scenario comparison pages
+        if search_scenarios:
+            print(f"Generating {len(search_scenarios)} scenario comparison page(s)...")
+            for scenario_name in sorted(search_scenarios):
+                print(f"  - {scenario_name}-comparison.html...")
+                scenario_html = self.generate_scenario_comparison(scenario_name, all_data)
+                if scenario_html:
+                    scenario_file = self.results_dir / f"{scenario_name}-comparison.html"
+                    with open(scenario_file, 'w') as f:
+                        f.write(scenario_html)
+                    print(f"    ✅ Created: {scenario_file}")
+            
+            # Also generate a combined search-comparison.html with tabs/iframes
+            print("Generating combined search comparison (search-comparison.html)...")
+            combined_html = self.generate_combined_search_comparison(search_scenarios)
+            if combined_html:
                 search_file = self.results_dir / "search-comparison.html"
                 with open(search_file, 'w') as f:
-                    f.write(search_html)
+                    f.write(combined_html)
                 print(f"✅ Created: {search_file}")
         
         # Generate bulk ingest comparison if bulk ingest data exists
