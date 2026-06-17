@@ -699,12 +699,33 @@ class DashboardGenerator:
                         if sweep_num not in sweep_winners or sweep['throughput'] > sweep_winners[sweep_num][1]:
                             sweep_winners[sweep_num] = (engine, sweep['throughput'])
             
-            html += '''
+            # Get the scenario name from the first engine that has search data
+            display_scenario_name = None
+            for engine in self.engines:
+                scenario_name = all_data.get(engine, {}).get('search_scenario_name')
+                if scenario_name:
+                    display_scenario_name = scenario_name
+                    break
+            
+            # Format the scenario name for display (e.g., "scenario-1-search" -> "Scenario 1: Search")
+            if display_scenario_name:
+                # Extract scenario number and type
+                parts = display_scenario_name.split('-')
+                if len(parts) >= 3:
+                    scenario_num = parts[1]
+                    scenario_type = ' '.join(parts[2:]).title()
+                    title_text = f"Scenario {scenario_num}: {scenario_type} Performance (Parameter Sweeps)"
+                else:
+                    title_text = f"{display_scenario_name.replace('-', ' ').title()} (Parameter Sweeps)"
+            else:
+                title_text = "Search Performance (Parameter Sweeps)"
+            
+            html += f'''
         <div class="section" onclick="window.location.href='search-comparison.html'">
             <div class="section-header">
                 <div class="section-title">
                     <span class="section-icon">🔍</span>
-                    <span>Search Performance (Parameter Sweeps)</span>
+                    <span>{title_text}</span>
                     <span class="status-badge complete">✓ Complete</span>
                 </div>
                 <button class="view-comparison" onclick="event.stopPropagation(); window.location.href='search-comparison.html'">
