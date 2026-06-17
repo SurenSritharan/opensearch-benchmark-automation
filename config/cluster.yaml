@@ -30,7 +30,7 @@ profiling:
 # Metrics collection configuration
 # Enable or disable GKE resource metrics collection and graphing
 metrics:
-  enabled: false  # Set to false to disable metrics collection globally
+  enabled: true  # Set to false to disable metrics collection globally
   interval_seconds: 10  # Seconds between metric samples (default: 10)
   generate_graphs: true  # Automatically generate graphs after collection (default: true)
 
