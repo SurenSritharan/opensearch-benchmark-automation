@@ -38,8 +38,15 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🚀 OpenSearch Benchmark Service <span class="badge cloud">Cloud-Native</span></h1>
-            <p class="subtitle">Execute benchmarks directly without kubectl - reads from config/datasets.yaml</p>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h1>🚀 OpenSearch Benchmark Service <span class="badge cloud">Cloud-Native</span></h1>
+                    <p class="subtitle">Execute benchmarks directly without kubectl - reads from git repo</p>
+                </div>
+                <button id="syncBtn" onclick="syncConfig()" style="background: #4caf50; padding: 10px 20px;" title="Pull latest changes from git and reload configuration">
+                    🔄 Sync from Git
+                </button>
+            </div>
         </div>
 
         <div class="card">
@@ -223,6 +230,60 @@
                 btn.textContent = 'Start Benchmark';
             }
         });
+
+        async function syncConfig() {
+            const btn = document.getElementById('syncBtn');
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '⏳ Pulling from git...';
+            
+            try {
+                const res = await fetch(`${API_BASE}/api/v1/sync`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'}
+                });
+                
+                const data = await res.json();
+                if (res.ok) {
+                    btn.textContent = '✅ Synced!';
+                    btn.style.background = '#4caf50';
+                    
+                    // Reload datasets to reflect changes
+                    await loadDatasets();
+                    
+                    // Show detailed success message
+                    let message = data.message || 'Configuration synced successfully!';
+                    if (data.git_output && data.git_pull_success) {
+                        message += '\n\nGit output:\n' + data.git_output;
+                    }
+                    alert(message);
+                    
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                    }, 2000);
+                } else {
+                    btn.textContent = '❌ Failed';
+                    btn.style.background = '#f44336';
+                    showError(data.error || 'Failed to sync configuration');
+                    
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.style.background = '#4caf50';
+                    }, 3000);
+                }
+            } catch (err) {
+                btn.textContent = '❌ Error';
+                btn.style.background = '#f44336';
+                showError(`Sync error: ${err.message}`);
+                
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.style.background = '#4caf50';
+                }, 3000);
+            } finally {
+                btn.disabled = false;
+            }
+        }
 
         loadDatasets();
         loadJobs();

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Configuration loader for cloud-native benchmark service"""
 import yaml
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Any
 import logging
@@ -16,6 +17,58 @@ class ConfigLoader:
         self.config_dir = self.workspace_dir / 'config'
         self.workloads_dir = Path(workloads_dir)
         self.datasets_config = self._load_datasets_config()
+    
+    def reload_config(self, git_pull: bool = True) -> Dict[str, Any]:
+        """Reload the datasets configuration from disk, optionally pulling latest from git
+        
+        Args:
+            git_pull: If True, perform git pull before reloading config
+            
+        Returns:
+            Dict with reload status and dataset information
+        """
+        result = {
+            'git_pull_attempted': git_pull,
+            'git_pull_success': False,
+            'git_output': None,
+            'datasets_count': 0,
+            'datasets': []
+        }
+        
+        # Attempt git pull if requested
+        if git_pull:
+            try:
+                logger.info("Pulling latest changes from git...")
+                git_result = subprocess.run(
+                    ['git', 'pull', 'origin', 'main'],
+                    cwd=str(self.workspace_dir),
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+                result['git_pull_success'] = git_result.returncode == 0
+                result['git_output'] = git_result.stdout + git_result.stderr
+                
+                if git_result.returncode == 0:
+                    logger.info(f"Git pull successful: {git_result.stdout.strip()}")
+                else:
+                    logger.warning(f"Git pull failed (exit {git_result.returncode}): {git_result.stderr}")
+                    
+            except subprocess.TimeoutExpired:
+                logger.error("Git pull timed out after 30 seconds")
+                result['git_output'] = "Git pull timed out"
+            except Exception as e:
+                logger.error(f"Git pull error: {e}")
+                result['git_output'] = f"Error: {str(e)}"
+        
+        # Reload configuration from disk
+        logger.info("Reloading configuration from disk...")
+        self.datasets_config = self._load_datasets_config()
+        result['datasets_count'] = len(self.datasets_config.get('datasets', {}))
+        result['datasets'] = list(self.datasets_config.get('datasets', {}).keys())
+        
+        logger.info(f"Configuration reloaded: {result['datasets_count']} datasets")
+        return result
     
     def _load_datasets_config(self) -> Dict[str, Any]:
         """Load datasets.yaml configuration"""

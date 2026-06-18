@@ -88,6 +88,42 @@ def health():
     })
 
 
+@app.route('/api/v1/sync', methods=['POST'])
+def sync_config():
+    """Pull latest changes from git and reload configuration
+    
+    This performs:
+    1. git pull to get latest config/datasets.yaml and workload params
+    2. Reload configuration into memory
+    """
+    try:
+        logger.info("Syncing configuration from git...")
+        result = config_loader.reload_config(git_pull=True)
+        
+        # Build user-friendly message
+        if result['git_pull_success']:
+            message = f"✓ Synced from git\n✓ Loaded {result['datasets_count']} datasets: {', '.join(result['datasets'])}"
+        else:
+            message = f"⚠ Git pull failed, using existing files\n✓ Loaded {result['datasets_count']} datasets: {', '.join(result['datasets'])}"
+        
+        logger.info(f"Sync complete: {result}")
+        
+        return jsonify({
+            'status': 'success',
+            'message': message,
+            'git_pull_success': result['git_pull_success'],
+            'git_output': result['git_output'],
+            'datasets_count': result['datasets_count'],
+            'datasets': result['datasets']
+        })
+    except Exception as e:
+        logger.error(f"Error syncing configuration: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+
 @app.route('/api/v1/discover')
 def discover():
     """Discover available datasets, engines, and test procedures"""
