@@ -28,32 +28,58 @@ manager = Manager()
 jobs = manager.dict()
 job_lock = manager.Lock()
 
+# Per-engine locks to ensure only one benchmark runs per engine at a time
+engine_locks = manager.dict()  # engine -> Lock
+engine_locks_lock = manager.Lock()  # Lock for accessing engine_locks dict
+
+def get_engine_lock(engine: str):
+    """Get or create a lock for a specific engine"""
+    with engine_locks_lock:
+        if engine not in engine_locks:
+            engine_locks[engine] = manager.Lock()
+        return engine_locks[engine]
+
+def is_engine_busy(engine: str) -> bool:
+    """Check if an engine is currently running a benchmark"""
+    all_jobs = dict(jobs)
+    for job in all_jobs.values():
+        if job.get('engine') == engine and job.get('status') == 'running':
+            return True
+    return False
+
 # Thread pool for running benchmarks
 MAX_CONCURRENT_JOBS = 3
 executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS)
 
 
 def run_benchmark_job(job_id: str, dataset: str, engine: str, scenario: str, options: Dict[str, Any]):
-    """Execute a benchmark job in background"""
+    """Execute a benchmark job in background with per-engine locking"""
+    engine_lock = get_engine_lock(engine)
+    
     try:
-        with job_lock:
-            jobs[job_id]['status'] = 'running'
-            jobs[job_id]['started_at'] = datetime.utcnow().isoformat()
-        
-        logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
-        
-        # Extract workload params from options
-        workload_params = options.get('workload_params', None)
-        
-        # Run the benchmark
-        result = benchmark_runner.run_benchmark(
-            dataset=dataset,
-            engine=engine,
-            scenario=scenario,
-            job_id=job_id,
-            enable_profiling=not options.get('no_profiling', False),
-            enable_metrics=not options.get('no_metrics', False),
-            workload_params=workload_params
+        # Wait for engine lock (queues if another job is running on this engine)
+        logger.info(f"Job {job_id} waiting for engine lock: {engine}")
+        with engine_lock:
+            logger.info(f"Job {job_id} acquired engine lock: {engine}")
+            
+            with job_lock:
+                jobs[job_id]['status'] = 'running'
+                jobs[job_id]['started_at'] = datetime.utcnow().isoformat()
+            
+            logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
+            
+            # Extract workload params from options
+            workload_params = options.get('workload_params', None)
+            
+            # Run the benchmark
+            result = benchmark_runner.run_benchmark(
+                dataset=dataset,
+                engine=engine,
+                scenario=scenario,
+                job_id=job_id,
+                enable_profiling=not options.get('no_profiling', False),
+                enable_metrics=not options.get('no_metrics', False),
+                workload_params=workload_params
         )
         
         # Update job with results
