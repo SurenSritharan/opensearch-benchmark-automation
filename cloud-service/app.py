@@ -606,6 +606,76 @@ def list_jobs():
     })
 
 
+@app.route('/api/v1/benchmark/<job_id>/results')
+def get_job_results(job_id: str):
+    """Get results for a specific job"""
+    job = get_job(job_id)
+    
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    if job['status'] not in ['completed', 'error']:
+        return jsonify({'error': f'Job is {job["status"]}, no results available yet'}), 400
+    
+    # Read results from the job's result directory
+    results_dir = Path('/results') / job_id
+    
+    if not results_dir.exists():
+        return jsonify({'error': 'Results directory not found'}), 404
+    
+    # Collect all sweep results
+    sweeps = []
+    for sweep_dir in sorted(results_dir.glob('sweep-*')):
+        sweep_data = {
+            'sweep_name': sweep_dir.name,
+            'test_run': None,
+            'workload_params': None,
+            'benchmark_log': None
+        }
+        
+        # Read test_run.json
+        test_run_file = sweep_dir / 'test_run.json'
+        if test_run_file.exists():
+            try:
+                with open(test_run_file) as f:
+                    sweep_data['test_run'] = json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading test_run.json: {e}")
+        
+        # Read workload-params.json
+        params_file = sweep_dir / 'workload-params.json'
+        if params_file.exists():
+            try:
+                with open(params_file) as f:
+                    sweep_data['workload_params'] = json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading workload-params.json: {e}")
+        
+        # Read benchmark.log (last 100 lines)
+        log_file = sweep_dir / 'benchmark.log'
+        if log_file.exists():
+            try:
+                with open(log_file) as f:
+                    lines = f.readlines()
+                    sweep_data['benchmark_log'] = ''.join(lines[-100:])
+            except Exception as e:
+                logger.error(f"Error reading benchmark.log: {e}")
+        
+        sweeps.append(sweep_data)
+    
+    return jsonify({
+        'job_id': job_id,
+        'job': job,
+        'sweeps': sweeps
+    })
+
+
+@app.route('/results/<job_id>')
+def view_results(job_id: str):
+    """Serve the results viewer page"""
+    return send_from_directory('web', 'results.html')
+
+
 @app.route('/api/v1/logs')
 def get_benchmark_logs():
     """Get opensearch-benchmark logs"""

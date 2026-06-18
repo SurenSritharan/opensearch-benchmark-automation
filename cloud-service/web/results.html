@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Benchmark Results Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .job-info {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .job-info h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+        
+        .info-item {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .info-label {
+            font-weight: 600;
+            color: #666;
+            font-size: 0.85em;
+            margin-bottom: 5px;
+        }
+        
+        .info-value {
+            font-size: 1.1em;
+            color: #333;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.9em;
+            font-weight: 600;
+        }
+        
+        .status-completed { background: #d4edda; color: #155724; }
+        .status-running { background: #fff3cd; color: #856404; }
+        .status-queued { background: #d1ecf1; color: #0c5460; }
+        .status-error { background: #f8d7da; color: #721c24; }
+        .status-cancelled { background: #e2e3e5; color: #383d41; }
+        
+        .sweeps-container {
+            margin-top: 30px;
+        }
+        
+        .sweep-card {
+            background: white;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+        
+        .sweep-header {
+            background: #667eea;
+            color: white;
+            padding: 15px 20px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .sweep-header:hover {
+            background: #5568d3;
+        }
+        
+        .sweep-body {
+            padding: 20px;
+            display: none;
+        }
+        
+        .sweep-body.active {
+            display: block;
+        }
+        
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        
+        .metric-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .metric-label {
+            font-size: 0.85em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .metric-value {
+            font-size: 1.5em;
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .metric-unit {
+            font-size: 0.7em;
+            color: #999;
+            margin-left: 4px;
+        }
+        
+        .section {
+            margin-top: 25px;
+        }
+        
+        .section-title {
+            font-size: 1.2em;
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e9ecef;
+        }
+        
+        .params-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        
+        .params-table th,
+        .params-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .params-table th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #666;
+        }
+        
+        .log-viewer {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 6px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid #f5c6cb;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 60px;
+            color: #667eea;
+            font-size: 1.2em;
+        }
+        
+        .back-button {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            transition: background 0.3s;
+        }
+        
+        .back-button:hover {
+            background: #5568d3;
+        }
+        
+        .toggle-icon {
+            transition: transform 0.3s;
+        }
+        
+        .toggle-icon.active {
+            transform: rotate(180deg);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Benchmark Results Viewer</h1>
+            <p>Detailed analysis of benchmark execution</p>
+        </div>
+        
+        <div class="content">
+            <a href="/" class="back-button">← Back to Dashboard</a>
+            
+            <div id="loading" class="loading">
+                Loading results...
+            </div>
+            
+            <div id="error" class="error-message" style="display: none;"></div>
+            
+            <div id="results" style="display: none;">
+                <div class="job-info">
+                    <h2>Job Information</h2>
+                    <div class="info-grid" id="jobInfo"></div>
+                </div>
+                
+                <div class="sweeps-container">
+                    <h2 style="color: #667eea; margin-bottom: 20px;">Parameter Sweeps</h2>
+                    <div id="sweeps"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Get job ID from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const jobId = urlParams.get('job_id');
+        
+        if (!jobId) {
+            showError('No job ID specified in URL');
+        } else {
+            loadResults(jobId);
+        }
+        
+        async function loadResults(jobId) {
+            try {
+                const response = await fetch(`/api/v1/benchmark/${jobId}/results`);
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to load results');
+                }
+                
+                const data = await response.json();
+                displayResults(data);
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+        
+        function showError(message) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('error').style.display = 'block';
+            document.getElementById('error').textContent = `Error: ${message}`;
+        }
+        
+        function displayResults(data) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('results').style.display = 'block';
+            
+            // Display job info
+            const job = data.job;
+            const jobInfoHtml = `
+                <div class="info-item">
+                    <div class="info-label">Job ID</div>
+                    <div class="info-value">${job.job_id}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Status</div>
+                    <div class="info-value">
+                        <span class="status-badge status-${job.status}">${job.status}</span>
+                    </div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Dataset</div>
+                    <div class="info-value">${job.dataset}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Engine</div>
+                    <div class="info-value">${job.engine}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Scenario</div>
+                    <div class="info-value">${job.ui_scenario || job.scenario}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Created</div>
+                    <div class="info-value">${formatDate(job.created_at)}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Started</div>
+                    <div class="info-value">${job.started_at ? formatDate(job.started_at) : 'N/A'}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Completed</div>
+                    <div class="info-value">${job.completed_at ? formatDate(job.completed_at) : 'N/A'}</div>
+                </div>
+            `;
+            document.getElementById('jobInfo').innerHTML = jobInfoHtml;
+            
+            // Display sweeps
+            const sweepsHtml = data.sweeps.map((sweep, index) => {
+                return createSweepCard(sweep, index);
+            }).join('');
+            document.getElementById('sweeps').innerHTML = sweepsHtml;
+            
+            // Add click handlers for sweep headers
+            document.querySelectorAll('.sweep-header').forEach(header => {
+                header.addEventListener('click', function() {
+                    const body = this.nextElementSibling;
+                    const icon = this.querySelector('.toggle-icon');
+                    body.classList.toggle('active');
+                    icon.classList.toggle('active');
+                });
+            });
+        }
+        
+        function createSweepCard(sweep, index) {
+            const testRun = sweep.test_run;
+            const params = sweep.workload_params;
+            
+            let metricsHtml = '';
+            if (testRun && testRun.results && testRun.results.op_metrics) {
+                metricsHtml = createMetricsGrid(testRun.results.op_metrics);
+            }
+            
+            let paramsHtml = '';
+            if (params) {
+                paramsHtml = createParamsTable(params);
+            }
+            
+            let logHtml = '';
+            if (sweep.benchmark_log) {
+                logHtml = `
+                    <div class="section">
+                        <div class="section-title">Benchmark Log (last 100 lines)</div>
+                        <div class="log-viewer">${escapeHtml(sweep.benchmark_log)}</div>
+                    </div>
+                `;
+            }
+            
+            return `
+                <div class="sweep-card">
+                    <div class="sweep-header">
+                        <h3>${sweep.sweep_name}</h3>
+                        <span class="toggle-icon">▼</span>
+                    </div>
+                    <div class="sweep-body">
+                        ${metricsHtml}
+                        ${paramsHtml}
+                        ${logHtml}
+                    </div>
+                </div>
+            `;
+        }
+        
+        function createMetricsGrid(opMetrics) {
+            const metrics = [];
+            
+            for (const [opName, opData] of Object.entries(opMetrics)) {
+                if (opData.throughput) {
+                    metrics.push({
+                        label: `${opName} Throughput`,
+                        value: opData.throughput.toFixed(2),
+                        unit: 'ops/s'
+                    });
+                }
+                if (opData.latency) {
+                    metrics.push({
+                        label: `${opName} Latency (p50)`,
+                        value: opData.latency.toFixed(2),
+                        unit: 'ms'
+                    });
+                }
+                if (opData['service_time']) {
+                    metrics.push({
+                        label: `${opName} Service Time`,
+                        value: opData['service_time'].toFixed(2),
+                        unit: 'ms'
+                    });
+                }
+                if (opData.recall) {
+                    metrics.push({
+                        label: `${opName} Recall`,
+                        value: (opData.recall * 100).toFixed(2),
+                        unit: '%'
+                    });
+                }
+            }
+            
+            if (metrics.length === 0) {
+                return '<p>No metrics available</p>';
+            }
+            
+            return `
+                <div class="section">
+                    <div class="section-title">Performance Metrics</div>
+                    <div class="metrics-grid">
+                        ${metrics.map(m => `
+                            <div class="metric-card">
+                                <div class="metric-label">${m.label}</div>
+                                <div class="metric-value">
+                                    ${m.value}
+                                    <span class="metric-unit">${m.unit}</span>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+        
+        function createParamsTable(params) {
+            const rows = Object.entries(params).map(([key, value]) => `
+                <tr>
+                    <th>${key}</th>
+                    <td>${JSON.stringify(value)}</td>
+                </tr>
+            `).join('');
+            
+            return `
+                <div class="section">
+                    <div class="section-title">Workload Parameters</div>
+                    <table class="params-table">
+                        ${rows}
+                    </table>
+                </div>
+            `;
+        }
+        
+        function formatDate(isoString) {
+            if (!isoString) return 'N/A';
+            const date = new Date(isoString);
+            return date.toLocaleString();
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
