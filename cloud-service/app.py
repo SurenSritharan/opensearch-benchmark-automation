@@ -91,6 +91,8 @@ executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS)
 def run_benchmark_job(job_id: str, dataset: str, engine: str, scenario: str, options: Dict[str, Any]):
     """Execute a benchmark job in background with per-engine locking"""
     engine_lock = get_engine_lock(engine)
+    jobs = get_jobs()
+    job_lock = get_job_lock()
     
     try:
         # Wait for engine lock (queues if another job is running on this engine)
@@ -144,11 +146,24 @@ def index():
 @app.route('/health')
 def health():
     """Health check endpoint"""
-    active_jobs = sum(1 for j in jobs.values() if j['status'] == 'running')
+    jobs = get_jobs()
+    job_lock = get_job_lock()
+    
+    if not jobs or not job_lock:
+        return jsonify({
+            'status': 'initializing',
+            'active_jobs': 0,
+            'total_jobs': 0
+        })
+    
+    with job_lock:
+        active_jobs = sum(1 for j in jobs.values() if j.get('status') == 'running')
+        total_jobs = len(jobs)
+    
     return jsonify({
         'status': 'healthy',
         'active_jobs': active_jobs,
-        'total_jobs': len(jobs)
+        'total_jobs': total_jobs
     })
 
 
@@ -297,6 +312,8 @@ def trigger_benchmark():
         
         # Create job
         job_id = str(uuid.uuid4())
+        jobs = get_jobs()
+        job_lock = get_job_lock()
         
         with job_lock:
             jobs[job_id] = {
@@ -344,6 +361,9 @@ def trigger_benchmark():
 @app.route('/api/v1/benchmark/<job_id>')
 def get_job_status(job_id: str):
     """Get status of a specific job"""
+    jobs = get_jobs()
+    job_lock = get_job_lock()
+    
     if job_id not in jobs:
         return jsonify({'error': 'Job not found'}), 404
     
@@ -361,6 +381,9 @@ def get_job_status(job_id: str):
 @app.route('/api/v1/benchmark')
 def list_jobs():
     """List all jobs"""
+    jobs = get_jobs()
+    job_lock = get_job_lock()
+    
     with job_lock:
         # Create a deep copy of jobs to avoid any reference issues
         jobs_snapshot = {k: v.copy() for k, v in jobs.items()}
