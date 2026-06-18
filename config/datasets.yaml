@@ -31,20 +31,34 @@ datasets:
     # Keys must match the Jinja2 template variables in the workload
     # These can be overridden by parameter sweeps or CLI arguments
     default_params:
-      target_index_primary_shards: 3      # Distribute across 3 data nodes
-      target_index_replica_shards: 1      # 1 replica for high availability
+      # Index configuration (from jvector-params.json)
+      target_index_name: "cohere-msmarco-1024"
+      target_index_body: "indices/index.json"
+      target_index_primary_shards: 3      # jvector default
+      target_index_replica_shards: 1      # jvector default
+      target_index_dimension: 1024
+      target_index_max_num_segments: 1
+      target_field_name: "vector"
+      
+      # Engine configuration
+      engine: "jvector"
+      method_name: "disk_ann"
+      space_type: "cosinesimil"
+      mode: "in_memory"
+      
+      # Query configuration
       queries_file: "/datasets/msmarco/cohere_msmarco_queries.fvec"
       
+      # Query body structure (YAML representation of JSON)
+      query_body:
+        docvalue_fields: ["_id"]
+        stored_fields: "_none_"
+        _source: false
+      
       # Ground truth file mapping based on k value
-      # The system will automatically select the correct ground truth file based on query_k parameter
       ground_truth_files:
         10: "/datasets/msmarco/cohere_msmarco_indices_d1024_k10_1m.ivec"
         100: "/datasets/msmarco/cohere_msmarco_indices_d1024_k100_1m.ivec"
-      
-      # You can add any other template variables here:
-      # target_index_dimension: 1024
-      # ef_construction: 128
-      # m: 16
     data_files:
       - name: "cohere_msmarco_base.fvec"
         url: "https://jvector-datasets-infratest.s3.us-east-2.amazonaws.com/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/cohere/cohere_msmarco/cohere_msmarco_base.fvec"
@@ -56,11 +70,6 @@ datasets:
         url: "https://jvector-datasets-infratest.s3.us-east-2.amazonaws.com/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/cohere/cohere_msmarco/cohere_msmarco_indices_d1024_k10_1m.ivec"
       - name: "cohere_msmarco_queries.fvec"
         url: "https://jvector-datasets-infratest.s3.us-east-2.amazonaws.com/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/cohere/cohere_msmarco/cohere_msmarco_queries.fvec"
-    # Parameter files for different engines
-    param_files:
-      jvector: "params/jvector-params.json"
-      faiss: "params/faiss-params.json"
-      lucene: "params/lucene-params.json"
     # Test procedures for msmarco
     test_procedures:
       - name: "create-index-only"
