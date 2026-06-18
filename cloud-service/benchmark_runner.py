@@ -26,9 +26,10 @@ class BenchmarkRunner:
         dataset: str,
         engine: str,
         scenario: str = 'search',
-        job_id: str = None,
+        job_id: Optional[str] = None,
         enable_profiling: bool = True,
-        enable_metrics: bool = True
+        enable_metrics: bool = True,
+        workload_params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Execute a benchmark using opensearch-benchmark CLI
@@ -40,15 +41,39 @@ class BenchmarkRunner:
             job_id: Unique job identifier
             enable_profiling: Enable profiling (not implemented in cloud-native version)
             enable_metrics: Enable metrics collection (not implemented in cloud-native version)
+            workload_params: Additional workload parameters for parameter sweeps
         
         Returns:
             Dictionary with execution results
         """
         try:
+            # Generate job_id if not provided
+            if job_id is None:
+                import uuid
+                job_id = str(uuid.uuid4())
+            
             # Get configuration
             target_host = self.config.get_target_host(engine)
             workload_path = self.config.get_workload_path(dataset)
-            params_file = self.config.get_workload_params_file(dataset, engine)
+            
+            # Get default params from dataset config
+            dataset_config = self.config.get_dataset_config(dataset)
+            default_params = dataset_config.get('default_params', {})
+            
+            # Merge default_params with workload_params (workload_params override defaults)
+            merged_params = {}
+            if default_params:
+                merged_params.update(default_params)
+                # Remove ground_truth_files - it's metadata, not a workload parameter
+                merged_params.pop('ground_truth_files', None)
+                logger.info(f"Loaded default params from dataset config: {list(default_params.keys())}")
+            
+            if workload_params:
+                merged_params.update(workload_params)
+                logger.info(f"Merged with runtime params: {list(workload_params.keys())}")
+            
+            # Use merged params for the benchmark
+            final_params = merged_params if merged_params else None
             
             # Check cluster health before starting
             logger.info(f"Checking cluster health for {engine}...")
@@ -65,19 +90,26 @@ class BenchmarkRunner:
             job_results_dir.mkdir(parents=True, exist_ok=True)
             results_file = job_results_dir / 'results.json'
             
-            # Build opensearch-benchmark command
+            # Build opensearch-benchmark command - use 'execute_test' not 'execute-test'
             cmd = [
                 'opensearch-benchmark',
-                'execute-test',
+                'run',
                 '--workload-path', workload_path,
                 '--target-hosts', target_host,
                 '--client-options', 'timeout:300,use_ssl:true,verify_certs:false,basic_auth_user:admin,basic_auth_password:admin',
                 '--test-procedure', scenario,
-                '--workload-params', params_file,
                 '--results-format', 'json',
                 '--results-file', str(results_file),
                 '--kill-running-processes'  # Clean up any stuck processes
             ]
+            
+            # Add workload params from parameter sweeps as key:value pairs
+            if final_params:
+                # Format: key1:value1,key2:value2
+                params_list = [f"{k}:{v}" for k, v in final_params.items()]
+                params_str = ','.join(params_list)
+                cmd.extend(['--workload-params', params_str])
+                logger.info(f"Final workload params: {params_str}")
             
             # Set up environment
             env = os.environ.copy()
@@ -88,7 +120,6 @@ class BenchmarkRunner:
             logger.info(f"Command: {' '.join(cmd)}")
             logger.info(f"Target host: {target_host}")
             logger.info(f"Workload path: {workload_path}")
-            logger.info(f"Params file: {params_file}")
             
             # Execute benchmark
             start_time = datetime.utcnow()
@@ -118,8 +149,16 @@ class BenchmarkRunner:
             
             if result.returncode != 0:
                 logger.error(f"Benchmark failed with exit code {result.returncode}")
-                logger.error(f"STDOUT: {result.stdout[-1000:]}")
-                logger.error(f"STDERR: {result.stderr[-1000:]}")
+                logger.error(f"STDERR:")
+                if result.stderr:
+                    logger.error(result.stderr[-2000:])
+                else:
+                    logger.error("(empty)")
+                logger.error(f"STDOUT (last 1000 chars):")
+                if result.stdout:
+                    logger.error(result.stdout[-1000:])
+                else:
+                    logger.error("(empty)")
             else:
                 logger.info(f"Benchmark completed successfully in {duration:.1f}s")
             

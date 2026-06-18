@@ -40,6 +40,9 @@ def run_benchmark_job(job_id: str, dataset: str, engine: str, scenario: str, opt
         
         logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
         
+        # Extract workload params from options
+        workload_params = options.get('workload_params', None)
+        
         # Run the benchmark
         result = benchmark_runner.run_benchmark(
             dataset=dataset,
@@ -47,7 +50,8 @@ def run_benchmark_job(job_id: str, dataset: str, engine: str, scenario: str, opt
             scenario=scenario,
             job_id=job_id,
             enable_profiling=not options.get('no_profiling', False),
-            enable_metrics=not options.get('no_metrics', False)
+            enable_metrics=not options.get('no_metrics', False),
+            workload_params=workload_params
         )
         
         # Update job with results
@@ -151,7 +155,8 @@ def trigger_benchmark():
                 'created_at': datetime.utcnow().isoformat(),
                 'options': {
                     'no_profiling': data.get('no_profiling', False),
-                    'no_metrics': data.get('no_metrics', False)
+                    'no_metrics': data.get('no_metrics', False),
+                    'workload_params': data.get('workload_params', None)
                 }
             }
         
