@@ -14,10 +14,43 @@ logger = logging.getLogger(__name__)
 class BenchmarkRunner:
     """Executes opensearch-benchmark commands without kubectl dependencies"""
     
-    def __init__(self, config_loader: ConfigLoader, results_dir: str = '/results'):
+    def __init__(self, config_loader: ConfigLoader, results_dir: str = '/results', workloads_dir: str = '/datasets/opensearch-benchmark-workloads'):
         self.config = config_loader
         self.results_dir = Path(results_dir)
         self.results_dir.mkdir(parents=True, exist_ok=True)
+        self.workloads_dir = Path(workloads_dir)
+    
+    def update_workloads(self) -> bool:
+        """
+        Update workloads repository to latest version
+        
+        Returns:
+            True if update successful, False otherwise
+        """
+        try:
+            if not self.workloads_dir.exists():
+                logger.warning(f"Workloads directory not found: {self.workloads_dir}")
+                return False
+            
+            logger.info("Updating workloads repository...")
+            result = subprocess.run(
+                ['git', 'pull', 'origin', 'main'],
+                cwd=str(self.workloads_dir),
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode == 0:
+                logger.info(f"Workloads updated: {result.stdout.strip()}")
+                return True
+            else:
+                logger.warning(f"Workloads update failed: {result.stderr}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error updating workloads: {e}")
+            return False
     
     def run_benchmark(
         self,
@@ -43,6 +76,9 @@ class BenchmarkRunner:
             Dictionary with execution results
         """
         try:
+            # Update workloads to latest version
+            self.update_workloads()
+            
             # Get configuration
             target_host = self.config.get_target_host(engine)
             workload_path = self.config.get_workload_path(dataset)
