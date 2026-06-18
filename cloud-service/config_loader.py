@@ -64,13 +64,32 @@ class ConfigLoader:
         if engine not in param_files:
             raise ValueError(f"Engine '{engine}' not found for dataset '{dataset_name}'")
         
-        # Return absolute path
         param_file = param_files[engine]
-        return str(self.workspace_dir / param_file)
+        
+        # Check if it's an absolute path
+        if param_file.startswith('/'):
+            return param_file
+        
+        # Check if custom_workload is specified
+        custom_workload = dataset_config.get('custom_workload')
+        if custom_workload:
+            # Relative to custom workload directory
+            return str(self.workspace_dir / custom_workload / param_file)
+        
+        # Default: relative to workload directory
+        workload = dataset_config.get('workload', 'vectorsearch')
+        return str(self.workloads_dir / workload / param_file)
     
     def get_workload_path(self, dataset_name: str) -> str:
         """Get the workload directory path for a dataset"""
         dataset_config = self.get_dataset_config(dataset_name)
+        
+        # Check if custom_workload is specified (relative to workspace)
+        custom_workload = dataset_config.get('custom_workload')
+        if custom_workload:
+            return str(self.workspace_dir / custom_workload)
+        
+        # Default: use workload name in workloads directory
         workload = dataset_config.get('workload', 'vectorsearch')
         return str(self.workloads_dir / workload)
     
