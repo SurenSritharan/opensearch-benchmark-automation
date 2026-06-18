@@ -5,8 +5,8 @@ datasets:
     dimension: 768
     format: hdf5
     space_type: "innerproduct"
-    description: "Cohere 1M embeddings dataset with 768-dimensional vectors (official workload)"
-    workload_name: "vectorsearch" # needs to match opensearch-benchmark-workloads folder
+    description: "Cohere 1M embeddings dataset with 768-dimensional vectors"
+    workload: "vectorsearch" # needs to match opensearch-benchmark-workloads folder
     corpus_name: "cohere-1m"
     # Parameter files for different engines
     param_files:
@@ -23,10 +23,9 @@ datasets:
     dimension: 1024
     format: fvec
     space_type: "cosinesimil"
-    description: "MS MARCO passage ranking dataset with 1024-dimensional vectors (custom workload)"
+    description: "MS MARCO passage ranking dataset with 1024-dimensional vectors"
     index_name: cohere-msmarco-1024
-    workload_name: "msmarco" # needs to match opensearch-benchmark-workloads folder
-    custom_workload: "workloads/msmarco"
+    workload: "msmarco" # needs to match opensearch-benchmark-workloads folder
     data_dir: "/datasets/msmarco"
     # Default workload parameters - these will be passed to all test procedures
     # Keys must match the Jinja2 template variables in the workload
@@ -78,12 +77,55 @@ datasets:
               search_clients: 1
               warmup_time_period: 60
               time_period: 300
-              # warmup_iterations: 100 # needs to be smaller than the number of queries for throughput metrics
+          - params:
+              # shard level find top k vectors
+              query_k: 100
+              #(Exploration Factor for Search) is a crucial query-time hyperparameter used in Approximate Nearest Neighbor (ANN) vector search, specifically within the Hierarchical Navigable Small World (HNSW) graph algorithm.
+              ef_search: 100
+              search_clients: 2
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              # shard level find top k vectors
+              query_k: 100
+              #(Exploration Factor for Search) is a crucial query-time hyperparameter used in Approximate Nearest Neighbor (ANN) vector search, specifically within the Hierarchical Navigable Small World (HNSW) graph algorithm.
+              ef_search: 100
+              search_clients: 4
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              # shard level find top k vectors
+              query_k: 100
+              #(Exploration Factor for Search) is a crucial query-time hyperparameter used in Approximate Nearest Neighbor (ANN) vector search, specifically within the Hierarchical Navigable Small World (HNSW) graph algorithm.
+              ef_search: 100
+              search_clients: 8
+              warmup_time_period: 60
+              time_period: 300              # warmup_iterations: 100 # needs to be smaller than the number of queries for throughput metrics
               # iterations: 500
+      - name: "vector-search"
+        parameter_sweeps:
           - params:
               query_k: 10
               ef_search: 32
               search_clients: 1
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 10
+              ef_search: 32
+              search_clients: 2
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 10
+              ef_search: 32
+              search_clients: 4
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 10
+              ef_search: 32
+              search_clients: 8
               warmup_time_period: 60
               time_period: 300
               # warmup_iterations: 100 # needs to be smaller than the number of queries for throughput metrics

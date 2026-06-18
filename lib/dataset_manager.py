@@ -19,7 +19,7 @@ class DatasetManager:
         
         self.base_workload_path = "/datasets/opensearch-benchmark-workloads"
         self.dataset_data = datasets_manifest["datasets"][dataset_name]
-        self.workload_name = self.dataset_data.get("workload_name", "default")
+        self.workload_name = self.dataset_data.get("workload", "default")
         self.workload_path = f"{self.base_workload_path}/{self.workload_name}"
         self.test_procedures = self.dataset_data.get("test_procedures", [])
         self.default_params = self.dataset_data.get("default_params", {})

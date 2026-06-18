@@ -70,28 +70,21 @@ class ConfigLoader:
         if param_file.startswith('/'):
             return param_file
         
-        # Check if custom_workload is specified
-        custom_workload = dataset_config.get('custom_workload')
-        if custom_workload:
-            # Relative to custom workload directory
-            return str(self.workspace_dir / custom_workload / param_file)
-        
-        # Default: relative to workload directory
+        # Get workload name and construct path in workloads directory
         workload = dataset_config.get('workload', 'vectorsearch')
-        return str(self.workloads_dir / workload / param_file)
+        full_path = self.workloads_dir / workload / param_file
+        logger.debug(f"Params file path for {dataset_name}/{engine}: {full_path}")
+        return str(full_path)
     
     def get_workload_path(self, dataset_name: str) -> str:
         """Get the workload directory path for a dataset"""
         dataset_config = self.get_dataset_config(dataset_name)
         
-        # Check if custom_workload is specified (relative to workspace)
-        custom_workload = dataset_config.get('custom_workload')
-        if custom_workload:
-            return str(self.workspace_dir / custom_workload)
-        
-        # Default: use workload name in workloads directory
+        # Get workload name and construct path in workloads directory
         workload = dataset_config.get('workload', 'vectorsearch')
-        return str(self.workloads_dir / workload)
+        full_path = self.workloads_dir / workload
+        logger.debug(f"Workload path for {dataset_name}: {full_path}")
+        return str(full_path)
     
     def get_target_host(self, engine: str) -> str:
         """Get the OpenSearch cluster endpoint for an engine"""
