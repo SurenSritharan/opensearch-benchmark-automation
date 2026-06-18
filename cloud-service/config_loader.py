@@ -113,8 +113,29 @@ class ConfigLoader:
         """Get configuration for a specific dataset"""
         return self.datasets_config.get('datasets', {}).get(dataset_name, {})
     
+    def get_workload_params(self, dataset_name: str, engine: str) -> Dict[str, Any]:
+        """Get merged workload parameters for a dataset and engine
+        
+        Merges default_params with engine-specific params from engine_params.
+        Returns empty dict if engine_params not available.
+        """
+        dataset_config = self.get_dataset_config(dataset_name)
+        
+        # Check if using new engine_params structure
+        engine_params_config = dataset_config.get('engine_params', {})
+        if engine_params_config and engine in engine_params_config:
+            # Merge default_params with engine-specific params
+            merged_params = dataset_config.get('default_params', {}).copy()
+            merged_params.update(engine_params_config[engine])
+            logger.debug(f"Using engine_params for {dataset_name}/{engine}")
+            return merged_params
+        
+        # Return empty dict if not using engine_params
+        logger.debug(f"No engine_params found for {dataset_name}/{engine}")
+        return {}
+    
     def get_workload_params_file(self, dataset_name: str, engine: str) -> str:
-        """Get the workload parameters file path for a dataset and engine"""
+        """Get the workload parameters file path for a dataset and engine (legacy)"""
         dataset_config = self.get_dataset_config(dataset_name)
         param_files = dataset_config.get('param_files', {})
         

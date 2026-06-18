@@ -57,17 +57,18 @@ class BenchmarkRunner:
             workload_path = self.config.get_workload_path(dataset)
             
             # Get default params from dataset config
-            dataset_config = self.config.get_dataset_config(dataset)
-            default_params = dataset_config.get('default_params', {})
+            # Get merged params (default_params + engine_params for this engine)
+            merged_params = self.config.get_workload_params(dataset, engine)
             
-            # Merge default_params with workload_params (workload_params override defaults)
-            merged_params = {}
-            if default_params:
-                merged_params.update(default_params)
+            if merged_params:
                 # Remove ground_truth_files - it's metadata, not a workload parameter
                 merged_params.pop('ground_truth_files', None)
-                logger.info(f"Loaded default params from dataset config: {list(default_params.keys())}")
+                logger.info(f"Loaded merged params for {engine}: {list(merged_params.keys())}")
+            else:
+                merged_params = {}
+                logger.warning(f"No params found for {dataset}/{engine}")
             
+            # Merge with runtime workload_params (these override everything)
             if workload_params:
                 merged_params.update(workload_params)
                 logger.info(f"Merged with runtime params: {list(workload_params.keys())}")
@@ -192,18 +193,22 @@ class BenchmarkRunner:
             return f"Dataset '{dataset}' not found in configuration"
         
         # Check if engine is supported for this dataset
+        engine_params = dataset_config.get('engine_params', {})
         param_files = dataset_config.get('param_files', {})
-        if engine not in param_files:
-            available = ', '.join(param_files.keys())
+        
+        if engine not in engine_params and engine not in param_files:
+            available_engines = list(engine_params.keys()) if engine_params else list(param_files.keys())
+            available = ', '.join(available_engines)
             return f"Engine '{engine}' not supported for dataset '{dataset}'. Available: {available}"
         
-        # Check if params file exists
-        try:
-            params_file = self.config.get_workload_params_file(dataset, engine)
-            if not Path(params_file).exists():
-                return f"Workload params file not found: {params_file}"
-        except Exception as e:
-            return f"Error getting params file: {e}"
+        # If using param_files (legacy), check if file exists
+        if engine in param_files:
+            try:
+                params_file = self.config.get_workload_params_file(dataset, engine)
+                if not Path(params_file).exists():
+                    return f"Workload params file not found: {params_file}"
+            except Exception as e:
+                return f"Error getting params file: {e}"
         
         # Check if workload path exists
         workload_path = self.config.get_workload_path(dataset)
