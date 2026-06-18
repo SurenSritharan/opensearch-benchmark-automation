@@ -3,6 +3,7 @@
 import subprocess
 import logging
 import os
+import json
 import requests
 from requests.auth import HTTPBasicAuth
 from datetime import datetime
@@ -101,13 +102,19 @@ class BenchmarkRunner:
                 '--kill-running-processes'  # Clean up any stuck processes
             ]
             
-            # Add workload params from parameter sweeps as key:value pairs
+            # Write workload params to a temporary JSON file for better debugging and complex type support
+            params_file = None
             if final_params:
-                # Format: key1:value1,key2:value2
-                params_list = [f"{k}:{v}" for k, v in final_params.items()]
-                params_str = ','.join(params_list)
-                cmd.extend(['--workload-params', params_str])
-                logger.info(f"Final workload params: {params_str}")
+                # Create temp file in job results directory
+                params_file = job_results_dir / 'workload-params.json'
+                with open(params_file, 'w') as f:
+                    json.dump(final_params, f, indent=2)
+                
+                logger.info(f"Workload params written to: {params_file}")
+                logger.info(f"Workload params content:\n{json.dumps(final_params, indent=2)}")
+                
+                # Pass the file path to opensearch-benchmark
+                cmd.extend(['--workload-params', str(params_file)])
             
             # Set up environment
             env = os.environ.copy()
