@@ -43,14 +43,9 @@ def initialize_shared_state():
     
     logger.info("Shared state initialized successfully")
 
-# For gunicorn with --preload, this will be called before forking
-# For direct execution, initialize immediately
-if __name__ != '__main__':
-    # Running under gunicorn - will be initialized by on_starting hook
-    pass
-else:
-    # Direct execution - initialize now
-    initialize_shared_state()
+# Initialize shared state immediately when module is loaded
+# This works for both gunicorn and direct execution
+initialize_shared_state()
 
 def get_jobs():
     """Get jobs dict from shared state"""
@@ -156,15 +151,24 @@ def health():
             'total_jobs': 0
         })
     
-    with job_lock:
-        active_jobs = sum(1 for j in jobs.values() if j.get('status') == 'running')
-        total_jobs = len(jobs)
-    
-    return jsonify({
-        'status': 'healthy',
-        'active_jobs': active_jobs,
-        'total_jobs': total_jobs
-    })
+    try:
+        with job_lock:
+            active_jobs = sum(1 for j in jobs.values() if j.get('status') == 'running')
+            total_jobs = len(jobs)
+        
+        return jsonify({
+            'status': 'healthy',
+            'active_jobs': active_jobs,
+            'total_jobs': total_jobs
+        })
+    except Exception as e:
+        logger.error(f"Error in health check: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'active_jobs': 0,
+            'total_jobs': 0
+        })
 
 
 @app.route('/api/v1/sync', methods=['POST'])
@@ -256,12 +260,12 @@ def discover():
 def trigger_benchmark():
     """Trigger a new benchmark job"""
     try:
-        data = request.get_json() or {}
+        request_data = request.get_json() or {}
         
         # Extract parameters
-        dataset = data.get('dataset')
-        engines = data.get('engines', 'all')
-        ui_scenario = data.get('scenarios', 'search')  # This is the UI label
+        dataset = request_data.get('dataset')
+        engines = request_data.get('engines', 'all')
+        ui_scenario = request_data.get('scenarios', 'search')  # This is the UI label
         
         if not dataset:
             return jsonify({'error': 'dataset parameter is required'}), 400
@@ -315,6 +319,9 @@ def trigger_benchmark():
         jobs = get_jobs()
         job_lock = get_job_lock()
         
+        if not jobs or not job_lock:
+            return jsonify({'error': 'Service initializing, please try again'}), 503
+        
         with job_lock:
             jobs[job_id] = {
                 'job_id': job_id,
@@ -325,9 +332,9 @@ def trigger_benchmark():
                 'ui_scenario': ui_scenario,  # Store UI label for display
                 'created_at': datetime.utcnow().isoformat(),
                 'options': {
-                    'no_profiling': data.get('no_profiling', False),
-                    'no_metrics': data.get('no_metrics', False),
-                    'workload_params': data.get('workload_params', None)
+                    'no_profiling': request_data.get('no_profiling', False),
+                    'no_metrics': request_data.get('no_metrics', False),
+                    'workload_params': request_data.get('workload_params', None)
                 }
             }
         
@@ -364,6 +371,9 @@ def get_job_status(job_id: str):
     jobs = get_jobs()
     job_lock = get_job_lock()
     
+    if not jobs or not job_lock:
+        return jsonify({'error': 'Service initializing, please try again'}), 503
+    
     if job_id not in jobs:
         return jsonify({'error': 'Job not found'}), 404
     
@@ -383,6 +393,12 @@ def list_jobs():
     """List all jobs"""
     jobs = get_jobs()
     job_lock = get_job_lock()
+    
+    if not jobs or not job_lock:
+        return jsonify({
+            'total': 0,
+            'jobs': []
+        })
     
     with job_lock:
         # Create a deep copy of jobs to avoid any reference issues
