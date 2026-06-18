@@ -282,6 +282,9 @@ class BenchmarkRunner:
                 sweep_results_dir = self.results_dir / job_id / f"sweep-{sweep_idx}"
                 sweep_results_dir.mkdir(parents=True, exist_ok=True)
                 
+                # Clear benchmark logs before starting this sweep
+                self._clear_benchmark_logs()
+                
                 # Build opensearch-benchmark command
                 cmd = [
                     'opensearch-benchmark',
@@ -326,6 +329,9 @@ class BenchmarkRunner:
                 end_time = datetime.utcnow()
                 
                 duration = (end_time - start_time).total_seconds()
+                
+                # Download artifacts (test_run.json and benchmark.log) to results directory
+                self._download_artifacts(result.stdout, sweep_results_dir)
                 
                 # Parse results for this sweep
                 sweep_result = {
@@ -451,5 +457,66 @@ class BenchmarkRunner:
         except Exception as e:
             logger.error(f"Error checking cluster health: {e}")
             return False
+    
+    def _clear_benchmark_logs(self):
+        """Clear the benchmark.log file before starting a new benchmark run."""
+        BENCHMARK_HOME = "/datasets/opensearch-benchmark"
+        log_path = f"{BENCHMARK_HOME}/.osb/logs/benchmark.log"
+        
+        try:
+            # Truncate the log file to zero bytes
+            with open(log_path, 'w') as f:
+                f.truncate(0)
+            logger.info(f"Cleared benchmark.log")
+        except FileNotFoundError:
+            # Log file doesn't exist yet, that's fine
+            logger.info(f"benchmark.log doesn't exist yet, will be created on first run")
+        except Exception as e:
+            logger.warning(f"Could not clear benchmark.log: {e}")
+    
+    def _download_artifacts(self, console_output: str, target_dir: Path):
+        """
+        Download benchmark artifacts from opensearch-benchmark home directory.
+        Extracts test_run.json and benchmark.log from the benchmark execution.
+        """
+        import re
+        
+        BENCHMARK_HOME = "/datasets/opensearch-benchmark"
+        
+        # Regex match UUIDs for the target test execution run
+        uuid_pattern = r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"
+        match = re.search(uuid_pattern, console_output)
+        
+        if match:
+            run_id = match.group(0)
+            remote_json_path = f"{BENCHMARK_HOME}/.osb/benchmarks/test-runs/{run_id}/test_run.json"
+            
+            try:
+                # Read the test_run.json file
+                with open(remote_json_path, 'r') as f:
+                    test_run_content = f.read()
+                
+                # Save to results directory
+                (target_dir / "test_run.json").write_text(test_run_content, encoding="utf-8")
+                logger.info(f"Downloaded test_run.json for run {run_id}")
+            except FileNotFoundError:
+                logger.warning(f"test_run.json not found at {remote_json_path}")
+            except Exception as e:
+                logger.error(f"Error downloading test_run.json: {e}")
+        else:
+            logger.warning("Could not find run UUID in benchmark output")
+        
+        # Download the benchmark log
+        log_path = f"{BENCHMARK_HOME}/.osb/logs/benchmark.log"
+        try:
+            with open(log_path, 'r') as f:
+                log_content = f.read()
+            
+            (target_dir / "benchmark.log").write_text(log_content, encoding="utf-8")
+            logger.info(f"Downloaded benchmark.log")
+        except FileNotFoundError:
+            logger.warning(f"benchmark.log not found at {log_path}")
+        except Exception as e:
+            logger.error(f"Error downloading benchmark.log: {e}")
 
 # Made with Bob
