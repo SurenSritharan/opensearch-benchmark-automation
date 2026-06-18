@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""Cloud-native OpenSearch Benchmark REST API Service"""
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+import threading
+import uuid
+import logging
+from datetime import datetime
+from typing import Dict, Any
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from config_loader import ConfigLoader
+from benchmark_runner import BenchmarkRunner
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__, static_folder='web', static_url_path='')
+CORS(app)
+
+# Initialize components
+config_loader = ConfigLoader(workspace_dir='/workspace')
+benchmark_runner = BenchmarkRunner(config_loader, results_dir='/results')
+
+# Job storage (in-memory for now, could be replaced with database)
+jobs: Dict[str, Dict[str, Any]] = {}
+job_lock = threading.Lock()
+
+# Thread pool for running benchmarks
+MAX_CONCURRENT_JOBS = 3
+executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS)
+
+
+def run_benchmark_job(job_id: str, dataset: str, engine: str, scenario: str, options: Dict[str, Any]):
+    """Execute a benchmark job in background"""
+    try:
+        with job_lock:
+            jobs[job_id]['status'] = 'running'
+            jobs[job_id]['started_at'] = datetime.utcnow().isoformat()
+        
+        logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
+        
+        # Run the benchmark
+        result = benchmark_runner.run_benchmark(
+            dataset=dataset,
+            engine=engine,
+            scenario=scenario,
+            job_id=job_id,
+            enable_profiling=not options.get('no_profiling', False),
+            enable_metrics=not options.get('no_metrics', False)
+        )
+        
+        # Update job with results
+        with job_lock:
+            jobs[job_id].update(result)
+            if 'status' not in result:
+                jobs[job_id]['status'] = 'completed'
+            jobs[job_id]['completed_at'] = datetime.utcnow().isoformat()
+        
+        logger.info(f"Job {job_id} completed with status: {result.get('status', 'completed')}")
+        
+    except Exception as e:
+        logger.error(f"Job {job_id} failed with error: {e}", exc_info=True)
+        with job_lock:
+            jobs[job_id]['status'] = 'error'
+            jobs[job_id]['error'] = str(e)
+            jobs[job_id]['completed_at'] = datetime.utcnow().isoformat()
+
+
+@app.route('/')
+def index():
+    """Serve the web UI"""
+    return send_from_directory('web', 'index.html')
+
+
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    active_jobs = sum(1 for j in jobs.values() if j['status'] == 'running')
+    return jsonify({
+        'status': 'healthy',
+        'active_jobs': active_jobs,
+        'total_jobs': len(jobs)
+    })
+
+
+@app.route('/api/v1/discover')
+def discover():
+    """Discover available datasets and engines"""
+    try:
+        datasets = config_loader.get_datasets()
+        return jsonify({
+            'datasets': datasets,
+            'max_concurrent_jobs': MAX_CONCURRENT_JOBS
+        })
+    except Exception as e:
+        logger.error(f"Error discovering datasets: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v1/benchmark', methods=['POST'])
+def trigger_benchmark():
+    """Trigger a new benchmark job"""
+    try:
+        data = request.get_json() or {}
+        
+        # Extract parameters
+        dataset = data.get('dataset')
+        engines = data.get('engines', 'all')
+        scenarios = data.get('scenarios', 'search')
+        
+        if not dataset:
+            return jsonify({'error': 'dataset parameter is required'}), 400
+        
+        # Parse engines
+        if engines == 'all':
+            dataset_config = config_loader.get_dataset_config(dataset)
+            engine_list = list(dataset_config.get('param_files', {}).keys())
+        else:
+            engine_list = [e.strip() for e in engines.split(',')]
+        
+        if not engine_list:
+            return jsonify({'error': 'No engines specified or available'}), 400
+        
+        # For now, support single engine (can be extended for multiple)
+        engine = engine_list[0]
+        scenario = scenarios if scenarios != 'all' else 'search'
+        
+        # Validate request
+        error = benchmark_runner.validate_benchmark_request(dataset, engine, scenario)
+        if error:
+            return jsonify({'error': error}), 400
+        
+        # Create job
+        job_id = str(uuid.uuid4())
+        
+        with job_lock:
+            jobs[job_id] = {
+                'job_id': job_id,
+                'status': 'queued',
+                'dataset': dataset,
+                'engine': engine,
+                'scenario': scenario,
+                'created_at': datetime.utcnow().isoformat(),
+                'options': {
+                    'no_profiling': data.get('no_profiling', False),
+                    'no_metrics': data.get('no_metrics', False)
+                }
+            }
+        
+        # Submit job to executor
+        executor.submit(
+            run_benchmark_job,
+            job_id,
+            dataset,
+            engine,
+            scenario,
+            jobs[job_id]['options']
+        )
+        
+        logger.info(f"Job {job_id} queued: dataset={dataset}, engine={engine}, scenario={scenario}")
+        
+        return jsonify({
+            'job_id': job_id,
+            'status': 'queued',
+            'dataset': dataset,
+            'engine': engine,
+            'scenario': scenario,
+            'status_url': f'/api/v1/benchmark/{job_id}'
+        }), 202
+        
+    except Exception as e:
+        logger.error(f"Error triggering benchmark: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v1/benchmark/<job_id>')
+def get_job_status(job_id: str):
+    """Get status of a specific job"""
+    if job_id not in jobs:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    with job_lock:
+        job = jobs[job_id].copy()
+    
+    # Calculate progress if applicable
+    if job['status'] == 'running':
+        # Could add more detailed progress tracking here
+        job['progress'] = 'in_progress'
+    
+    return jsonify(job)
+
+
+@app.route('/api/v1/benchmark')
+def list_jobs():
+    """List all jobs"""
+    with job_lock:
+        job_list = sorted(jobs.values(), key=lambda x: x['created_at'], reverse=True)[:50]
+    
+    return jsonify({
+        'total': len(jobs),
+        'jobs': job_list
+    })
+
+
+if __name__ == '__main__':
+    logger.info("Starting Cloud-Native OpenSearch Benchmark Service")
+    logger.info(f"Workspace: /workspace")
+    logger.info(f"Results: /results")
+    
+    # Log discovered datasets
+    try:
+        datasets = config_loader.get_datasets()
+        logger.info(f"Discovered {len(datasets)} datasets")
+        for ds in datasets:
+            logger.info(f"  - {ds['name']}: engines={ds['engines']}")
+    except Exception as e:
+        logger.warning(f"Could not discover datasets: {e}")
+    
+    app.run(host='0.0.0.0', port=8080, debug=False)
+
+# Made with Bob

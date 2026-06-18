@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenSearch Benchmark - Cloud Service</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { background: white; padding: 30px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #333; margin-bottom: 10px; }
+        .subtitle { color: #666; font-size: 14px; }
+        .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-left: 10px; }
+        .badge.cloud { background: #e3f2fd; color: #1976d2; }
+        .card { background: white; padding: 25px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: 600; color: #333; }
+        select, input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+        button { background: #0066cc; color: white; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 600; }
+        button:hover { background: #0052a3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .job-list { margin-top: 20px; }
+        .job-item { background: #f9f9f9; padding: 15px; margin-bottom: 10px; border-radius: 4px; border-left: 4px solid #0066cc; }
+        .job-item.running { border-left-color: #ff9800; }
+        .job-item.completed { border-left-color: #4caf50; }
+        .job-item.failed { border-left-color: #f44336; }
+        .status-badge { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
+        .status-queued { background: #e3f2fd; color: #1976d2; }
+        .status-running { background: #fff3e0; color: #f57c00; }
+        .status-completed { background: #e8f5e9; color: #388e3c; }
+        .status-failed { background: #ffebee; color: #d32f2f; }
+        .status-error { background: #ffebee; color: #d32f2f; }
+        .info-text { font-size: 13px; color: #666; margin-top: 8px; }
+        .error-msg { color: #d32f2f; font-size: 14px; margin-top: 10px; padding: 10px; background: #ffebee; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 OpenSearch Benchmark Service <span class="badge cloud">Cloud-Native</span></h1>
+            <p class="subtitle">Execute benchmarks directly without kubectl - reads from config/datasets.yaml</p>
+        </div>
+
+        <div class="card">
+            <h2>Start New Benchmark</h2>
+            <div id="errorMsg" class="error-msg" style="display: none;"></div>
+            <form id="benchmarkForm">
+                <div class="form-group">
+                    <label>Dataset</label>
+                    <select id="dataset" required>
+                        <option value="">Loading...</option>
+                    </select>
+                    <div class="info-text" id="datasetInfo"></div>
+                </div>
+                <div class="form-group">
+                    <label>Engine</label>
+                    <select id="engine" required>
+                        <option value="">Select dataset first</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Scenario</label>
+                    <select id="scenario" required>
+                        <option value="search">Search</option>
+                        <option value="ingest">Ingest</option>
+                        <option value="search-and-ingest">Search and Ingest</option>
+                    </select>
+                </div>
+                <button type="submit">Start Benchmark</button>
+            </form>
+        </div>
+
+        <div class="card">
+            <h2>Recent Jobs</h2>
+            <div id="jobList" class="job-list">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '';
+        let datasets = [];
+        
+        async function loadDatasets() {
+            try {
+                const res = await fetch(`${API_BASE}/api/v1/discover`);
+                const data = await res.json();
+                datasets = data.datasets;
+                
+                const select = document.getElementById('dataset');
+                if (datasets.length === 0) {
+                    select.innerHTML = '<option value="">No datasets found</option>';
+                    showError('No datasets found. Check config/datasets.yaml');
+                    return;
+                }
+                
+                select.innerHTML = datasets.map(d => 
+                    `<option value="${d.name}">${d.name}</option>`
+                ).join('');
+                
+                // Load engines for first dataset
+                if (datasets.length > 0) {
+                    updateEngines(datasets[0].name);
+                }
+            } catch (err) {
+                showError(`Failed to load datasets: ${err.message}`);
+            }
+        }
+        
+        function updateEngines(datasetName) {
+            const dataset = datasets.find(d => d.name === datasetName);
+            if (!dataset) return;
+            
+            const engineSelect = document.getElementById('engine');
+            engineSelect.innerHTML = dataset.engines.map(e => 
+                `<option value="${e}">${e}</option>`
+            ).join('');
+            
+            // Update dataset info
+            const info = document.getElementById('datasetInfo');
+            info.textContent = `Engines: ${dataset.engines.join(', ')} | Workload: ${dataset.workload}`;
+        }
+        
+        document.getElementById('dataset').addEventListener('change', (e) => {
+            updateEngines(e.target.value);
+        });
+        
+        async function loadJobs() {
+            try {
+                const res = await fetch(`${API_BASE}/api/v1/benchmark`);
+                const data = await res.json();
+                const list = document.getElementById('jobList');
+                
+                if (data.jobs.length === 0) {
+                    list.innerHTML = '<p style="color: #666;">No jobs yet</p>';
+                    return;
+                }
+                
+                list.innerHTML = data.jobs.map(job => {
+                    const duration = job.completed_at && job.started_at ? 
+                        Math.round((new Date(job.completed_at) - new Date(job.started_at)) / 1000) : null;
+                    const durationStr = duration ? `${Math.floor(duration/60)}m ${duration%60}s` : 'N/A';
+                    
+                    return `
+                    <div class="job-item ${job.status}">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                            <div>
+                                <strong>Job ${job.job_id.substring(0, 8)}</strong>
+                                <span class="status-badge status-${job.status}">${job.status}</span>
+                            </div>
+                            <div style="font-size: 12px; color: #666;">
+                                ${new Date(job.created_at).toLocaleString()}
+                            </div>
+                        </div>
+                        <div class="info-text">
+                            <div>Dataset: ${job.dataset} | Engine: ${job.engine} | Scenario: ${job.scenario}</div>
+                            <div>Duration: ${durationStr}</div>
+                            ${job.error ? `<div style="color: #d32f2f; margin-top: 4px;">Error: ${job.error}</div>` : ''}
+                            ${job.status === 'completed' ? 
+                                `<div style="margin-top: 4px;">
+                                    <a href="/api/v1/benchmark/${job.job_id}" target="_blank" style="color: #0066cc; text-decoration: none;">📊 View Details</a>
+                                </div>` : ''}
+                        </div>
+                    </div>
+                `}).join('');
+            } catch (err) {
+                console.error('Failed to load jobs:', err);
+            }
+        }
+        
+        function showError(msg) {
+            const errorDiv = document.getElementById('errorMsg');
+            errorDiv.textContent = msg;
+            errorDiv.style.display = 'block';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+        
+        document.getElementById('benchmarkForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = e.target.querySelector('button');
+            btn.disabled = true;
+            btn.textContent = 'Starting...';
+            
+            try {
+                const payload = {
+                    dataset: document.getElementById('dataset').value,
+                    engines: document.getElementById('engine').value,
+                    scenarios: document.getElementById('scenario').value
+                };
+                
+                const res = await fetch(`${API_BASE}/api/v1/benchmark`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                
+                const data = await res.json();
+                if (res.ok) {
+                    alert(`Benchmark started! Job ID: ${data.job_id}`);
+                    loadJobs();
+                } else {
+                    showError(data.error || 'Failed to start benchmark');
+                }
+            } catch (err) {
+                showError(`Error: ${err.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Start Benchmark';
+            }
+        });
+
+        loadDatasets();
+        loadJobs();
+        setInterval(loadJobs, 5000);
+    </script>
+</body>
+</html>
