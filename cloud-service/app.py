@@ -210,6 +210,31 @@ def list_jobs():
     })
 
 
+@app.route('/api/v1/logs')
+def get_benchmark_logs():
+    """Get opensearch-benchmark logs"""
+    try:
+        log_file = Path('/datasets/opensearch-benchmark/.osb/logs/benchmark.log')
+        if not log_file.exists():
+            return jsonify({'error': 'Log file not found'}), 404
+        
+        # Get last N lines (default 100)
+        lines = int(request.args.get('lines', 100))
+        
+        with open(log_file, 'r') as f:
+            all_lines = f.readlines()
+            tail_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+        
+        return jsonify({
+            'log_file': str(log_file),
+            'lines': len(tail_lines),
+            'content': ''.join(tail_lines)
+        })
+    except Exception as e:
+        logger.error(f"Error reading logs: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     logger.info("Starting Cloud-Native OpenSearch Benchmark Service")
     logger.info(f"Workspace: /workspace")
