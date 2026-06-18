@@ -6,11 +6,13 @@ import threading
 import uuid
 import logging
 import os
+import sqlite3
+import json
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import Manager
+from filelock import FileLock
 from config_loader import ConfigLoader
 from benchmark_runner import BenchmarkRunner
 
@@ -24,59 +26,123 @@ CORS(app)
 config_loader = ConfigLoader(workspace_dir='/workspace')
 benchmark_runner = BenchmarkRunner(config_loader, results_dir='/results')
 
-# Global data dictionary that will be initialized by gunicorn preload
-data = {}
+# SQLite database for job storage (shared across all workers)
+DB_PATH = "/workspace/jobs.db"
+db_lock = threading.RLock()
 
-def initialize_shared_state():
-    """Initialize shared state before gunicorn forks workers.
-    This function is called by gunicorn's on_starting hook when using --preload.
-    """
-    global data
-    logger.info(f"Initializing shared state in master process (PID: {os.getpid()})")
-    
-    manager = Manager()
-    data['manager'] = manager
-    data['jobs'] = manager.dict()
-    data['job_lock'] = manager.Lock()
-    data['engine_locks'] = manager.dict()
-    data['engine_locks_lock'] = manager.Lock()
-    
-    logger.info("Shared state initialized successfully")
+def init_db():
+    """Initialize SQLite database for job storage"""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS jobs (
+                job_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                dataset TEXT,
+                engine TEXT,
+                scenario TEXT,
+                ui_scenario TEXT,
+                created_at TEXT,
+                started_at TEXT,
+                completed_at TEXT,
+                options TEXT,
+                result TEXT,
+                error TEXT
+            )
+        """)
+        conn.commit()
+    logger.info(f"Initialized SQLite database at {DB_PATH}")
 
-# Initialize shared state immediately when module is loaded
-# This works for both gunicorn and direct execution
-initialize_shared_state()
+# Initialize database on module load
+init_db()
+logger.info(f"Initialized shared state in process (PID: {os.getpid()})")
 
-def get_jobs():
-    """Get jobs dict from shared state"""
-    return data.get('jobs', {})
+def save_job(job_id: str, job_data: Dict[str, Any]):
+    """Save or update a job in the database"""
+    with db_lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            # Serialize complex fields to JSON
+            options_json = json.dumps(job_data.get('options', {}))
+            result_json = json.dumps(job_data.get('result', {})) if 'result' in job_data else None
+            
+            conn.execute("""
+                INSERT OR REPLACE INTO jobs
+                (job_id, status, dataset, engine, scenario, ui_scenario,
+                 created_at, started_at, completed_at, options, result, error)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                job_id,
+                job_data.get('status'),
+                job_data.get('dataset'),
+                job_data.get('engine'),
+                job_data.get('scenario'),
+                job_data.get('ui_scenario'),
+                job_data.get('created_at'),
+                job_data.get('started_at'),
+                job_data.get('completed_at'),
+                options_json,
+                result_json,
+                job_data.get('error')
+            ))
+            conn.commit()
 
-def get_job_lock():
-    """Get job lock from shared state"""
-    return data.get('job_lock')
+def get_job(job_id: str) -> Optional[Dict[str, Any]]:
+    """Get a job from the database"""
+    with db_lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,))
+            row = cursor.fetchone()
+            
+            if not row:
+                return None
+            
+            job = dict(row)
+            # Deserialize JSON fields
+            job['options'] = json.loads(job['options']) if job['options'] else {}
+            job['result'] = json.loads(job['result']) if job['result'] else {}
+            return job
+
+def get_all_jobs(limit: int = 50) -> list:
+    """Get all jobs from the database"""
+    with db_lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?",
+                (limit,)
+            )
+            rows = cursor.fetchall()
+            
+            jobs = []
+            for row in rows:
+                job = dict(row)
+                # Deserialize JSON fields
+                job['options'] = json.loads(job['options']) if job['options'] else {}
+                job['result'] = json.loads(job['result']) if job['result'] else {}
+                jobs.append(job)
+            
+            return jobs
+
+def update_job_status(job_id: str, status: str, **kwargs):
+    """Update job status and other fields"""
+    job = get_job(job_id)
+    if job:
+        job['status'] = status
+        job.update(kwargs)
+        save_job(job_id, job)
 
 def get_engine_lock(engine: str):
-    """Get or create a lock for a specific engine"""
-    engine_locks = data.get('engine_locks')
-    engine_locks_lock = data.get('engine_locks_lock')
-    
-    if not engine_locks or not engine_locks_lock:
-        logger.error("Shared state not initialized!")
-        return None
-    
-    with engine_locks_lock:
-        if engine not in engine_locks:
-            engine_locks[engine] = data['manager'].Lock()
-        return engine_locks[engine]
+    """Creates a lock file on the disk.
+    All Gunicorn workers/threads looking at this file will respect it."""
+    lock_path = f"/workspace/locks/{engine}.lock"
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    return FileLock(lock_path, timeout=0)
 
 def is_engine_busy(engine: str) -> bool:
-    """Check if an engine is currently running a benchmark"""
-    jobs = get_jobs()
-    all_jobs = dict(jobs)
-    for job in all_jobs.values():
-        if job.get('engine') == engine and job.get('status') == 'running':
-            return True
-    return False
+    """Check if the engine lock file is currently locked by ANY worker"""
+    lock = get_engine_lock(engine)
+    return lock.is_locked
 
 # Thread pool for running benchmarks
 MAX_CONCURRENT_JOBS = 3
@@ -86,8 +152,6 @@ executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS)
 def run_benchmark_job(job_id: str, dataset: str, engine: str, scenario: str, options: Dict[str, Any]):
     """Execute a benchmark job in background with per-engine locking"""
     engine_lock = get_engine_lock(engine)
-    jobs = get_jobs()
-    job_lock = get_job_lock()
     
     try:
         # Wait for engine lock (queues if another job is running on this engine)
@@ -95,9 +159,8 @@ def run_benchmark_job(job_id: str, dataset: str, engine: str, scenario: str, opt
         with engine_lock:
             logger.info(f"Job {job_id} acquired engine lock: {engine}")
             
-            with job_lock:
-                jobs[job_id]['status'] = 'running'
-                jobs[job_id]['started_at'] = datetime.utcnow().isoformat()
+            # Update job status to running
+            update_job_status(job_id, 'running', started_at=datetime.utcnow().isoformat())
             
             logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
             
@@ -113,23 +176,27 @@ def run_benchmark_job(job_id: str, dataset: str, engine: str, scenario: str, opt
                 enable_profiling=not options.get('no_profiling', False),
                 enable_metrics=not options.get('no_metrics', False),
                 workload_params=workload_params
-        )
+            )
         
         # Update job with results
-        with job_lock:
-            jobs[job_id].update(result)
+        job = get_job(job_id)
+        if job:
+            job.update(result)
             if 'status' not in result:
-                jobs[job_id]['status'] = 'completed'
-            jobs[job_id]['completed_at'] = datetime.utcnow().isoformat()
+                job['status'] = 'completed'
+            job['completed_at'] = datetime.utcnow().isoformat()
+            save_job(job_id, job)
         
         logger.info(f"Job {job_id} completed with status: {result.get('status', 'completed')}")
         
     except Exception as e:
         logger.error(f"Job {job_id} failed with error: {e}", exc_info=True)
-        with job_lock:
-            jobs[job_id]['status'] = 'error'
-            jobs[job_id]['error'] = str(e)
-            jobs[job_id]['completed_at'] = datetime.utcnow().isoformat()
+        update_job_status(
+            job_id,
+            'error',
+            error=str(e),
+            completed_at=datetime.utcnow().isoformat()
+        )
 
 
 @app.route('/')
@@ -141,20 +208,10 @@ def index():
 @app.route('/health')
 def health():
     """Health check endpoint"""
-    jobs = get_jobs()
-    job_lock = get_job_lock()
-    
-    if not jobs or not job_lock:
-        return jsonify({
-            'status': 'initializing',
-            'active_jobs': 0,
-            'total_jobs': 0
-        })
-    
     try:
-        with job_lock:
-            active_jobs = sum(1 for j in jobs.values() if j.get('status') == 'running')
-            total_jobs = len(jobs)
+        all_jobs = get_all_jobs(limit=1000)  # Get all jobs for counting
+        active_jobs = sum(1 for j in all_jobs if j.get('status') == 'running')
+        total_jobs = len(all_jobs)
         
         return jsonify({
             'status': 'healthy',
@@ -316,27 +373,24 @@ def trigger_benchmark():
         
         # Create job
         job_id = str(uuid.uuid4())
-        jobs = get_jobs()
-        job_lock = get_job_lock()
         
-        if not jobs or not job_lock:
-            return jsonify({'error': 'Service initializing, please try again'}), 503
-        
-        with job_lock:
-            jobs[job_id] = {
-                'job_id': job_id,
-                'status': 'queued',
-                'dataset': dataset,
-                'engine': engine,
-                'scenario': procedure_name,  # Store actual procedure name
-                'ui_scenario': ui_scenario,  # Store UI label for display
-                'created_at': datetime.utcnow().isoformat(),
-                'options': {
-                    'no_profiling': request_data.get('no_profiling', False),
-                    'no_metrics': request_data.get('no_metrics', False),
-                    'workload_params': request_data.get('workload_params', None)
-                }
+        job_data = {
+            'job_id': job_id,
+            'status': 'queued',
+            'dataset': dataset,
+            'engine': engine,
+            'scenario': procedure_name,  # Store actual procedure name
+            'ui_scenario': ui_scenario,  # Store UI label for display
+            'created_at': datetime.utcnow().isoformat(),
+            'options': {
+                'no_profiling': request_data.get('no_profiling', False),
+                'no_metrics': request_data.get('no_metrics', False),
+                'workload_params': request_data.get('workload_params', None)
             }
+        }
+        
+        # Save job to database
+        save_job(job_id, job_data)
         
         # Submit job to executor with actual procedure name
         executor.submit(
@@ -345,7 +399,7 @@ def trigger_benchmark():
             dataset,
             engine,
             procedure_name,  # Pass actual procedure name
-            jobs[job_id]['options']
+            job_data['options']
         )
         
         logger.info(f"Job {job_id} queued: dataset={dataset}, engine={engine}, procedure={procedure_name} (UI: {ui_scenario})")
@@ -368,17 +422,10 @@ def trigger_benchmark():
 @app.route('/api/v1/benchmark/<job_id>')
 def get_job_status(job_id: str):
     """Get status of a specific job"""
-    jobs = get_jobs()
-    job_lock = get_job_lock()
+    job = get_job(job_id)
     
-    if not jobs or not job_lock:
-        return jsonify({'error': 'Service initializing, please try again'}), 503
-    
-    if job_id not in jobs:
+    if not job:
         return jsonify({'error': 'Job not found'}), 404
-    
-    with job_lock:
-        job = jobs[job_id].copy()
     
     # Calculate progress if applicable
     if job['status'] == 'running':
@@ -391,22 +438,13 @@ def get_job_status(job_id: str):
 @app.route('/api/v1/benchmark')
 def list_jobs():
     """List all jobs"""
-    jobs = get_jobs()
-    job_lock = get_job_lock()
+    job_list = get_all_jobs(limit=50)
     
-    if not jobs or not job_lock:
-        return jsonify({
-            'total': 0,
-            'jobs': []
-        })
-    
-    with job_lock:
-        # Create a deep copy of jobs to avoid any reference issues
-        jobs_snapshot = {k: v.copy() for k, v in jobs.items()}
-    
-    # Sort and slice outside the lock to minimize lock time
-    total = len(jobs_snapshot)
-    job_list = sorted(jobs_snapshot.values(), key=lambda x: x.get('created_at', ''), reverse=True)[:50]
+    # Get total count
+    with db_lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.execute("SELECT COUNT(*) FROM jobs")
+            total = cursor.fetchone()[0]
     
     return jsonify({
         'total': total,
