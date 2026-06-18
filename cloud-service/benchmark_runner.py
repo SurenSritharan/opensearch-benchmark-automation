@@ -57,56 +57,88 @@ class BenchmarkRunner:
             target_host = self.config.get_target_host(engine)
             workload_path = self.config.get_workload_path(dataset)
             
-            # Get default params from dataset config
-            # Get merged params (default_params + engine_params for this engine)
-            merged_params = self.config.get_workload_params(dataset, engine)
+            # Get base params (default_params + engine_params for this engine)
+            base_params = self.config.get_workload_params(dataset, engine)
             
-            if merged_params:
+            if base_params:
                 # Remove ground_truth_files - it's metadata, not a workload parameter
-                merged_params.pop('ground_truth_files', None)
-                logger.info(f"Loaded merged params for {engine}: {list(merged_params.keys())}")
+                base_params.pop('ground_truth_files', None)
+                logger.info(f"Loaded base params for {engine}: {list(base_params.keys())}")
             else:
-                merged_params = {}
-                logger.warning(f"No params found for {dataset}/{engine}")
+                base_params = {}
+                logger.warning(f"No base params found for {dataset}/{engine}")
             
-            # Merge with runtime workload_params (these override everything)
-            if workload_params:
-                merged_params.update(workload_params)
-                logger.info(f"Merged with runtime params: {list(workload_params.keys())}")
+            # Get parameter sweeps for this scenario
+            procedures = self.config.get_test_procedures(dataset)
+            parameter_sweeps = []
             
-            # Use merged params for the benchmark
-            final_params = merged_params if merged_params else None
+            for proc in procedures:
+                if isinstance(proc, dict):
+                    proc_name = proc.get('name')
+                    if proc_name == scenario:
+                        # Found matching procedure, check for parameter sweeps
+                        sweeps = proc.get('parameter_sweeps', [])
+                        if sweeps:
+                            parameter_sweeps = sweeps
+                            logger.info(f"Found {len(parameter_sweeps)} parameter sweeps for {scenario}")
+                        break
             
-            # Check cluster health before starting
-            logger.info(f"Checking cluster health for {engine}...")
-            cluster_ready = self._check_cluster_health(target_host)
-            if not cluster_ready:
-                return {
-                    'status': 'failed',
-                    'error': f'Cluster {target_host} is not ready. Please check cluster status.',
-                    'exit_code': -1
-                }
+            # If no parameter sweeps, run once with base params + any runtime params
+            if not parameter_sweeps:
+                merged_params = base_params.copy()
+                if workload_params:
+                    merged_params.update(workload_params)
+                    logger.info(f"Merged with runtime params: {list(workload_params.keys())}")
+                
+                final_params = merged_params if merged_params else None
+                parameter_sweeps = [{'params': final_params}] if final_params else [{}]
             
-            # Create results directory for this job (opensearch-benchmark will save results here automatically)
-            job_results_dir = self.results_dir / job_id
-            job_results_dir.mkdir(parents=True, exist_ok=True)
+            # Run benchmark for each parameter sweep
+            all_results = []
+            for sweep_idx, sweep in enumerate(parameter_sweeps, 1):
+                logger.info(f"Running parameter sweep {sweep_idx}/{len(parameter_sweeps)}")
+                
+                # Merge: base_params + sweep params + runtime params
+                final_params = base_params.copy()
+                sweep_params = sweep.get('params', {})
+                if sweep_params:
+                    final_params.update(sweep_params)
+                    logger.info(f"Sweep params: {list(sweep_params.keys())}")
+                if workload_params:
+                    final_params.update(workload_params)
+                    logger.info(f"Runtime params: {list(workload_params.keys())}")
             
-            # Build opensearch-benchmark command
-            cmd = [
-                'opensearch-benchmark',
-                'run',
-                '--workload-path', workload_path,
-                '--target-hosts', target_host,
-                '--client-options', 'timeout:300,use_ssl:true,verify_certs:false,basic_auth_user:admin,basic_auth_password:admin',
-                '--test-procedure', scenario,
-                '--kill-running-processes'  # Clean up any stuck processes
-            ]
-            
-            # Write workload params to a temporary JSON file for better debugging and complex type support
-            params_file = None
-            if final_params:
-                # Create temp file in job results directory
-                params_file = job_results_dir / 'workload-params.json'
+                # Check cluster health before starting
+                logger.info(f"Checking cluster health for {engine}...")
+                cluster_ready = self._check_cluster_health(target_host)
+                if not cluster_ready:
+                    sweep_result = {
+                        'status': 'failed',
+                        'error': f'Cluster {target_host} is not ready. Please check cluster status.',
+                        'exit_code': -1,
+                        'sweep_index': sweep_idx,
+                        'sweep_params': sweep_params
+                    }
+                    all_results.append(sweep_result)
+                    continue
+                
+                # Create results directory for this sweep
+                sweep_results_dir = self.results_dir / job_id / f"sweep-{sweep_idx}"
+                sweep_results_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Build opensearch-benchmark command
+                cmd = [
+                    'opensearch-benchmark',
+                    'run',
+                    '--workload-path', workload_path,
+                    '--target-hosts', target_host,
+                    '--client-options', 'timeout:300,use_ssl:true,verify_certs:false,basic_auth_user:admin,basic_auth_password:admin',
+                    '--test-procedure', scenario,
+                    '--kill-running-processes'  # Clean up any stuck processes
+                ]
+                
+                # Write workload params to a JSON file for this sweep
+                params_file = sweep_results_dir / 'workload-params.json'
                 with open(params_file, 'w') as f:
                     json.dump(final_params, f, indent=2)
                 
@@ -115,59 +147,75 @@ class BenchmarkRunner:
                 
                 # Pass the file path to opensearch-benchmark
                 cmd.extend(['--workload-params', str(params_file)])
+                
+                # Set up environment
+                env = os.environ.copy()
+                env['TERM'] = 'dumb'  # Disable terminal features
+                env['BENCHMARK_HOME'] = '/datasets/opensearch-benchmark'
+                
+                logger.info(f"Executing benchmark sweep {sweep_idx}/{len(parameter_sweeps)}: dataset={dataset}, engine={engine}, scenario={scenario}")
+                logger.info(f"Command: {' '.join(cmd)}")
+                logger.info(f"Target host: {target_host}")
+                logger.info(f"Workload path: {workload_path}")
+                
+                # Execute benchmark
+                start_time = datetime.utcnow()
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=21600,  # 6 hour timeout
+                    env=env
+                )
+                end_time = datetime.utcnow()
+                
+                duration = (end_time - start_time).total_seconds()
+                
+                # Parse results for this sweep
+                sweep_result = {
+                    'status': 'completed' if result.returncode == 0 else 'failed',
+                    'exit_code': result.returncode,
+                    'duration_seconds': duration,
+                    'started_at': start_time.isoformat(),
+                    'completed_at': end_time.isoformat(),
+                    'results_dir': str(sweep_results_dir),
+                    'sweep_index': sweep_idx,
+                    'sweep_params': sweep_params,
+                    'command': ' '.join(cmd),
+                    'stdout_tail': result.stdout[-5000:] if result.stdout else '',
+                    'stderr_tail': result.stderr[-5000:] if result.stderr else ''
+                }
+                
+                if result.returncode != 0:
+                    logger.error(f"Sweep {sweep_idx} failed with exit code {result.returncode}")
+                    logger.error(f"STDERR:")
+                    if result.stderr:
+                        logger.error(result.stderr[-2000:])
+                    else:
+                        logger.error("(empty)")
+                    logger.error(f"STDOUT (last 1000 chars):")
+                    if result.stdout:
+                        logger.error(result.stdout[-1000:])
+                    else:
+                        logger.error("(empty)")
+                else:
+                    logger.info(f"Sweep {sweep_idx} completed successfully in {duration:.1f}s")
+                
+                all_results.append(sweep_result)
             
-            # Set up environment
-            env = os.environ.copy()
-            env['TERM'] = 'dumb'  # Disable terminal features
-            env['BENCHMARK_HOME'] = '/datasets/opensearch-benchmark'
+            # Return aggregated results
+            total_duration = sum(r.get('duration_seconds', 0) for r in all_results)
+            failed_sweeps = [r for r in all_results if r.get('status') != 'completed']
             
-            logger.info(f"Executing benchmark: dataset={dataset}, engine={engine}, scenario={scenario}")
-            logger.info(f"Command: {' '.join(cmd)}")
-            logger.info(f"Target host: {target_host}")
-            logger.info(f"Workload path: {workload_path}")
-            
-            # Execute benchmark
-            start_time = datetime.utcnow()
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=21600,  # 6 hour timeout
-                env=env
-            )
-            end_time = datetime.utcnow()
-            
-            duration = (end_time - start_time).total_seconds()
-            
-            # Parse results
-            execution_result = {
-                'status': 'completed' if result.returncode == 0 else 'failed',
-                'exit_code': result.returncode,
-                'duration_seconds': duration,
-                'started_at': start_time.isoformat(),
-                'completed_at': end_time.isoformat(),
-                'results_dir': str(job_results_dir),
-                'command': ' '.join(cmd),
-                'stdout_tail': result.stdout[-5000:] if result.stdout else '',
-                'stderr_tail': result.stderr[-5000:] if result.stderr else ''
+            return {
+                'status': 'completed' if not failed_sweeps else 'partial_failure',
+                'total_sweeps': len(all_results),
+                'successful_sweeps': len(all_results) - len(failed_sweeps),
+                'failed_sweeps': len(failed_sweeps),
+                'total_duration_seconds': total_duration,
+                'results_dir': str(self.results_dir / job_id),
+                'sweep_results': all_results
             }
-            
-            if result.returncode != 0:
-                logger.error(f"Benchmark failed with exit code {result.returncode}")
-                logger.error(f"STDERR:")
-                if result.stderr:
-                    logger.error(result.stderr[-2000:])
-                else:
-                    logger.error("(empty)")
-                logger.error(f"STDOUT (last 1000 chars):")
-                if result.stdout:
-                    logger.error(result.stdout[-1000:])
-                else:
-                    logger.error("(empty)")
-            else:
-                logger.info(f"Benchmark completed successfully in {duration:.1f}s")
-            
-            return execution_result
             
         except subprocess.TimeoutExpired:
             logger.error(f"Benchmark timed out after 6 hours")
