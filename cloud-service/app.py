@@ -5,6 +5,7 @@ from flask_cors import CORS
 import threading
 import uuid
 import logging
+import os
 from datetime import datetime
 from typing import Dict, Any
 from pathlib import Path
@@ -23,24 +24,59 @@ CORS(app)
 config_loader = ConfigLoader(workspace_dir='/workspace')
 benchmark_runner = BenchmarkRunner(config_loader, results_dir='/results')
 
-# Shared job storage across gunicorn workers using multiprocessing.Manager
-manager = Manager()
-jobs = manager.dict()
-job_lock = manager.Lock()
+# Global data dictionary that will be initialized by gunicorn preload
+data = {}
 
-# Per-engine locks to ensure only one benchmark runs per engine at a time
-engine_locks = manager.dict()  # engine -> Lock
-engine_locks_lock = manager.Lock()  # Lock for accessing engine_locks dict
+def initialize_shared_state():
+    """Initialize shared state before gunicorn forks workers.
+    This function is called by gunicorn's on_starting hook when using --preload.
+    """
+    global data
+    logger.info(f"Initializing shared state in master process (PID: {os.getpid()})")
+    
+    manager = Manager()
+    data['manager'] = manager
+    data['jobs'] = manager.dict()
+    data['job_lock'] = manager.Lock()
+    data['engine_locks'] = manager.dict()
+    data['engine_locks_lock'] = manager.Lock()
+    
+    logger.info("Shared state initialized successfully")
+
+# For gunicorn with --preload, this will be called before forking
+# For direct execution, initialize immediately
+if __name__ != '__main__':
+    # Running under gunicorn - will be initialized by on_starting hook
+    pass
+else:
+    # Direct execution - initialize now
+    initialize_shared_state()
+
+def get_jobs():
+    """Get jobs dict from shared state"""
+    return data.get('jobs', {})
+
+def get_job_lock():
+    """Get job lock from shared state"""
+    return data.get('job_lock')
 
 def get_engine_lock(engine: str):
     """Get or create a lock for a specific engine"""
+    engine_locks = data.get('engine_locks')
+    engine_locks_lock = data.get('engine_locks_lock')
+    
+    if not engine_locks or not engine_locks_lock:
+        logger.error("Shared state not initialized!")
+        return None
+    
     with engine_locks_lock:
         if engine not in engine_locks:
-            engine_locks[engine] = manager.Lock()
+            engine_locks[engine] = data['manager'].Lock()
         return engine_locks[engine]
 
 def is_engine_busy(engine: str) -> bool:
     """Check if an engine is currently running a benchmark"""
+    jobs = get_jobs()
     all_jobs = dict(jobs)
     for job in all_jobs.values():
         if job.get('engine') == engine and job.get('status') == 'running':
