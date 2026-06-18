@@ -86,9 +86,16 @@ def health():
 
 @app.route('/api/v1/discover')
 def discover():
-    """Discover available datasets and engines"""
+    """Discover available datasets, engines, and test procedures"""
     try:
         datasets = config_loader.get_datasets()
+        
+        # Add test procedures to each dataset
+        for dataset in datasets:
+            dataset_name = dataset['name']
+            procedures = config_loader.get_test_procedures(dataset_name)
+            dataset['test_procedures'] = [p.get('name') if isinstance(p, dict) else p for p in procedures]
+        
         return jsonify({
             'datasets': datasets,
             'max_concurrent_jobs': MAX_CONCURRENT_JOBS

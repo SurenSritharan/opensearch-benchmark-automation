@@ -92,16 +92,14 @@ class ConfigLoader:
         namespace = f"os-{engine}"
         return f"opensearch-cluster.{namespace}.svc.cluster.local:9200"
     
-    def get_test_procedures(self, dataset_name: str) -> List[str]:
-        """Get available test procedures for a dataset"""
+    def get_test_procedures(self, dataset_name: str) -> List[Dict[str, Any]]:
+        """Get available test procedures for a dataset with their configurations"""
         dataset_config = self.get_dataset_config(dataset_name)
-        
-        # Get from config or return defaults
-        procedures = dataset_config.get('test_procedures', [])
-        if not procedures:
-            # Default procedures
-            procedures = ['search', 'ingest', 'search-and-ingest']
-        
-        return procedures
+        return dataset_config.get('test_procedures', [])
+    
+    def get_test_procedure_names(self, dataset_name: str) -> List[str]:
+        """Get list of test procedure names for a dataset"""
+        procedures = self.get_test_procedures(dataset_name)
+        return [p.get('name') if isinstance(p, dict) else p for p in procedures]
 
 # Made with Bob
