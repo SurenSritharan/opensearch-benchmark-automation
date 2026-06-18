@@ -130,30 +130,39 @@ def discover():
     try:
         datasets = config_loader.get_datasets()
         
-        # Add test procedures to each dataset with scenario labels for duplicates
+        # Add test procedures to each dataset with metadata mapping
         for dataset in datasets:
             dataset_name = dataset['name']
             procedures = config_loader.get_test_procedures(dataset_name)
             
-            # Label procedures with scenario numbers for duplicates
-            procedures_with_labels = []
+            # Build procedure metadata with UI labels and actual procedure names
+            procedures_metadata = []
             proc_counts = {}
-            for proc in procedures:
+            
+            for idx, proc in enumerate(procedures):
                 name = proc.get('name') if isinstance(proc, dict) else proc
                 proc_counts[name] = proc_counts.get(name, 0) + 1
-                # Always add scenario number if there are duplicates
-                if proc_counts[name] == 1:
-                    # First occurrence - check if there will be more
-                    total_count = sum(1 for p in procedures if (p.get('name') if isinstance(p, dict) else p) == name)
-                    if total_count > 1:
-                        label = f"{name}-scenario-1"
-                    else:
-                        label = name
+                
+                # Determine UI label
+                total_count = sum(1 for p in procedures if (p.get('name') if isinstance(p, dict) else p) == name)
+                if total_count > 1:
+                    ui_label = f"{name}-scenario-{proc_counts[name]}"
                 else:
-                    label = f"{name}-scenario-{proc_counts[name]}"
-                procedures_with_labels.append(label)
+                    ui_label = name
+                
+                # Check for parameter sweeps
+                has_sweeps = isinstance(proc, dict) and 'parameter_sweeps' in proc
+                sweep_count = len(proc.get('parameter_sweeps', [])) if has_sweeps else 0
+                
+                procedures_metadata.append({
+                    'ui_label': ui_label,
+                    'procedure_name': name,
+                    'has_parameter_sweeps': has_sweeps,
+                    'sweep_count': sweep_count
+                })
             
-            dataset['test_procedures'] = procedures_with_labels
+            dataset['test_procedures'] = [p['ui_label'] for p in procedures_metadata]
+            dataset['procedures_metadata'] = procedures_metadata
         
         return jsonify({
             'datasets': datasets,
@@ -173,7 +182,7 @@ def trigger_benchmark():
         # Extract parameters
         dataset = data.get('dataset')
         engines = data.get('engines', 'all')
-        scenarios = data.get('scenarios', 'search')
+        ui_scenario = data.get('scenarios', 'search')  # This is the UI label
         
         if not dataset:
             return jsonify({'error': 'dataset parameter is required'}), 400
@@ -190,10 +199,35 @@ def trigger_benchmark():
         
         # For now, support single engine (can be extended for multiple)
         engine = engine_list[0]
-        scenario = scenarios if scenarios != 'all' else 'search'
         
-        # Validate request
-        error = benchmark_runner.validate_benchmark_request(dataset, engine, scenario)
+        # Look up the actual procedure name from UI label
+        procedures = config_loader.get_test_procedures(dataset)
+        procedure_name = ui_scenario  # Default to UI label if not found
+        proc_counts = {}
+        
+        for proc in procedures:
+            name = proc.get('name') if isinstance(proc, dict) else proc
+            proc_counts[name] = proc_counts.get(name, 0) + 1
+            
+            # Reconstruct the UI label for this procedure
+            total_count = sum(1 for p in procedures if (p.get('name') if isinstance(p, dict) else p) == name)
+            if total_count > 1:
+                ui_label = f"{name}-scenario-{proc_counts[name]}"
+            else:
+                ui_label = name
+            
+            if ui_label == ui_scenario:
+                procedure_name = name
+                break
+        
+        logger.info(f"UI scenario '{ui_scenario}' maps to procedure '{procedure_name}'")
+        
+        # Ensure we have a valid procedure name
+        if not procedure_name:
+            return jsonify({'error': f'Invalid scenario: {ui_scenario}'}), 400
+        
+        # Validate request using the actual procedure name
+        error = benchmark_runner.validate_benchmark_request(dataset, engine, procedure_name)
         if error:
             return jsonify({'error': error}), 400
         
@@ -206,7 +240,8 @@ def trigger_benchmark():
                 'status': 'queued',
                 'dataset': dataset,
                 'engine': engine,
-                'scenario': scenario,
+                'scenario': procedure_name,  # Store actual procedure name
+                'ui_scenario': ui_scenario,  # Store UI label for display
                 'created_at': datetime.utcnow().isoformat(),
                 'options': {
                     'no_profiling': data.get('no_profiling', False),
@@ -215,24 +250,25 @@ def trigger_benchmark():
                 }
             }
         
-        # Submit job to executor
+        # Submit job to executor with actual procedure name
         executor.submit(
             run_benchmark_job,
             job_id,
             dataset,
             engine,
-            scenario,
+            procedure_name,  # Pass actual procedure name
             jobs[job_id]['options']
         )
         
-        logger.info(f"Job {job_id} queued: dataset={dataset}, engine={engine}, scenario={scenario}")
+        logger.info(f"Job {job_id} queued: dataset={dataset}, engine={engine}, procedure={procedure_name} (UI: {ui_scenario})")
         
         return jsonify({
             'job_id': job_id,
             'status': 'queued',
             'dataset': dataset,
             'engine': engine,
-            'scenario': scenario,
+            'scenario': procedure_name,
+            'ui_scenario': ui_scenario,
             'status_url': f'/api/v1/benchmark/{job_id}'
         }), 202
         

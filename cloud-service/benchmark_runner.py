@@ -68,7 +68,8 @@ class BenchmarkRunner:
                 base_params = {}
                 logger.warning(f"No base params found for {dataset}/{engine}")
             
-            # Get parameter sweeps for this scenario
+            # Get parameter sweeps for this procedure
+            # Note: scenario parameter is now the actual procedure name (not UI label)
             procedures = self.config.get_test_procedures(dataset)
             parameter_sweeps = []
             
@@ -80,7 +81,7 @@ class BenchmarkRunner:
                         sweeps = proc.get('parameter_sweeps', [])
                         if sweeps:
                             parameter_sweeps = sweeps
-                            logger.info(f"Found {len(parameter_sweeps)} parameter sweeps for {scenario}")
+                            logger.info(f"Found {len(parameter_sweeps)} parameter sweeps for procedure '{scenario}'")
                         break
             
             # If no parameter sweeps, run once with base params + any runtime params
