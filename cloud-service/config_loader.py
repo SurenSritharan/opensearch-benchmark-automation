@@ -117,7 +117,7 @@ class ConfigLoader:
         """Get merged workload parameters for a dataset and engine
         
         Merges default_params with engine-specific params from engine_params.
-        Returns empty dict if engine_params not available.
+        Falls back to reading param_files if engine_params not available (legacy support).
         """
         dataset_config = self.get_dataset_config(dataset_name)
         
@@ -130,8 +130,26 @@ class ConfigLoader:
             logger.debug(f"Using engine_params for {dataset_name}/{engine}")
             return merged_params
         
-        # Return empty dict if not using engine_params
-        logger.debug(f"No engine_params found for {dataset_name}/{engine}")
+        # Fallback: Try to read from param_files (legacy approach)
+        param_files = dataset_config.get('param_files', {})
+        if param_files and engine in param_files:
+            param_file_path = param_files[engine]
+            # Construct full path relative to workload directory
+            workload = dataset_config.get('workload', 'vectorsearch')
+            full_path = self.workspace_dir / 'workloads' / workload / param_file_path
+            
+            try:
+                import json
+                with open(full_path, 'r') as f:
+                    params = json.load(f)
+                    logger.info(f"Loaded params from file for {dataset_name}/{engine}: {param_file_path}")
+                    return params
+            except Exception as e:
+                logger.error(f"Failed to read param file {full_path}: {e}")
+                return {}
+        
+        # No params available
+        logger.debug(f"No params found for {dataset_name}/{engine}")
         return {}
     
     def get_workload_params_file(self, dataset_name: str, engine: str) -> str:
