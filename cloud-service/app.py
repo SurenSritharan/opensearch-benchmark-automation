@@ -31,6 +31,10 @@ benchmark_runner = BenchmarkRunner(config_loader, results_dir='/results')
 DB_PATH = "/workspace/jobs.db"
 db_lock = threading.RLock()
 
+# Track which engine processors are running (in-memory per worker)
+running_processors = set()
+processor_lock = threading.Lock()
+
 def init_db():
     """Initialize SQLite database for job storage and queue"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -64,32 +68,15 @@ def init_db():
 init_db()
 logger.info(f"Initialized shared state in process (PID: {os.getpid()})")
 
-# Start queue processors for all engines at startup
-def start_queue_processors():
-    """Start queue processors for all known engines"""
-    # Get all unique engines from datasets
-    try:
-        datasets = config_loader.get_datasets()
-        engines = set()
-        for dataset in datasets:
-            param_files = dataset.get('param_files', {})
-            engines.update(param_files.keys())
-        
-        logger.info(f"Starting queue processors for engines: {engines}")
-        for engine in engines:
+def ensure_processor_running(engine: str):
+    """Ensure a queue processor is running for the given engine"""
+    with processor_lock:
+        if engine not in running_processors:
+            running_processors.add(engine)
             executor.submit(process_engine_queue, engine)
             logger.info(f"Started queue processor for engine: {engine}")
-    except Exception as e:
-        logger.error(f"Error starting queue processors: {e}")
-
-# Start processors after a short delay to ensure everything is initialized
-import threading
-def delayed_start():
-    import time
-    time.sleep(2)  # Wait for app to fully initialize
-    start_queue_processors()
-
-threading.Thread(target=delayed_start, daemon=True).start()
+        else:
+            logger.debug(f"Queue processor already running for engine: {engine}")
 
 def save_job(job_id: str, job_data: Dict[str, Any]):
     """Save or update a job in the database"""
@@ -505,7 +492,9 @@ def trigger_benchmark():
         # Save job to database
         save_job(job_id, job_data)
         
-        # Queue processor is already running, no need to start it
+        # Ensure queue processor is running for this engine
+        ensure_processor_running(engine)
+        
         logger.info(f"Job {job_id} queued at position {queue_position}: dataset={dataset}, engine={engine}, procedure={procedure_name} (UI: {ui_scenario})")
         
         return jsonify({
