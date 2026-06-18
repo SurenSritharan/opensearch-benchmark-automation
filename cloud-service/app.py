@@ -64,6 +64,33 @@ def init_db():
 init_db()
 logger.info(f"Initialized shared state in process (PID: {os.getpid()})")
 
+# Start queue processors for all engines at startup
+def start_queue_processors():
+    """Start queue processors for all known engines"""
+    # Get all unique engines from datasets
+    try:
+        datasets = config_loader.get_datasets()
+        engines = set()
+        for dataset in datasets:
+            param_files = dataset.get('param_files', {})
+            engines.update(param_files.keys())
+        
+        logger.info(f"Starting queue processors for engines: {engines}")
+        for engine in engines:
+            executor.submit(process_engine_queue, engine)
+            logger.info(f"Started queue processor for engine: {engine}")
+    except Exception as e:
+        logger.error(f"Error starting queue processors: {e}")
+
+# Start processors after a short delay to ensure everything is initialized
+import threading
+def delayed_start():
+    import time
+    time.sleep(2)  # Wait for app to fully initialize
+    start_queue_processors()
+
+threading.Thread(target=delayed_start, daemon=True).start()
+
 def save_job(job_id: str, job_data: Dict[str, Any]):
     """Save or update a job in the database"""
     with db_lock:
@@ -184,17 +211,21 @@ executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS)
 
 
 def process_engine_queue(engine: str):
-    """Process queued jobs for a specific engine (runs in background thread)"""
+    """Process queued jobs for a specific engine (runs in background thread)
+    This thread never terminates - it waits for new jobs indefinitely"""
+    import time
     job = None
+    
+    logger.info(f"Queue processor started for engine: {engine}")
     
     while True:
         try:
             # Get next queued job
             job = get_next_queued_job(engine)
             if not job:
-                # No queued jobs, exit
-                logger.info(f"No more queued jobs for engine: {engine}")
-                break
+                # No queued jobs, wait a bit and check again
+                time.sleep(5)
+                continue
             
             job_id = job['job_id']
             
@@ -266,7 +297,8 @@ def process_engine_queue(engine: str):
                     )
                 except:
                     pass
-            break
+            # Don't break - continue processing queue
+            time.sleep(5)
 
 
 @app.route('/')
@@ -473,9 +505,7 @@ def trigger_benchmark():
         # Save job to database
         save_job(job_id, job_data)
         
-        # Start queue processor in background (will check if engine is busy)
-        executor.submit(process_engine_queue, engine)
-        
+        # Queue processor is already running, no need to start it
         logger.info(f"Job {job_id} queued at position {queue_position}: dataset={dataset}, engine={engine}, procedure={procedure_name} (UI: {ui_scenario})")
         
         return jsonify({
