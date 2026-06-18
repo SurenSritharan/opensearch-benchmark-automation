@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from filelock import FileLock
+from queue import Queue
 from config_loader import ConfigLoader
 from benchmark_runner import BenchmarkRunner
 
@@ -31,7 +32,7 @@ DB_PATH = "/workspace/jobs.db"
 db_lock = threading.RLock()
 
 def init_db():
-    """Initialize SQLite database for job storage"""
+    """Initialize SQLite database for job storage and queue"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
@@ -47,8 +48,14 @@ def init_db():
                 completed_at TEXT,
                 options TEXT,
                 result TEXT,
-                error TEXT
+                error TEXT,
+                queue_position INTEGER
             )
+        """)
+        # Index for efficient queue queries
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_engine_status_queue
+            ON jobs(engine, status, queue_position)
         """)
         conn.commit()
     logger.info(f"Initialized SQLite database at {DB_PATH}")
@@ -68,8 +75,8 @@ def save_job(job_id: str, job_data: Dict[str, Any]):
             conn.execute("""
                 INSERT OR REPLACE INTO jobs
                 (job_id, status, dataset, engine, scenario, ui_scenario,
-                 created_at, started_at, completed_at, options, result, error)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, started_at, completed_at, options, result, error, queue_position)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job_id,
                 job_data.get('status'),
@@ -82,7 +89,8 @@ def save_job(job_id: str, job_data: Dict[str, Any]):
                 job_data.get('completed_at'),
                 options_json,
                 result_json,
-                job_data.get('error')
+                job_data.get('error'),
+                job_data.get('queue_position')
             ))
             conn.commit()
 
@@ -132,12 +140,33 @@ def update_job_status(job_id: str, status: str, **kwargs):
         job.update(kwargs)
         save_job(job_id, job)
 
+def get_next_queued_job(engine: str) -> Optional[Dict[str, Any]]:
+    """Get the next queued job for the specified engine"""
+    with db_lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("""
+                SELECT * FROM jobs
+                WHERE engine = ? AND status = 'queued'
+                ORDER BY queue_position ASC, created_at ASC
+                LIMIT 1
+            """, (engine,))
+            row = cursor.fetchone()
+            
+            if not row:
+                return None
+            
+            job = dict(row)
+            job['options'] = json.loads(job['options']) if job['options'] else {}
+            job['result'] = json.loads(job['result']) if job['result'] else {}
+            return job
+
 def get_engine_lock(engine: str):
     """Creates a lock file on the disk.
     All Gunicorn workers/threads looking at this file will respect it."""
     lock_path = f"/workspace/locks/{engine}.lock"
     os.makedirs(os.path.dirname(lock_path), exist_ok=True)
-    return FileLock(lock_path, timeout=0)
+    return FileLock(lock_path, timeout=1)
 
 def is_engine_busy(engine: str) -> bool:
     """Check if the engine lock file is currently locked by ANY worker"""
@@ -149,54 +178,79 @@ MAX_CONCURRENT_JOBS = 3
 executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS)
 
 
-def run_benchmark_job(job_id: str, dataset: str, engine: str, scenario: str, options: Dict[str, Any]):
-    """Execute a benchmark job in background with per-engine locking"""
+def process_engine_queue(engine: str):
+    """Process queued jobs for a specific engine (runs in background thread)"""
     engine_lock = get_engine_lock(engine)
+    job = None
     
-    try:
-        # Wait for engine lock (queues if another job is running on this engine)
-        logger.info(f"Job {job_id} waiting for engine lock: {engine}")
-        with engine_lock:
-            logger.info(f"Job {job_id} acquired engine lock: {engine}")
+    while True:
+        try:
+            # Try to acquire engine lock (non-blocking)
+            if engine_lock.is_locked:
+                # Engine is busy, wait a bit
+                import time
+                time.sleep(5)
+                continue
             
-            # Update job status to running
-            update_job_status(job_id, 'running', started_at=datetime.utcnow().isoformat())
+            # Get next queued job
+            job = get_next_queued_job(engine)
+            if not job:
+                # No queued jobs, exit
+                break
             
-            logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
+            job_id = job['job_id']
+            dataset = job['dataset']
+            scenario = job['scenario']
+            options = job['options']
             
-            # Extract workload params from options
-            workload_params = options.get('workload_params', None)
+            # Acquire lock and run job
+            with engine_lock:
+                logger.info(f"Job {job_id} acquired engine lock: {engine}")
+                
+                # Update job status to running
+                update_job_status(job_id, 'running', started_at=datetime.utcnow().isoformat())
+                
+                logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
+                
+                # Extract workload params from options
+                workload_params = options.get('workload_params', None)
+                
+                # Run the benchmark
+                result = benchmark_runner.run_benchmark(
+                    dataset=dataset,
+                    engine=engine,
+                    scenario=scenario,
+                    job_id=job_id,
+                    enable_profiling=not options.get('no_profiling', False),
+                    enable_metrics=not options.get('no_metrics', False),
+                    workload_params=workload_params
+                )
             
-            # Run the benchmark
-            result = benchmark_runner.run_benchmark(
-                dataset=dataset,
-                engine=engine,
-                scenario=scenario,
-                job_id=job_id,
-                enable_profiling=not options.get('no_profiling', False),
-                enable_metrics=not options.get('no_metrics', False),
-                workload_params=workload_params
-            )
-        
-        # Update job with results
-        job = get_job(job_id)
-        if job:
-            job.update(result)
-            if 'status' not in result:
-                job['status'] = 'completed'
-            job['completed_at'] = datetime.utcnow().isoformat()
-            save_job(job_id, job)
-        
-        logger.info(f"Job {job_id} completed with status: {result.get('status', 'completed')}")
-        
-    except Exception as e:
-        logger.error(f"Job {job_id} failed with error: {e}", exc_info=True)
-        update_job_status(
-            job_id,
-            'error',
-            error=str(e),
-            completed_at=datetime.utcnow().isoformat()
-        )
+            # Update job with results
+            job_result = get_job(job_id)
+            if job_result:
+                job_result.update(result)
+                if 'status' not in result:
+                    job_result['status'] = 'completed'
+                job_result['completed_at'] = datetime.utcnow().isoformat()
+                save_job(job_id, job_result)
+            
+            logger.info(f"Job {job_id} completed with status: {result.get('status', 'completed')}")
+            
+        except Exception as e:
+            logger.error(f"Error processing queue for engine {engine}: {e}", exc_info=True)
+            # Try to update job status if we have a job_id
+            if job and 'job_id' in job:
+                try:
+                    update_job_status(
+                        job['job_id'],
+                        'error',
+                        error=str(e),
+                        completed_at=datetime.utcnow().isoformat()
+                    )
+                except:
+                    pass
+            break
 
 
 @app.route('/')
@@ -374,6 +428,16 @@ def trigger_benchmark():
         # Create job
         job_id = str(uuid.uuid4())
         
+        # Get current queue position for this engine
+        with db_lock:
+            with sqlite3.connect(DB_PATH) as conn:
+                cursor = conn.execute("""
+                    SELECT COALESCE(MAX(queue_position), 0) + 1
+                    FROM jobs
+                    WHERE engine = ? AND status IN ('queued', 'running')
+                """, (engine,))
+                queue_position = cursor.fetchone()[0]
+        
         job_data = {
             'job_id': job_id,
             'status': 'queued',
@@ -382,6 +446,7 @@ def trigger_benchmark():
             'scenario': procedure_name,  # Store actual procedure name
             'ui_scenario': ui_scenario,  # Store UI label for display
             'created_at': datetime.utcnow().isoformat(),
+            'queue_position': queue_position,
             'options': {
                 'no_profiling': request_data.get('no_profiling', False),
                 'no_metrics': request_data.get('no_metrics', False),
@@ -392,17 +457,10 @@ def trigger_benchmark():
         # Save job to database
         save_job(job_id, job_data)
         
-        # Submit job to executor with actual procedure name
-        executor.submit(
-            run_benchmark_job,
-            job_id,
-            dataset,
-            engine,
-            procedure_name,  # Pass actual procedure name
-            job_data['options']
-        )
+        # Start queue processor in background (will check if engine is busy)
+        executor.submit(process_engine_queue, engine)
         
-        logger.info(f"Job {job_id} queued: dataset={dataset}, engine={engine}, procedure={procedure_name} (UI: {ui_scenario})")
+        logger.info(f"Job {job_id} queued at position {queue_position}: dataset={dataset}, engine={engine}, procedure={procedure_name} (UI: {ui_scenario})")
         
         return jsonify({
             'job_id': job_id,
