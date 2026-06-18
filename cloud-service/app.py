@@ -94,11 +94,24 @@ def discover():
     try:
         datasets = config_loader.get_datasets()
         
-        # Add test procedures to each dataset
+        # Add test procedures to each dataset with scenario labels for duplicates
         for dataset in datasets:
             dataset_name = dataset['name']
             procedures = config_loader.get_test_procedures(dataset_name)
-            dataset['test_procedures'] = [p.get('name') if isinstance(p, dict) else p for p in procedures]
+            
+            # Label procedures with scenario numbers for duplicates
+            procedures_with_labels = []
+            proc_counts = {}
+            for proc in procedures:
+                name = proc.get('name') if isinstance(proc, dict) else proc
+                proc_counts[name] = proc_counts.get(name, 0) + 1
+                if proc_counts[name] > 1:
+                    label = f"{name}-scenario-{proc_counts[name]}"
+                else:
+                    label = name
+                procedures_with_labels.append(label)
+            
+            dataset['test_procedures'] = procedures_with_labels
         
         return jsonify({
             'datasets': datasets,

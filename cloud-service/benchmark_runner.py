@@ -85,12 +85,11 @@ class BenchmarkRunner:
                     'exit_code': -1
                 }
             
-            # Create results directory for this job
+            # Create results directory for this job (opensearch-benchmark will save results here automatically)
             job_results_dir = self.results_dir / job_id
             job_results_dir.mkdir(parents=True, exist_ok=True)
-            results_file = job_results_dir / 'results.json'
             
-            # Build opensearch-benchmark command - use 'execute_test' not 'execute-test'
+            # Build opensearch-benchmark command
             cmd = [
                 'opensearch-benchmark',
                 'run',
@@ -98,8 +97,6 @@ class BenchmarkRunner:
                 '--target-hosts', target_host,
                 '--client-options', 'timeout:300,use_ssl:true,verify_certs:false,basic_auth_user:admin,basic_auth_password:admin',
                 '--test-procedure', scenario,
-                '--results-format', 'json',
-                '--results-file', str(results_file),
                 '--kill-running-processes'  # Clean up any stuck processes
             ]
             
@@ -141,7 +138,7 @@ class BenchmarkRunner:
                 'duration_seconds': duration,
                 'started_at': start_time.isoformat(),
                 'completed_at': end_time.isoformat(),
-                'results_file': str(results_file),
+                'results_dir': str(job_results_dir),
                 'command': ' '.join(cmd),
                 'stdout_tail': result.stdout[-5000:] if result.stdout else '',
                 'stderr_tail': result.stderr[-5000:] if result.stderr else ''
