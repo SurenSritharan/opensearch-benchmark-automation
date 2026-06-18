@@ -11,10 +11,10 @@ logger = logging.getLogger(__name__)
 class ConfigLoader:
     """Loads and parses dataset and workload configurations"""
     
-    def __init__(self, workspace_dir: str = '/workspace'):
+    def __init__(self, workspace_dir: str = '/workspace', workloads_dir: str = '/datasets/opensearch-benchmark-workloads'):
         self.workspace_dir = Path(workspace_dir)
         self.config_dir = self.workspace_dir / 'config'
-        self.workloads_dir = self.workspace_dir / 'workloads'
+        self.workloads_dir = Path(workloads_dir)
         self.datasets_config = self._load_datasets_config()
     
     def _load_datasets_config(self) -> Dict[str, Any]:
