@@ -60,12 +60,11 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Scenario</label>
+                    <label>Test Procedure</label>
                     <select id="scenario" required>
-                        <option value="search">Search</option>
-                        <option value="ingest">Ingest</option>
-                        <option value="search-and-ingest">Search and Ingest</option>
+                        <option value="">Select dataset first</option>
                     </select>
+                    <div class="info-text" id="scenarioInfo"></div>
                 </div>
                 <button type="submit">Start Benchmark</button>
             </form>
@@ -112,9 +111,23 @@
             if (!dataset) return;
             
             const engineSelect = document.getElementById('engine');
-            engineSelect.innerHTML = dataset.engines.map(e => 
+            engineSelect.innerHTML = dataset.engines.map(e =>
                 `<option value="${e}">${e}</option>`
             ).join('');
+            
+            // Update test procedures dropdown
+            const scenarioSelect = document.getElementById('scenario');
+            if (dataset.test_procedures && dataset.test_procedures.length > 0) {
+                scenarioSelect.innerHTML = dataset.test_procedures.map(p =>
+                    `<option value="${p}">${p}</option>`
+                ).join('');
+                document.getElementById('scenarioInfo').textContent =
+                    `Available procedures: ${dataset.test_procedures.length}`;
+            } else {
+                scenarioSelect.innerHTML = '<option value="search">search</option>';
+                document.getElementById('scenarioInfo').textContent =
+                    'No test procedures defined, using default';
+            }
             
             // Update dataset info
             const info = document.getElementById('datasetInfo');
