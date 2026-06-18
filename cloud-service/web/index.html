@@ -81,6 +81,34 @@
             <h2>Recent Jobs</h2>
             <div id="jobList" class="job-list">Loading...</div>
         </div>
+
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h2>📋 Benchmark Logs</h2>
+                <div>
+                    <label style="display: inline; margin-right: 10px; font-weight: normal;">
+                        <input type="checkbox" id="autoRefreshLogs" checked> Auto-refresh (5s)
+                    </label>
+                    <button onclick="loadLogs()" style="padding: 8px 16px; font-size: 14px;">🔄 Refresh</button>
+                </div>
+            </div>
+            <div style="margin-bottom: 10px;">
+                <label style="display: inline; margin-right: 15px; font-weight: normal;">
+                    Lines:
+                    <select id="logLines" onchange="loadLogs()" style="width: auto; display: inline; padding: 5px; margin-left: 5px;">
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                        <option value="500" selected>500</option>
+                        <option value="1000">1000</option>
+                        <option value="2000">2000</option>
+                    </select>
+                </label>
+                <span id="logInfo" style="color: #666; font-size: 13px;"></span>
+            </div>
+            <div id="logViewer" style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; max-height: 600px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word;">
+                Loading logs...
+            </div>
+        </div>
     </div>
 
     <script>
@@ -285,9 +313,44 @@
             }
         }
 
+        async function loadLogs() {
+            try {
+                const lines = document.getElementById('logLines').value;
+                const res = await fetch(`${API_BASE}/api/v1/logs?lines=${lines}`);
+                const data = await res.json();
+                
+                const viewer = document.getElementById('logViewer');
+                const info = document.getElementById('logInfo');
+                
+                if (res.ok && data.content) {
+                    viewer.textContent = data.content;
+                    info.textContent = `Showing last ${data.lines} lines from ${data.log_file}`;
+                    
+                    // Auto-scroll to bottom
+                    viewer.scrollTop = viewer.scrollHeight;
+                } else {
+                    viewer.textContent = data.error || 'Failed to load logs';
+                    viewer.style.color = '#f44336';
+                }
+            } catch (err) {
+                document.getElementById('logViewer').textContent = `Error loading logs: ${err.message}`;
+                document.getElementById('logViewer').style.color = '#f44336';
+            }
+        }
+
         loadDatasets();
         loadJobs();
+        loadLogs();
+        
+        // Auto-refresh jobs every 5 seconds
         setInterval(loadJobs, 5000);
+        
+        // Auto-refresh logs every 5 seconds if checkbox is checked
+        setInterval(() => {
+            if (document.getElementById('autoRefreshLogs').checked) {
+                loadLogs();
+            }
+        }, 5000);
     </script>
 </body>
 </html>
