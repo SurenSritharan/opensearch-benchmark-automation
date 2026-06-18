@@ -3,6 +3,8 @@
 import subprocess
 import logging
 import os
+import requests
+from requests.auth import HTTPBasicAuth
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -47,6 +49,16 @@ class BenchmarkRunner:
             target_host = self.config.get_target_host(engine)
             workload_path = self.config.get_workload_path(dataset)
             params_file = self.config.get_workload_params_file(dataset, engine)
+            
+            # Check cluster health before starting
+            logger.info(f"Checking cluster health for {engine}...")
+            cluster_ready = self._check_cluster_health(target_host)
+            if not cluster_ready:
+                return {
+                    'status': 'failed',
+                    'error': f'Cluster {target_host} is not ready. Please check cluster status.',
+                    'exit_code': -1
+                }
             
             # Create results directory for this job
             job_results_dir = self.results_dir / job_id
@@ -106,6 +118,7 @@ class BenchmarkRunner:
             
             if result.returncode != 0:
                 logger.error(f"Benchmark failed with exit code {result.returncode}")
+                logger.error(f"STDOUT: {result.stdout[-1000:]}")
                 logger.error(f"STDERR: {result.stderr[-1000:]}")
             else:
                 logger.info(f"Benchmark completed successfully in {duration:.1f}s")
@@ -162,5 +175,29 @@ class BenchmarkRunner:
             return f"Workload path not found: {workload_path}"
         
         return None  # Valid
+    
+    def _check_cluster_health(self, target_host: str) -> bool:
+        """Check if OpenSearch cluster is healthy and ready"""
+        try:
+            url = f"https://{target_host}/_cluster/health"
+            response = requests.get(
+                url,
+                auth=HTTPBasicAuth('admin', 'admin'),
+                verify=False,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                health = response.json()
+                status = health.get('status')
+                logger.info(f"Cluster status: {status}, nodes: {health.get('number_of_nodes')}")
+                return status in ['green', 'yellow']
+            else:
+                logger.error(f"Cluster health check failed: HTTP {response.status_code}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error checking cluster health: {e}")
+            return False
 
 # Made with Bob

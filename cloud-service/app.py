@@ -235,6 +235,55 @@ def get_benchmark_logs():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/v1/cluster/<engine>/health')
+def get_cluster_health(engine: str):
+    """Check OpenSearch cluster health for a specific engine"""
+    try:
+        import requests
+        from requests.auth import HTTPBasicAuth
+        
+        target_host = config_loader.get_target_host(engine)
+        url = f"https://{target_host}/_cluster/health"
+        
+        response = requests.get(
+            url,
+            auth=HTTPBasicAuth('admin', 'admin'),
+            verify=False,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            health_data = response.json()
+            return jsonify({
+                'engine': engine,
+                'cluster': target_host,
+                'status': health_data.get('status'),
+                'number_of_nodes': health_data.get('number_of_nodes'),
+                'number_of_data_nodes': health_data.get('number_of_data_nodes'),
+                'active_primary_shards': health_data.get('active_primary_shards'),
+                'active_shards': health_data.get('active_shards'),
+                'relocating_shards': health_data.get('relocating_shards'),
+                'initializing_shards': health_data.get('initializing_shards'),
+                'unassigned_shards': health_data.get('unassigned_shards'),
+                'ready': health_data.get('status') in ['green', 'yellow']
+            })
+        else:
+            return jsonify({
+                'engine': engine,
+                'cluster': target_host,
+                'error': f'HTTP {response.status_code}',
+                'ready': False
+            }), response.status_code
+            
+    except Exception as e:
+        logger.error(f"Error checking cluster health for {engine}: {e}", exc_info=True)
+        return jsonify({
+            'engine': engine,
+            'error': str(e),
+            'ready': False
+        }), 500
+
+
 if __name__ == '__main__':
     logger.info("Starting Cloud-Native OpenSearch Benchmark Service")
     logger.info(f"Workspace: /workspace")
