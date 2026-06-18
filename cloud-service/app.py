@@ -105,10 +105,16 @@ def discover():
             for proc in procedures:
                 name = proc.get('name') if isinstance(proc, dict) else proc
                 proc_counts[name] = proc_counts.get(name, 0) + 1
-                if proc_counts[name] > 1:
-                    label = f"{name}-scenario-{proc_counts[name]}"
+                # Always add scenario number if there are duplicates
+                if proc_counts[name] == 1:
+                    # First occurrence - check if there will be more
+                    total_count = sum(1 for p in procedures if (p.get('name') if isinstance(p, dict) else p) == name)
+                    if total_count > 1:
+                        label = f"{name}-scenario-1"
+                    else:
+                        label = name
                 else:
-                    label = name
+                    label = f"{name}-scenario-{proc_counts[name]}"
                 procedures_with_labels.append(label)
             
             dataset['test_procedures'] = procedures_with_labels
