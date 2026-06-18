@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Dict, Any
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import Manager
 from config_loader import ConfigLoader
 from benchmark_runner import BenchmarkRunner
 
@@ -22,9 +23,10 @@ CORS(app)
 config_loader = ConfigLoader(workspace_dir='/workspace')
 benchmark_runner = BenchmarkRunner(config_loader, results_dir='/results')
 
-# Job storage (in-memory for now, could be replaced with database)
-jobs: Dict[str, Dict[str, Any]] = {}
-job_lock = threading.Lock()
+# Shared job storage across gunicorn workers using multiprocessing.Manager
+manager = Manager()
+jobs = manager.dict()
+job_lock = manager.Lock()
 
 # Thread pool for running benchmarks
 MAX_CONCURRENT_JOBS = 3
