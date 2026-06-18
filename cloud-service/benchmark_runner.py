@@ -14,6 +14,119 @@ from config_loader import ConfigLoader
 logger = logging.getLogger(__name__)
 
 
+def download_dataset_files(dataset_config: Dict[str, Any]) -> bool:
+    """
+    Download dataset files if they don't exist locally.
+    
+    Args:
+        dataset_config: Dataset configuration from datasets.yaml
+        
+    Returns:
+        True if all files are ready, False if download failed
+    """
+    data_files = dataset_config.get('data_files', [])
+    if not data_files:
+        logger.info("No data files to download")
+        return True
+    
+    data_dir = dataset_config.get('data_dir', '/datasets')
+    data_dir_path = Path(data_dir)
+    
+    logger.info(f"Checking dataset files in {data_dir}...")
+    
+    # Create data directory if it doesn't exist
+    data_dir_path.mkdir(parents=True, exist_ok=True)
+    
+    for file_info in data_files:
+        file_name = file_info.get('name')
+        file_url = file_info.get('url')
+        file_range = file_info.get('range')
+        
+        if not file_name or not file_url:
+            logger.warning(f"Skipping file with missing name or URL: {file_info}")
+            continue
+        
+        file_path = data_dir_path / file_name
+        
+        # Calculate expected file size from range
+        expected_size = None
+        if file_range:
+            try:
+                # Parse range like "0-4100000000" to get size
+                start, end = file_range.split('-')
+                expected_size = int(end) - int(start) + 1
+            except Exception as e:
+                logger.warning(f"Could not parse range '{file_range}': {e}")
+        
+        # Check if file exists and has correct size
+        needs_download = False
+        if file_path.exists():
+            current_size = file_path.stat().st_size
+            if expected_size and current_size != expected_size:
+                logger.warning(f"File size mismatch for {file_name}")
+                logger.warning(f"  Current: {current_size} bytes, Expected: {expected_size} bytes")
+                logger.warning(f"  Re-downloading...")
+                needs_download = True
+            else:
+                logger.info(f"✓ File already exists: {file_name} ({current_size / (1024**3):.2f} GB)")
+                continue
+        else:
+            logger.info(f"File not found: {file_name}, will download")
+            needs_download = True
+        
+        if needs_download:
+            logger.info(f"📥 Downloading {file_name}...")
+            logger.info(f"  URL: {file_url}")
+            if file_range:
+                if expected_size:
+                    size_gb = expected_size / (1024**3)
+                    logger.info(f"  Range: {file_range} ({size_gb:.2f} GB)")
+                else:
+                    logger.info(f"  Range: {file_range}")
+            
+            try:
+                # Use wget for downloading with range support
+                wget_cmd = ['wget', '-q', '--show-progress', '-O', str(file_path)]
+                
+                # Add range header if specified
+                if file_range:
+                    wget_cmd.extend(['--header', f'Range: bytes={file_range}'])
+                
+                wget_cmd.append(file_url)
+                
+                # Execute download
+                result = subprocess.run(
+                    wget_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=3600  # 1 hour timeout for large files
+                )
+                
+                if result.returncode != 0:
+                    logger.error(f"Failed to download {file_name}")
+                    logger.error(f"STDERR: {result.stderr}")
+                    return False
+                
+                # Verify download completed
+                if file_path.exists():
+                    downloaded_size = file_path.stat().st_size
+                    downloaded_gb = downloaded_size / (1024**3)
+                    logger.info(f"✓ Downloaded: {file_name} ({downloaded_gb:.2f} GB)")
+                else:
+                    logger.error(f"Download completed but file not found: {file_path}")
+                    return False
+                    
+            except subprocess.TimeoutExpired:
+                logger.error(f"Download timed out for {file_name}")
+                return False
+            except Exception as e:
+                logger.error(f"Failed to download {file_name}: {e}")
+                return False
+    
+    logger.info("✓ All dataset files are ready")
+    return True
+
+
 class BenchmarkRunner:
     """Executes opensearch-benchmark commands without kubectl dependencies"""
     
@@ -56,6 +169,16 @@ class BenchmarkRunner:
             # Get configuration
             target_host = self.config.get_target_host(engine)
             workload_path = self.config.get_workload_path(dataset)
+            
+            # Download dataset files if needed
+            dataset_config = self.config.get_dataset_config(dataset)
+            if dataset_config:
+                logger.info(f"Checking dataset files for {dataset}...")
+                if not download_dataset_files(dataset_config):
+                    return {
+                        'status': 'failed',
+                        'error': 'Failed to download required dataset files. Check logs for details.'
+                    }
             
             # Get base params (default_params + engine_params for this engine)
             base_params = self.config.get_workload_params(dataset, engine)

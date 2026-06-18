@@ -298,10 +298,11 @@ def get_job_status(job_id: str):
 def list_jobs():
     """List all jobs"""
     with job_lock:
-        job_list = sorted(jobs.values(), key=lambda x: x['created_at'], reverse=True)[:50]
+        total = len(jobs)
+        job_list = sorted(jobs.values(), key=lambda x: x.get('created_at', ''), reverse=True)[:50]
     
     return jsonify({
-        'total': len(jobs),
+        'total': total,
         'jobs': job_list
     })
 
