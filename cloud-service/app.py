@@ -298,8 +298,12 @@ def get_job_status(job_id: str):
 def list_jobs():
     """List all jobs"""
     with job_lock:
-        total = len(jobs)
-        job_list = sorted(jobs.values(), key=lambda x: x.get('created_at', ''), reverse=True)[:50]
+        # Create a deep copy of jobs to avoid any reference issues
+        jobs_snapshot = {k: v.copy() for k, v in jobs.items()}
+    
+    # Sort and slice outside the lock to minimize lock time
+    total = len(jobs_snapshot)
+    job_list = sorted(jobs_snapshot.values(), key=lambda x: x.get('created_at', ''), reverse=True)[:50]
     
     return jsonify({
         'total': total,
