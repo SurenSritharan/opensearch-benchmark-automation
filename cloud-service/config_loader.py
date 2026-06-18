@@ -92,8 +92,12 @@ class ConfigLoader:
         datasets = []
         
         for name, config in self.datasets_config.get('datasets', {}).items():
+            # Support both param_files (legacy) and engine_params (new)
             param_files = config.get('param_files', {})
-            engines = list(param_files.keys())
+            engine_params = config.get('engine_params', {})
+            
+            # Get engines from either source
+            engines = list(engine_params.keys()) if engine_params else list(param_files.keys())
             
             datasets.append({
                 'name': name,
