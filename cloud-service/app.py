@@ -161,12 +161,17 @@ def get_next_queued_job(engine: str) -> Optional[Dict[str, Any]]:
             job['result'] = json.loads(job['result']) if job['result'] else {}
             return job
 
-def get_engine_lock(engine: str):
+def get_engine_lock(engine: str, timeout: int = -1):
     """Creates a lock file on the disk.
-    All Gunicorn workers/threads looking at this file will respect it."""
+    All Gunicorn workers/threads looking at this file will respect it.
+    
+    Args:
+        engine: The engine name
+        timeout: Lock timeout in seconds. -1 means wait forever (blocking)
+    """
     lock_path = f"/workspace/locks/{engine}.lock"
     os.makedirs(os.path.dirname(lock_path), exist_ok=True)
-    return FileLock(lock_path, timeout=1)
+    return FileLock(lock_path, timeout=timeout)
 
 def is_engine_busy(engine: str) -> bool:
     """Check if the engine lock file is currently locked by ANY worker"""
@@ -180,31 +185,42 @@ executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS)
 
 def process_engine_queue(engine: str):
     """Process queued jobs for a specific engine (runs in background thread)"""
-    engine_lock = get_engine_lock(engine)
     job = None
     
     while True:
         try:
-            # Try to acquire engine lock (non-blocking)
-            if engine_lock.is_locked:
-                # Engine is busy, wait a bit
-                import time
-                time.sleep(5)
-                continue
-            
             # Get next queued job
             job = get_next_queued_job(engine)
             if not job:
                 # No queued jobs, exit
+                logger.info(f"No more queued jobs for engine: {engine}")
                 break
             
             job_id = job['job_id']
+            
+            # Check if job was cancelled while queued
+            current_job = get_job(job_id)
+            if current_job and current_job['status'] == 'cancelled':
+                logger.info(f"Job {job_id} was cancelled, skipping")
+                continue
+            
             dataset = job['dataset']
             scenario = job['scenario']
             options = job['options']
             
-            # Acquire lock and run job
+            logger.info(f"Job {job_id} waiting for engine lock: {engine}")
+            
+            # Get a blocking lock (will wait indefinitely until lock is available)
+            engine_lock = get_engine_lock(engine, timeout=-1)
+            
+            # Acquire lock and run job (blocks until lock is available)
             with engine_lock:
+                # Double-check job wasn't cancelled while waiting for lock
+                current_job = get_job(job_id)
+                if current_job and current_job['status'] == 'cancelled':
+                    logger.info(f"Job {job_id} was cancelled while waiting for lock, skipping")
+                    continue
+                
                 logger.info(f"Job {job_id} acquired engine lock: {engine}")
                 
                 # Update job status to running
@@ -491,6 +507,86 @@ def get_job_status(job_id: str):
         job['progress'] = 'in_progress'
     
     return jsonify(job)
+
+
+@app.route('/api/v1/benchmark/<job_id>', methods=['DELETE'])
+def cancel_job(job_id: str):
+    """Cancel a queued or running job"""
+    import subprocess as sp
+    
+    job = get_job(job_id)
+    
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    status = job['status']
+    
+    if status == 'queued':
+        # Cancel queued job - just update status
+        update_job_status(
+            job_id,
+            'cancelled',
+            completed_at=datetime.utcnow().isoformat(),
+            error='Job cancelled by user'
+        )
+        logger.info(f"Job {job_id} cancelled (was queued)")
+        return jsonify({
+            'message': 'Job cancelled successfully',
+            'job_id': job_id,
+            'previous_status': status
+        })
+    
+    elif status == 'running':
+        # Kill the opensearch-benchmark process
+        try:
+            # Find and kill opensearch-benchmark processes
+            result = sp.run(
+                ['pkill', '-f', 'opensearch-benchmark'],
+                capture_output=True,
+                text=True
+            )
+            
+            # Update job status
+            update_job_status(
+                job_id,
+                'cancelled',
+                completed_at=datetime.utcnow().isoformat(),
+                error='Job cancelled by user - process terminated'
+            )
+            
+            logger.info(f"Job {job_id} cancelled - killed opensearch-benchmark process")
+            return jsonify({
+                'message': 'Job cancelled and process terminated',
+                'job_id': job_id,
+                'previous_status': status
+            })
+        except Exception as e:
+            logger.error(f"Error killing process for job {job_id}: {e}")
+            # Still mark as cancelled even if kill failed
+            update_job_status(
+                job_id,
+                'cancelled',
+                error=f'Job cancellation requested but process kill failed: {e}'
+            )
+            return jsonify({
+                'message': 'Job marked as cancelled but process kill may have failed',
+                'job_id': job_id,
+                'previous_status': status,
+                'error': str(e)
+            }), 500
+    
+    elif status in ['completed', 'error', 'cancelled']:
+        return jsonify({
+            'error': f'Job already {status}',
+            'job_id': job_id,
+            'status': status
+        }), 400
+    
+    else:
+        return jsonify({
+            'error': f'Unknown job status: {status}',
+            'job_id': job_id
+        }), 400
 
 
 @app.route('/api/v1/benchmark')
