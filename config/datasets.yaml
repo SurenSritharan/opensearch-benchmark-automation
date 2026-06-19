@@ -71,17 +71,22 @@ datasets:
         parameter_sweeps:
           - params:
               query_k: 10
-              search_clients: 2
-              warmup_time_period: 60
-              time_period: 300
-          - params:
-              query_k: 10
               search_clients: 4
               warmup_time_period: 60
               time_period: 300
           - params:
               query_k: 10
               search_clients: 8
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 10
+              search_clients: 10
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 10
+              search_clients: 12
               warmup_time_period: 60
               time_period: 300
           - params:
@@ -104,17 +109,22 @@ datasets:
         parameter_sweeps:
           - params:
               query_k: 100
-              search_clients: 2
-              warmup_time_period: 60
-              time_period: 300
-          - params:
-              query_k: 100
               search_clients: 4
               warmup_time_period: 60
               time_period: 300
           - params:
               query_k: 100
               search_clients: 8
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 100
+              search_clients: 10
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 100
+              search_clients: 12
               warmup_time_period: 60
               time_period: 300
           - params:
@@ -201,12 +211,6 @@ datasets:
           - params:
               query_k: 100
               ef_search: 100
-              search_clients: 2
-              warmup_time_period: 60
-              time_period: 300
-          - params:
-              query_k: 100
-              ef_search: 100
               search_clients: 4
               warmup_time_period: 60
               time_period: 300
@@ -214,6 +218,18 @@ datasets:
               query_k: 100
               ef_search: 100
               search_clients: 8
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 100
+              ef_search: 100
+              search_clients: 10
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 100
+              ef_search: 100
+              search_clients: 12
               warmup_time_period: 60
               time_period: 300
           - params:
@@ -231,12 +247,6 @@ datasets:
           - params:
               query_k: 10
               ef_search: 32
-              search_clients: 2
-              warmup_time_period: 60
-              time_period: 300
-          - params:
-              query_k: 10
-              ef_search: 32
               search_clients: 4
               warmup_time_period: 60
               time_period: 300
@@ -244,6 +254,18 @@ datasets:
               query_k: 10
               ef_search: 32
               search_clients: 8
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 10
+              ef_search: 32
+              search_clients: 10
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 10
+              ef_search: 32
+              search_clients: 12
               warmup_time_period: 60
               time_period: 300
           - params:
