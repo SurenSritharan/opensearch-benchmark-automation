@@ -6,25 +6,88 @@
     <title>OpenSearch Benchmark - Cloud Service</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+        body {
+            font-family: Gabarito, "Gabarito Fallback", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+            background-color: rgb(249, 250, 251);
+            background-image:
+                radial-gradient(circle at 0% 0%, rgba(49, 130, 237, 0.08), rgba(0, 0, 0, 0) 28%),
+                radial-gradient(circle at 100% 0%, rgba(11, 184, 218, 0.06), rgba(0, 0, 0, 0) 24%),
+                linear-gradient(rgb(249, 250, 251), rgb(249, 250, 251));
+            padding: 20px;
+            color: rgb(15, 23, 41);
+            min-height: 100vh;
+        }
         .container { max-width: 1200px; margin: 0 auto; }
-        .header { background: white; padding: 30px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        h1 { color: #333; margin-bottom: 10px; }
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid #e1e4e8;
+        }
+        h1 { color: rgb(15, 23, 41); margin-bottom: 10px; font-weight: 700; }
         .subtitle { color: #666; font-size: 14px; }
         .badge { display: inline-block; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-left: 10px; }
         .badge.cloud { background: #e3f2fd; color: #1976d2; }
-        .card { background: white; padding: 25px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            border: 1px solid #e1e4e8;
+        }
         .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; font-weight: 600; color: #333; }
-        select, input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
-        button { background: #0066cc; color: white; padding: 12px 24px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; font-weight: 600; }
-        button:hover { background: #0052a3; }
+        label { display: block; margin-bottom: 8px; font-weight: 700; color: rgb(15, 23, 41); }
+        select, input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #e1e4e8;
+            border-radius: 6px;
+            font-size: 14px;
+            background: white;
+            transition: border-color 0.3s;
+        }
+        select:focus, input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        button {
+            background: #3b82f6;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s;
+            box-shadow: 0 2px 4px rgba(59, 130, 246, 0.3);
+        }
+        button:hover {
+            background: #2563eb;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(59, 130, 246, 0.4);
+        }
         button:disabled { background: #ccc; cursor: not-allowed; }
         .job-list { margin-top: 20px; }
-        .job-item { background: #f9f9f9; padding: 15px; margin-bottom: 10px; border-radius: 4px; border-left: 4px solid #0066cc; }
-        .job-item.running { border-left-color: #ff9800; }
-        .job-item.completed { border-left-color: #4caf50; }
-        .job-item.failed { border-left-color: #f44336; }
+        .job-item {
+            background: linear-gradient(135deg, #f6f8fa 0%, #ffffff 100%);
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            border-left: 4px solid #3b82f6;
+            transition: all 0.3s;
+            border: 1px solid #e1e4e8;
+        }
+        .job-item:hover {
+            transform: translateX(4px);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .job-item.running { border-left-color: #f59e0b; }
+        .job-item.completed { border-left-color: #10b981; }
+        .job-item.failed { border-left-color: #ef4444; }
         .status-badge { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
         .status-queued { background: #e3f2fd; color: #1976d2; }
         .status-running { background: #fff3e0; color: #f57c00; }

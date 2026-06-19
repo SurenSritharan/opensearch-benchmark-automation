@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Benchmark Results Viewer</title>
+    <!-- VChart from VisActor CDN -->
+    <script src="https://unpkg.com/@visactor/vchart@1.11.0/build/index.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -12,78 +14,337 @@
         }
         
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: Gabarito, "Gabarito Fallback", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+            background-color: rgb(249, 250, 251);
+            background-image:
+                radial-gradient(circle at 0% 0%, rgba(49, 130, 237, 0.08), rgba(0, 0, 0, 0) 28%),
+                radial-gradient(circle at 100% 0%, rgba(11, 184, 218, 0.06), rgba(0, 0, 0, 0) 24%),
+                linear-gradient(rgb(249, 250, 251), rgb(249, 250, 251));
             min-height: 100vh;
             padding: 20px;
+            color: rgb(15, 23, 41);
+            margin: 0;
         }
         
         .container {
-            max-width: 1400px;
+            max-width: 1600px;
             margin: 0 auto;
             background: white;
             border-radius: 12px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.15);
             overflow: hidden;
         }
         
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 30px;
+            background: rgb(249, 250, 251);
+            color: rgb(15, 23, 41);
+            padding: 40px 30px;
             text-align: center;
+            border-bottom: 1px solid #e1e4e8;
         }
         
         .header h1 {
-            font-size: 2em;
+            font-size: 2.5em;
             margin-bottom: 10px;
+            font-weight: 700;
+        }
+        
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.95;
         }
         
         .content {
             padding: 30px;
         }
         
-        .job-info {
-            background: #f8f9fa;
+        .back-button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
             border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 30px;
+            margin-bottom: 25px;
+            transition: all 0.3s;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
         }
         
-        .job-info h2 {
-            color: #667eea;
+        .back-button:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        /* Section Styles */
+        .section {
+            background: white;
+            border: 1px solid #e1e4e8;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            transition: box-shadow 0.3s;
+        }
+        
+        .section:hover {
+            box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+        }
+        
+        .section-title {
+            font-size: 1.5em;
+            font-weight: 700;
             margin-bottom: 15px;
+            color: #24292e;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
         
-        .info-grid {
+        .section-title::before {
+            content: '';
+            width: 4px;
+            height: 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 2px;
+        }
+        
+        .section-subtitle {
+            font-size: 0.95em;
+            color: #666;
+            margin-bottom: 20px;
+        }
+        
+        /* Test Environment Grid */
+        .env-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+        
+        .env-item {
+            display: flex;
+            flex-direction: column;
+            padding: 15px;
+            background: linear-gradient(135deg, #f6f8fa 0%, #ffffff 100%);
+            border-radius: 8px;
+            border: 1px solid #e1e4e8;
+            transition: all 0.3s;
+        }
+        
+        .env-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        }
+        
+        .env-label {
+            font-size: 0.85em;
+            font-weight: 700;
+            color: #666;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .env-value {
+            font-size: 1.2em;
+            color: #24292e;
+            font-weight: 600;
+        }
+        
+        /* Parameters Grid */
+        .params-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
             gap: 15px;
         }
         
-        .info-item {
+        .param-item {
             display: flex;
             flex-direction: column;
+            padding: 15px;
+            background: linear-gradient(135deg, #f6f8fa 0%, #ffffff 100%);
+            border-radius: 8px;
+            border: 1px solid #e1e4e8;
+            transition: all 0.3s;
         }
         
-        .info-label {
-            font-weight: 600;
-            color: #666;
+        .param-item:hover {
+            border-color: #667eea;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.15);
+        }
+        
+        .param-label {
             font-size: 0.85em;
-            margin-bottom: 5px;
+            font-weight: 700;
+            color: #666;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
-        .info-value {
-            font-size: 1.1em;
-            color: #333;
+        .param-value {
+            font-size: 1em;
+            color: #24292e;
+            word-break: break-word;
+            font-weight: 500;
         }
         
+        /* Sweep Parameters */
+        .sweep-params-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        
+        .sweep-param-card {
+            border: 2px solid #e1e4e8;
+            border-radius: 10px;
+            padding: 20px;
+            background: linear-gradient(135deg, #fafbfc 0%, #ffffff 100%);
+            transition: all 0.3s;
+        }
+        
+        .sweep-param-card:hover {
+            border-color: #667eea;
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.2);
+        }
+        
+        .sweep-param-card h4 {
+            font-size: 1.2em;
+            margin-bottom: 15px;
+            color: #24292e;
+            font-weight: 700;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e1e4e8;
+        }
+        
+        .sweep-param-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        
+        .sweep-param-item:last-child {
+            border-bottom: none;
+        }
+        
+        .sweep-param-key {
+            font-weight: 700;
+            color: #666;
+            font-size: 0.9em;
+        }
+        
+        .sweep-param-val {
+            color: #24292e;
+            font-weight: 600;
+            text-align: right;
+        }
+        
+        /* Chart Containers */
+        .chart-container {
+            margin: 25px 0;
+            padding: 25px;
+            background: #fafbfc;
+            border-radius: 10px;
+            border: 1px solid #e1e4e8;
+        }
+        
+        .chart-wrapper {
+            width: 100%;
+            height: 400px;
+            margin-top: 15px;
+        }
+        
+        .chart-title {
+            font-size: 1.2em;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: #24292e;
+        }
+        
+        .chart-subtitle {
+            font-size: 0.95em;
+            color: #666;
+            margin-bottom: 20px;
+        }
+        
+        /* Table Styles */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        
+        th, td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #e1e4e8;
+        }
+        
+        th {
+            background: rgb(249, 250, 251);
+            font-weight: 700;
+            color: rgb(15, 23, 41);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 0.9em;
+            border-bottom: 2px solid #e1e4e8;
+        }
+        
+        tr:hover {
+            background: #f6f8fa;
+        }
+        
+        td {
+            font-weight: 500;
+        }
+        
+        /* Loading and Error States */
+        .loading {
+            text-align: center;
+            padding: 80px;
+            color: #667eea;
+            font-size: 1.3em;
+            font-weight: 600;
+        }
+        
+        .loading::after {
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+        
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+        
+        .error-message {
+            background: linear-gradient(135deg, #f8d7da 0%, #f5c6cb 100%);
+            color: #721c24;
+            padding: 25px;
+            border-radius: 10px;
+            border-left: 5px solid #dc3545;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(220, 53, 69, 0.2);
+        }
+        
+        /* Status Badge */
         .status-badge {
             display: inline-block;
-            padding: 4px 12px;
-            border-radius: 12px;
+            padding: 6px 16px;
+            border-radius: 20px;
             font-size: 0.9em;
-            font-weight: 600;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
         .status-completed { background: #d4edda; color: #155724; }
@@ -92,154 +353,44 @@
         .status-error { background: #f8d7da; color: #721c24; }
         .status-cancelled { background: #e2e3e5; color: #383d41; }
         
-        .sweeps-container {
-            margin-top: 30px;
-        }
-        
-        .sweep-card {
-            background: white;
-            border: 2px solid #e9ecef;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            overflow: hidden;
-        }
-        
-        .sweep-header {
-            background: #667eea;
-            color: white;
-            padding: 15px 20px;
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .sweep-header:hover {
-            background: #5568d3;
-        }
-        
-        .sweep-body {
-            padding: 20px;
-            display: none;
-        }
-        
-        .sweep-body.active {
-            display: block;
-        }
-        
-        .metrics-grid {
+        /* Metrics Summary Cards */
+        .metrics-summary {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
+            gap: 20px;
+            margin-bottom: 30px;
         }
         
         .metric-card {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 6px;
-            border-left: 4px solid #667eea;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+            transition: all 0.3s;
+        }
+        
+        .metric-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
         }
         
         .metric-label {
-            font-size: 0.85em;
-            color: #666;
-            margin-bottom: 5px;
+            font-size: 0.9em;
+            opacity: 0.9;
+            margin-bottom: 8px;
+            font-weight: 600;
         }
         
         .metric-value {
-            font-size: 1.5em;
-            font-weight: 600;
-            color: #333;
+            font-size: 2em;
+            font-weight: 700;
         }
         
         .metric-unit {
-            font-size: 0.7em;
-            color: #999;
-            margin-left: 4px;
-        }
-        
-        .section {
-            margin-top: 25px;
-        }
-        
-        .section-title {
-            font-size: 1.2em;
-            font-weight: 600;
-            color: #667eea;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #e9ecef;
-        }
-        
-        .params-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-        }
-        
-        .params-table th,
-        .params-table td {
-            padding: 10px;
-            text-align: left;
-            border-bottom: 1px solid #e9ecef;
-        }
-        
-        .params-table th {
-            background: #f8f9fa;
-            font-weight: 600;
-            color: #666;
-        }
-        
-        .log-viewer {
-            background: #1e1e1e;
-            color: #d4d4d4;
-            padding: 15px;
-            border-radius: 6px;
-            font-family: 'Courier New', monospace;
-            font-size: 0.85em;
-            max-height: 400px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-        
-        .error-message {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 20px;
-            border-radius: 8px;
-            border-left: 4px solid #f5c6cb;
-        }
-        
-        .loading {
-            text-align: center;
-            padding: 60px;
-            color: #667eea;
-            font-size: 1.2em;
-        }
-        
-        .back-button {
-            display: inline-block;
-            padding: 10px 20px;
-            background: #667eea;
-            color: white;
-            text-decoration: none;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            transition: background 0.3s;
-        }
-        
-        .back-button:hover {
-            background: #5568d3;
-        }
-        
-        .toggle-icon {
-            transition: transform 0.3s;
-        }
-        
-        .toggle-icon.active {
-            transform: rotate(180deg);
+            font-size: 0.6em;
+            opacity: 0.8;
+            margin-left: 5px;
         }
     </style>
 </head>
@@ -247,27 +398,95 @@
     <div class="container">
         <div class="header">
             <h1>📊 Benchmark Results Viewer</h1>
-            <p>Detailed analysis of benchmark execution</p>
+            <p>Advanced visualization and analysis of benchmark execution</p>
         </div>
         
         <div class="content">
             <a href="/" class="back-button">← Back to Dashboard</a>
             
             <div id="loading" class="loading">
-                Loading results...
+                Loading results
             </div>
             
             <div id="error" class="error-message" style="display: none;"></div>
             
             <div id="results" style="display: none;">
-                <div class="job-info">
-                    <h2>Job Information</h2>
-                    <div class="info-grid" id="jobInfo"></div>
+                <!-- Test Environment -->
+                <div class="section">
+                    <div class="section-title">Test Environment</div>
+                    <div class="env-grid" id="testEnvironment"></div>
                 </div>
                 
-                <div class="sweeps-container">
-                    <h2 style="color: #667eea; margin-bottom: 20px;">Parameter Sweeps</h2>
-                    <div id="sweeps"></div>
+                <!-- Metrics Summary -->
+                <div id="metricsSummary" class="section" style="display: none;">
+                    <div class="section-title">Performance Summary</div>
+                    <div class="metrics-summary" id="metricsSummaryContent"></div>
+                </div>
+                
+                <!-- Common Parameters -->
+                <div id="commonParamsSection" class="section" style="display: none;">
+                    <div class="section-title">Common Parameters</div>
+                    <div class="section-subtitle">Parameters that are the same across all sweeps</div>
+                    <div class="params-grid" id="commonParams"></div>
+                </div>
+                
+                <!-- Sweep Parameters -->
+                <div id="sweepParamsSection" class="section" style="display: none;">
+                    <div class="section-title">Sweep Parameters</div>
+                    <div class="section-subtitle">Parameters that vary across sweeps</div>
+                    <div class="sweep-params-container" id="sweepParams"></div>
+                </div>
+                
+                <!-- Latency Comparison Chart -->
+                <div id="latencyChart" class="section" style="display: none;">
+                    <div class="section-title">Latency Comparison</div>
+                    <div class="chart-container">
+                        <div class="chart-subtitle">Response time across sweeps (lower is better)</div>
+                        <div id="latencyChartContent" class="chart-wrapper"></div>
+                    </div>
+                </div>
+                
+                <!-- Throughput Comparison Chart -->
+                <div id="throughputChart" class="section" style="display: none;">
+                    <div class="section-title">Throughput Comparison</div>
+                    <div class="chart-container">
+                        <div class="chart-subtitle">Operations per second across sweeps (higher is better)</div>
+                        <div id="throughputChartContent" class="chart-wrapper"></div>
+                    </div>
+                </div>
+                
+                <!-- Recall Metrics -->
+                <div id="recallChart" class="section" style="display: none;">
+                    <div class="section-title">Recall Metrics Comparison</div>
+                    <div class="chart-container">
+                        <div class="chart-subtitle">Search accuracy metrics across sweeps</div>
+                        <div id="recallChartContent" class="chart-wrapper"></div>
+                    </div>
+                </div>
+                
+                <!-- Combined Performance Chart -->
+                <div id="combinedChart" class="section" style="display: none;">
+                    <div class="section-title">Combined Performance Overview</div>
+                    <div class="chart-container">
+                        <div class="chart-subtitle">Multi-metric comparison across all sweeps</div>
+                        <div id="combinedChartContent" class="chart-wrapper"></div>
+                    </div>
+                </div>
+                
+                <!-- Detailed Metrics Table -->
+                <div id="detailedMetrics" class="section" style="display: none;">
+                    <div class="section-title">Detailed Metrics</div>
+                    <div id="detailedMetricsContent"></div>
+                </div>
+                
+                <!-- Benchmark Logs -->
+                <div id="logsSection" class="section" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <div class="section-title" style="margin-bottom: 0;">📋 Benchmark Logs</div>
+                        <button onclick="loadBenchmarkLogs()" style="padding: 8px 16px; font-size: 14px; background: #3b82f6;">🔄 Refresh Logs</button>
+                    </div>
+                    <div class="section-subtitle">Execution logs from the benchmark run</div>
+                    <div id="logsContent" style="background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 8px; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 13px; max-height: 600px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word;"></div>
                 </div>
             </div>
         </div>
@@ -310,186 +529,789 @@
             document.getElementById('loading').style.display = 'none';
             document.getElementById('results').style.display = 'block';
             
-            // Display job info
             const job = data.job;
-            const jobInfoHtml = `
-                <div class="info-item">
-                    <div class="info-label">Job ID</div>
-                    <div class="info-value">${job.job_id}</div>
+            const sweeps = data.sweeps || [];
+            
+            // Display Test Environment
+            displayTestEnvironment(job);
+            
+            // Analyze parameters across sweeps
+            if (sweeps.length > 0) {
+                const { commonParams, varyingParams } = analyzeParameters(sweeps);
+                
+                // Display Common Parameters
+                if (Object.keys(commonParams).length > 0) {
+                    displayCommonParameters(commonParams);
+                }
+                
+                // Display Sweep Parameters
+                if (Object.keys(varyingParams).length > 0) {
+                    displaySweepParameters(sweeps, varyingParams);
+                }
+                
+                // Display Charts and Metrics
+                displayMetricsSummary(sweeps);
+                displayMetricsCharts(sweeps);
+                displayDetailedMetrics(sweeps);
+            }
+        }
+        
+        function displayTestEnvironment(job) {
+            const html = `
+                <div class="env-item">
+                    <div class="env-label">Environment</div>
+                    <div class="env-value">saas-gke</div>
                 </div>
-                <div class="info-item">
-                    <div class="info-label">Status</div>
-                    <div class="info-value">
+                <div class="env-item">
+                    <div class="env-label">Workload</div>
+                    <div class="env-value">${job.dataset || 'N/A'}</div>
+                </div>
+                <div class="env-item">
+                    <div class="env-label">OpenSearch</div>
+                    <div class="env-value">3.6.0</div>
+                </div>
+                <div class="env-item">
+                    <div class="env-label">Benchmark</div>
+                    <div class="env-value">2.3.0</div>
+                </div>
+                <div class="env-item">
+                    <div class="env-label">Engine</div>
+                    <div class="env-value">${job.engine || 'N/A'}</div>
+                </div>
+                <div class="env-item">
+                    <div class="env-label">Scenario</div>
+                    <div class="env-value">${job.ui_scenario || job.scenario || 'N/A'}</div>
+                </div>
+                <div class="env-item">
+                    <div class="env-label">Status</div>
+                    <div class="env-value">
                         <span class="status-badge status-${job.status}">${job.status}</span>
                     </div>
                 </div>
-                <div class="info-item">
-                    <div class="info-label">Dataset</div>
-                    <div class="info-value">${job.dataset}</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Engine</div>
-                    <div class="info-value">${job.engine}</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Scenario</div>
-                    <div class="info-value">${job.ui_scenario || job.scenario}</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Created</div>
-                    <div class="info-value">${formatDate(job.created_at)}</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Started</div>
-                    <div class="info-value">${job.started_at ? formatDate(job.started_at) : 'N/A'}</div>
-                </div>
-                <div class="info-item">
-                    <div class="info-label">Completed</div>
-                    <div class="info-value">${job.completed_at ? formatDate(job.completed_at) : 'N/A'}</div>
-                </div>
             `;
-            document.getElementById('jobInfo').innerHTML = jobInfoHtml;
-            
-            // Display sweeps
-            const sweepsHtml = data.sweeps.map((sweep, index) => {
-                return createSweepCard(sweep, index);
-            }).join('');
-            document.getElementById('sweeps').innerHTML = sweepsHtml;
-            
-            // Add click handlers for sweep headers
-            document.querySelectorAll('.sweep-header').forEach(header => {
-                header.addEventListener('click', function() {
-                    const body = this.nextElementSibling;
-                    const icon = this.querySelector('.toggle-icon');
-                    body.classList.toggle('active');
-                    icon.classList.toggle('active');
-                });
-            });
+            document.getElementById('testEnvironment').innerHTML = html;
         }
         
-        function createSweepCard(sweep, index) {
-            const testRun = sweep.test_run;
-            const params = sweep.workload_params;
+        function analyzeParameters(sweeps) {
+            const commonParams = {};
+            const varyingParams = {};
             
-            let metricsHtml = '';
-            if (testRun && testRun.results && testRun.results.op_metrics) {
-                metricsHtml = createMetricsGrid(testRun.results.op_metrics);
+            if (sweeps.length === 0) return { commonParams, varyingParams };
+            
+            // Get all parameter keys
+            const allKeys = new Set();
+            sweeps.forEach(sweep => {
+                if (sweep.workload_params) {
+                    Object.keys(sweep.workload_params).forEach(key => allKeys.add(key));
+                }
+            });
+            
+            // Classify parameters as common or varying
+            allKeys.forEach(key => {
+                const values = sweeps
+                    .map(s => s.workload_params?.[key])
+                    .filter(v => v !== undefined);
+                
+                if (values.length > 0) {
+                    const firstValue = JSON.stringify(values[0]);
+                    const allSame = values.every(v => JSON.stringify(v) === firstValue);
+                    
+                    if (allSame) {
+                        commonParams[key] = values[0];
+                    } else {
+                        varyingParams[key] = values;
+                    }
+                }
+            });
+            
+            return { commonParams, varyingParams };
+        }
+        
+        function displayCommonParameters(params) {
+            const formatValue = (value) => {
+                if (value === null || value === undefined) return 'null';
+                if (typeof value === 'string') return value;
+                if (typeof value === 'object') return JSON.stringify(value);
+                return String(value);
+            };
+            
+            const html = Object.entries(params).map(([key, value]) => `
+                <div class="param-item">
+                    <div class="param-label">${key}</div>
+                    <div class="param-value">${formatValue(value)}</div>
+                </div>
+            `).join('');
+            
+            document.getElementById('commonParams').innerHTML = html;
+            document.getElementById('commonParamsSection').style.display = 'block';
+        }
+        
+        function displaySweepParameters(sweeps, varyingParams) {
+            const formatValue = (value) => {
+                if (value === null || value === undefined) return 'null';
+                if (typeof value === 'string') return value;
+                if (typeof value === 'object') return JSON.stringify(value);
+                return String(value);
+            };
+            
+            const html = sweeps.map((sweep, index) => {
+                const sweepVaryingParams = Object.keys(varyingParams)
+                    .map(key => ({
+                        key,
+                        value: sweep.workload_params?.[key]
+                    }))
+                    .filter(p => p.value !== undefined);
+                
+                const paramsHtml = sweepVaryingParams.map(p => `
+                    <div class="sweep-param-item">
+                        <span class="sweep-param-key">${p.key}:</span>
+                        <span class="sweep-param-val">${formatValue(p.value)}</span>
+                    </div>
+                `).join('');
+                
+                return `
+                    <div class="sweep-param-card">
+                        <h4>${sweep.sweep_name || `Sweep ${index + 1}`}</h4>
+                        ${paramsHtml}
+                    </div>
+                `;
+            }).join('');
+            
+            document.getElementById('sweepParams').innerHTML = html;
+            document.getElementById('sweepParamsSection').style.display = 'block';
+        }
+        
+        function getMetricValue(metric, type = 'mean') {
+            if (typeof metric === 'number') return metric;
+            if (metric && typeof metric === 'object') {
+                if (type === 'p90') return metric['90_0'] || metric.p90;
+                if (type === 'p99') return metric['99_0'] || metric.p99;
+                return metric.mean || metric.median || metric['50_0'] ||
+                       Object.values(metric).find(v => typeof v === 'number');
             }
+            return null;
+        }
+        
+        function displayMetricsSummary(sweeps) {
+            const metricsData = sweeps.map((sweep, index) => {
+                const testRun = sweep.test_run;
+                const opMetrics = testRun?.results?.op_metrics;
+                const correctnessMetrics = testRun?.results?.correctness_metrics;
+                
+                let latency = null, throughput = null, recallK = null;
+                
+                if (opMetrics) {
+                    const metricsArray = Array.isArray(opMetrics) ? opMetrics : Object.values(opMetrics);
+                    for (const op of metricsArray) {
+                        if (op.latency) latency = getMetricValue(op.latency);
+                        if (op.throughput) throughput = getMetricValue(op.throughput);
+                    }
+                }
+                
+                if (correctnessMetrics && Array.isArray(correctnessMetrics)) {
+                    for (const c of correctnessMetrics) {
+                        if (c['recall@k']) recallK = getMetricValue(c['recall@k']);
+                    }
+                }
+                
+                return { latency, throughput, recallK };
+            });
             
-            let paramsHtml = '';
-            if (params) {
-                paramsHtml = createParamsTable(params);
-            }
+            // Calculate averages
+            const avgLatency = metricsData.filter(m => m.latency).reduce((sum, m) => sum + m.latency, 0) / metricsData.filter(m => m.latency).length;
+            const avgThroughput = metricsData.filter(m => m.throughput).reduce((sum, m) => sum + m.throughput, 0) / metricsData.filter(m => m.throughput).length;
+            const avgRecall = metricsData.filter(m => m.recallK).reduce((sum, m) => sum + m.recallK, 0) / metricsData.filter(m => m.recallK).length;
             
-            let logHtml = '';
-            if (sweep.benchmark_log) {
-                logHtml = `
-                    <div class="section">
-                        <div class="section-title">Benchmark Log (last 100 lines)</div>
-                        <div class="log-viewer">${escapeHtml(sweep.benchmark_log)}</div>
+            let html = '';
+            if (!isNaN(avgLatency)) {
+                html += `
+                    <div class="metric-card">
+                        <div class="metric-label">Average Latency</div>
+                        <div class="metric-value">${avgLatency.toFixed(2)}<span class="metric-unit">ms</span></div>
                     </div>
                 `;
             }
-            
-            return `
-                <div class="sweep-card">
-                    <div class="sweep-header">
-                        <h3>${sweep.sweep_name}</h3>
-                        <span class="toggle-icon">▼</span>
+            if (!isNaN(avgThroughput)) {
+                html += `
+                    <div class="metric-card">
+                        <div class="metric-label">Average Throughput</div>
+                        <div class="metric-value">${avgThroughput.toFixed(2)}<span class="metric-unit">ops/s</span></div>
                     </div>
-                    <div class="sweep-body">
-                        ${metricsHtml}
-                        ${paramsHtml}
-                        ${logHtml}
+                `;
+            }
+            if (!isNaN(avgRecall)) {
+                html += `
+                    <div class="metric-card">
+                        <div class="metric-label">Average Recall@k</div>
+                        <div class="metric-value">${(avgRecall * 100).toFixed(2)}<span class="metric-unit">%</span></div>
                     </div>
+                `;
+            }
+            html += `
+                <div class="metric-card">
+                    <div class="metric-label">Total Sweeps</div>
+                    <div class="metric-value">${sweeps.length}</div>
                 </div>
             `;
+            
+            if (html) {
+                document.getElementById('metricsSummaryContent').innerHTML = html;
+                document.getElementById('metricsSummary').style.display = 'block';
+            }
         }
         
-        function createMetricsGrid(opMetrics) {
-            const metrics = [];
+        function displayMetricsCharts(sweeps) {
+            const metricsData = sweeps.map((sweep, index) => {
+                const testRun = sweep.test_run;
+                const opMetrics = testRun?.results?.op_metrics;
+                const correctnessMetrics = testRun?.results?.correctness_metrics;
+                
+                let latency = null, latencyP90 = null, throughput = null, recallK = null, recall1 = null;
+                
+                if (opMetrics) {
+                    const metricsArray = Array.isArray(opMetrics) ? opMetrics : Object.values(opMetrics);
+                    for (const op of metricsArray) {
+                        if (op.latency) {
+                            latency = getMetricValue(op.latency, 'mean');
+                            latencyP90 = getMetricValue(op.latency, 'p90');
+                        }
+                        if (op.throughput) throughput = getMetricValue(op.throughput);
+                    }
+                }
+                
+                if (correctnessMetrics && Array.isArray(correctnessMetrics)) {
+                    for (const c of correctnessMetrics) {
+                        if (c['recall@k']) recallK = getMetricValue(c['recall@k']);
+                        if (c['recall@1']) recall1 = getMetricValue(c['recall@1']);
+                    }
+                }
+                
+                return {
+                    name: sweep.sweep_name || `Sweep ${index + 1}`,
+                    latency,
+                    latencyP90,
+                    throughput,
+                    recallK,
+                    recall1
+                };
+            });
             
-            for (const [opName, opData] of Object.entries(opMetrics)) {
-                if (opData.throughput) {
-                    metrics.push({
-                        label: `${opName} Throughput`,
-                        value: opData.throughput.toFixed(2),
-                        unit: 'ops/s'
-                    });
-                }
-                if (opData.latency) {
-                    metrics.push({
-                        label: `${opName} Latency (p50)`,
-                        value: opData.latency.toFixed(2),
-                        unit: 'ms'
-                    });
-                }
-                if (opData['service_time']) {
-                    metrics.push({
-                        label: `${opName} Service Time`,
-                        value: opData['service_time'].toFixed(2),
-                        unit: 'ms'
-                    });
-                }
-                if (opData.recall) {
-                    metrics.push({
-                        label: `${opName} Recall`,
-                        value: (opData.recall * 100).toFixed(2),
-                        unit: '%'
-                    });
-                }
+            // Display Latency Chart
+            if (metricsData.some(m => m.latency !== null || m.latencyP90 !== null)) {
+                displayLatencyChart(metricsData);
             }
             
-            if (metrics.length === 0) {
-                return '<p>No metrics available</p>';
+            // Display Throughput Chart
+            if (metricsData.some(m => m.throughput !== null)) {
+                displayThroughputChart(metricsData);
             }
             
-            return `
-                <div class="section">
-                    <div class="section-title">Performance Metrics</div>
-                    <div class="metrics-grid">
-                        ${metrics.map(m => `
-                            <div class="metric-card">
-                                <div class="metric-label">${m.label}</div>
-                                <div class="metric-value">
-                                    ${m.value}
-                                    <span class="metric-unit">${m.unit}</span>
-                                </div>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-            `;
+            // Display Recall Chart
+            if (metricsData.some(m => m.recallK !== null || m.recall1 !== null)) {
+                displayRecallChart(metricsData);
+            }
+            
+            // Display Combined Chart
+            displayCombinedChart(metricsData);
         }
         
-        function createParamsTable(params) {
-            const rows = Object.entries(params).map(([key, value]) => `
-                <tr>
-                    <th>${key}</th>
-                    <td>${JSON.stringify(value)}</td>
-                </tr>
-            `).join('');
+        function displayLatencyChart(data) {
+            // Prepare data for line chart with both Average and P90
+            const chartData = [];
+            data.forEach(d => {
+                if (d.latency !== null) {
+                    chartData.push({
+                        name: d.name,
+                        type: 'Average',
+                        value: d.latency
+                    });
+                }
+                if (d.latencyP90 !== null) {
+                    chartData.push({
+                        name: d.name,
+                        type: 'P90',
+                        value: d.latencyP90
+                    });
+                }
+            });
             
-            return `
-                <div class="section">
-                    <div class="section-title">Workload Parameters</div>
-                    <table class="params-table">
+            if (chartData.length === 0) return;
+            
+            const spec = {
+                type: 'line',
+                data: [{
+                    id: 'latency',
+                    values: chartData
+                }],
+                xField: 'name',
+                yField: 'value',
+                seriesField: 'type',
+                line: {
+                    style: {
+                        lineWidth: 3,
+                        lineDash: datum => datum.type === 'P90' ? [5, 5] : [0]
+                    }
+                },
+                point: {
+                    visible: true,
+                    style: {
+                        size: 8,
+                        fill: 'white',
+                        stroke: datum => datum.type === 'Average' ? '#3b82f6' : '#ef4444',
+                        lineWidth: 3
+                    }
+                },
+                label: {
+                    visible: true,
+                    position: 'top',
+                    style: {
+                        fontSize: 11,
+                        fontWeight: 'bold'
+                    },
+                    formatMethod: (value) => `${value.toFixed(1)}`
+                },
+                axes: [
+                    {
+                        orient: 'bottom',
+                        type: 'band',
+                        label: {
+                            style: {
+                                fontSize: 12,
+                                fontWeight: 'bold'
+                            }
+                        },
+                        title: {
+                            visible: true,
+                            text: 'Sweep',
+                            style: {
+                                fontSize: 13,
+                                fontWeight: 'bold'
+                            }
+                        }
+                    },
+                    {
+                        orient: 'left',
+                        type: 'linear',
+                        label: {
+                            formatMethod: (value) => `${value.toFixed(0)} ms`,
+                            style: {
+                                fontSize: 11
+                            }
+                        },
+                        title: {
+                            visible: true,
+                            text: 'Latency (ms)',
+                            style: {
+                                fontSize: 13,
+                                fontWeight: 'bold'
+                            }
+                        }
+                    }
+                ],
+                legends: {
+                    visible: true,
+                    orient: 'top',
+                    position: 'end',
+                    item: {
+                        shape: {
+                            style: {
+                                lineDash: datum => datum.label === 'P90' ? [5, 5] : [0]
+                            }
+                        }
+                    }
+                },
+                tooltip: {
+                    mark: {
+                        content: [
+                            {
+                                key: datum => datum.type,
+                                value: datum => `${datum.value.toFixed(2)} ms`
+                            }
+                        ]
+                    }
+                },
+                color: ['#3b82f6', '#ef4444']
+            };
+            
+            const vchart = new VChart.default(spec, { dom: 'latencyChartContent' });
+            vchart.renderSync();
+            document.getElementById('latencyChart').style.display = 'block';
+        }
+        
+        function displayThroughputChart(data) {
+            const validData = data.filter(d => d.throughput !== null);
+            if (validData.length === 0) return;
+            
+            const spec = {
+                type: 'line',
+                data: [{
+                    id: 'throughput',
+                    values: validData.map(d => ({
+                        name: d.name,
+                        value: d.throughput
+                    }))
+                }],
+                xField: 'name',
+                yField: 'value',
+                line: {
+                    style: {
+                        lineWidth: 3,
+                        stroke: '#10b981'
+                    }
+                },
+                point: {
+                    visible: true,
+                    style: {
+                        size: 8,
+                        fill: 'white',
+                        stroke: '#10b981',
+                        lineWidth: 3
+                    }
+                },
+                label: {
+                    visible: true,
+                    position: 'top',
+                    style: {
+                        fontSize: 11,
+                        fontWeight: 'bold',
+                        fill: '#000000'
+                    },
+                    formatMethod: (value) => `${value.toFixed(1)}`
+                },
+                axes: [
+                    {
+                        orient: 'bottom',
+                        type: 'band',
+                        label: {
+                            style: {
+                                fontSize: 12,
+                                fontWeight: 'bold'
+                            }
+                        },
+                        title: {
+                            visible: true,
+                            text: 'Sweep',
+                            style: {
+                                fontSize: 13,
+                                fontWeight: 'bold'
+                            }
+                        }
+                    },
+                    {
+                        orient: 'left',
+                        type: 'linear',
+                        label: {
+                            formatMethod: (value) => `${value.toFixed(0)} ops/s`,
+                            style: {
+                                fontSize: 11
+                            }
+                        },
+                        title: {
+                            visible: true,
+                            text: 'Throughput (ops/sec)',
+                            style: {
+                                fontSize: 13,
+                                fontWeight: 'bold'
+                            }
+                        }
+                    }
+                ],
+                tooltip: {
+                    mark: {
+                        content: [
+                            {
+                                key: 'Throughput',
+                                value: datum => `${datum.value.toFixed(2)} ops/s`
+                            }
+                        ]
+                    }
+                },
+                color: '#10b981'
+            };
+            
+            const vchart = new VChart.default(spec, { dom: 'throughputChartContent' });
+            vchart.renderSync();
+            document.getElementById('throughputChart').style.display = 'block';
+        }
+        
+        function displayRecallChart(data) {
+            const hasRecallK = data.some(d => d.recallK !== null);
+            const hasRecall1 = data.some(d => d.recall1 !== null);
+            
+            if (!hasRecallK && !hasRecall1) return;
+            
+            const chartData = [];
+            data.forEach(d => {
+                if (d.recallK !== null) {
+                    chartData.push({
+                        name: d.name,
+                        metric: 'Recall@k',
+                        value: d.recallK
+                    });
+                }
+                if (d.recall1 !== null) {
+                    chartData.push({
+                        name: d.name,
+                        metric: 'Recall@1',
+                        value: d.recall1
+                    });
+                }
+            });
+            
+            const spec = {
+                type: 'line',
+                data: [{
+                    id: 'recall',
+                    values: chartData
+                }],
+                xField: 'name',
+                yField: 'value',
+                seriesField: 'metric',
+                line: {
+                    style: {
+                        lineWidth: 3,
+                        lineDash: datum => datum.metric === 'Recall@1' ? [5, 5] : [0]
+                    }
+                },
+                point: {
+                    visible: true,
+                    style: {
+                        size: 8,
+                        fill: 'white',
+                        stroke: datum => datum.metric === 'Recall@k' ? '#8b5cf6' : '#f59e0b',
+                        lineWidth: 3
+                    }
+                },
+                label: {
+                    visible: true,
+                    position: datum => datum.metric === 'Recall@k' ? 'top' : 'bottom',
+                    offset: 10,
+                    style: {
+                        fontSize: 11,
+                        fontWeight: 'bold',
+                        fill: '#000000'
+                    },
+                    formatMethod: (value) => `${value.toFixed(3)}`
+                },
+                axes: [
+                    {
+                        orient: 'bottom',
+                        type: 'band',
+                        label: {
+                            style: {
+                                fontSize: 12,
+                                fontWeight: 'bold'
+                            }
+                        },
+                        title: {
+                            visible: true,
+                            text: 'Sweep',
+                            style: {
+                                fontSize: 13,
+                                fontWeight: 'bold'
+                            }
+                        }
+                    },
+                    {
+                        orient: 'left',
+                        type: 'linear',
+                        min: 0,
+                        max: 1,
+                        label: {
+                            formatMethod: (value) => value.toFixed(2),
+                            style: {
+                                fontSize: 11
+                            }
+                        },
+                        title: {
+                            visible: true,
+                            text: 'Recall Score',
+                            style: {
+                                fontSize: 13,
+                                fontWeight: 'bold'
+                            }
+                        }
+                    }
+                ],
+                legends: {
+                    visible: true,
+                    orient: 'top',
+                    position: 'end',
+                    item: {
+                        shape: {
+                            style: {
+                                lineDash: datum => datum.label === 'Recall@1' ? [5, 5] : [0]
+                            }
+                        }
+                    }
+                },
+                tooltip: {
+                    mark: {
+                        content: [
+                            {
+                                key: datum => datum.metric,
+                                value: datum => `${(datum.value * 100).toFixed(2)}%`
+                            }
+                        ]
+                    }
+                },
+                color: ['#8b5cf6', '#f59e0b']
+            };
+            
+            const vchart = new VChart.default(spec, { dom: 'recallChartContent' });
+            vchart.renderSync();
+            document.getElementById('recallChart').style.display = 'block';
+        }
+        
+        function displayCombinedChart(data) {
+            // Create normalized data for radar chart
+            const hasLatency = data.some(d => d.latency !== null);
+            const hasThroughput = data.some(d => d.throughput !== null);
+            const hasRecall = data.some(d => d.recallK !== null);
+            
+            if (!hasLatency && !hasThroughput && !hasRecall) return;
+            
+            // Normalize values to 0-100 scale
+            const maxLatency = Math.max(...data.filter(d => d.latency).map(d => d.latency));
+            const maxThroughput = Math.max(...data.filter(d => d.throughput).map(d => d.throughput));
+            
+            const radarData = data.map(d => {
+                const normalized = { name: d.name };
+                if (hasLatency && d.latency) {
+                    // Invert latency (lower is better)
+                    normalized['Latency (inverted)'] = ((maxLatency - d.latency) / maxLatency) * 100;
+                }
+                if (hasThroughput && d.throughput) {
+                    normalized['Throughput'] = (d.throughput / maxThroughput) * 100;
+                }
+                if (hasRecall && d.recallK) {
+                    normalized['Recall@k'] = d.recallK * 100;
+                }
+                return normalized;
+            });
+            
+            const spec = {
+                type: 'radar',
+                data: [{
+                    id: 'combined',
+                    values: radarData
+                }],
+                categoryField: 'name',
+                valueField: Object.keys(radarData[0]).filter(k => k !== 'name'),
+                seriesField: 'name',
+                point: {
+                    visible: true,
+                    style: {
+                        size: 8
+                    }
+                },
+                area: {
+                    visible: true,
+                    style: {
+                        fillOpacity: 0.2
+                    }
+                },
+                line: {
+                    style: {
+                        lineWidth: 3
+                    }
+                },
+                axes: [
+                    {
+                        orient: 'radius',
+                        min: 0,
+                        max: 100,
+                        grid: {
+                            smooth: false,
+                            style: {
+                                lineDash: [0]
+                            }
+                        }
+                    },
+                    {
+                        orient: 'angle',
+                        grid: {
+                            style: {
+                                lineDash: [0]
+                            }
+                        }
+                    }
+                ],
+                legends: {
+                    visible: true,
+                    orient: 'top',
+                    position: 'middle'
+                },
+                tooltip: {
+                    mark: {
+                        content: [
+                            {
+                                key: datum => datum.name,
+                                value: datum => `${datum.value.toFixed(2)}`
+                            }
+                        ]
+                    }
+                }
+            };
+            
+            const vchart = new VChart.default(spec, { dom: 'combinedChartContent' });
+            vchart.renderSync();
+            document.getElementById('combinedChart').style.display = 'block';
+        }
+        
+        function displayDetailedMetrics(sweeps) {
+            const rows = sweeps.map((sweep, index) => {
+                const testRun = sweep.test_run;
+                const opMetrics = testRun?.results?.op_metrics;
+                const correctnessMetrics = testRun?.results?.correctness_metrics;
+                
+                let latency = null, throughput = null, recallK = null, recall1 = null;
+                
+                if (opMetrics) {
+                    const metricsArray = Array.isArray(opMetrics) ? opMetrics : Object.values(opMetrics);
+                    for (const op of metricsArray) {
+                        if (op.latency) latency = getMetricValue(op.latency);
+                        if (op.throughput) throughput = getMetricValue(op.throughput);
+                    }
+                }
+                
+                if (correctnessMetrics && Array.isArray(correctnessMetrics)) {
+                    for (const c of correctnessMetrics) {
+                        if (c['recall@k']) recallK = getMetricValue(c['recall@k']);
+                        if (c['recall@1']) recall1 = getMetricValue(c['recall@1']);
+                    }
+                }
+                
+                return `
+                    <tr>
+                        <td><strong>${sweep.sweep_name || `Sweep ${index + 1}`}</strong></td>
+                        <td>${latency ? latency.toFixed(2) : 'N/A'}</td>
+                        <td>${throughput ? throughput.toFixed(2) : 'N/A'}</td>
+                        <td>${recallK ? (recallK * 100).toFixed(2) + '%' : 'N/A'}</td>
+                        <td>${recall1 ? (recall1 * 100).toFixed(2) + '%' : 'N/A'}</td>
+                    </tr>
+                `;
+            }).join('');
+            
+            const html = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Sweep</th>
+                            <th>Latency (ms)</th>
+                            <th>Throughput (ops/s)</th>
+                            <th>Recall@k</th>
+                            <th>Recall@1</th>
+                        </tr>
+                    </thead>
+                    <tbody>
                         ${rows}
-                    </table>
-                </div>
+                    </tbody>
+                </table>
             `;
-        }
-        
-        function formatDate(isoString) {
-            if (!isoString) return 'N/A';
-            const date = new Date(isoString);
-            return date.toLocaleString();
-        }
-        
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+            
+            document.getElementById('detailedMetricsContent').innerHTML = html;
+            document.getElementById('detailedMetrics').style.display = 'block';
         }
     </script>
 </body>
