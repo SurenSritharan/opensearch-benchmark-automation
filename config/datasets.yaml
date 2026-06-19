@@ -84,6 +84,11 @@ datasets:
               search_clients: 4
               warmup_time_period: 60
               time_period: 300
+          - params:
+              query_k: 10
+              search_clients: 8
+              warmup_time_period: 60
+              time_period: 300
       
       - name: "search-only"
         params:
@@ -112,7 +117,11 @@ datasets:
               search_clients: 4
               warmup_time_period: 60
               time_period: 300
-  
+          - params:
+              query_k: 100
+              search_clients: 4
+              warmup_time_period: 60
+              time_period: 300
   msmarco:
     dimension: 1024
     format: fvec

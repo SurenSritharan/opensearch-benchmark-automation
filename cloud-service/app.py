@@ -223,7 +223,6 @@ def process_engine_queue(engine: str):
                 continue
             
             dataset = job['dataset']
-            scenario = job['scenario']
             options = job['options']
             
             logger.info(f"Job {job_id} waiting for engine lock: {engine}")
@@ -244,33 +243,40 @@ def process_engine_queue(engine: str):
                 # Update job status to running
                 update_job_status(job_id, 'running', started_at=datetime.utcnow().isoformat())
                 
-                logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
-                
-                # Extract workload params from options
-                workload_params = options.get('workload_params', None)
-                
-                # Run the benchmark
-                result = benchmark_runner.run_benchmark(
-                    dataset=dataset,
-                    engine=engine,
-                    scenario=scenario,
-                    job_id=job_id,
-                    enable_profiling=not options.get('no_profiling', False),
-                    enable_metrics=not options.get('no_metrics', False),
-                    workload_params=workload_params
-                )
-            
-            # Update job with results
-            job_result = get_job(job_id)
-            if job_result:
-                # Store the benchmark result in the 'result' field
-                job_result['result'] = result
-                # Update job status based on benchmark result
-                job_result['status'] = result.get('status', 'completed')
-                job_result['completed_at'] = datetime.utcnow().isoformat()
-                save_job(job_id, job_result)
-            
-            logger.info(f"Job {job_id} completed with status: {result.get('status', 'completed')}")
+                # Check if this is a batch job (has 'scenarios' array) or single job (has 'scenario' string)
+                if 'scenarios' in job and isinstance(job.get('scenarios'), list):
+                    # Handle batch job - run multiple scenarios sequentially
+                    process_batch_job(job_id, job, options)
+                else:
+                    # Handle single scenario job
+                    scenario = job['scenario']
+                    logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
+                    
+                    # Extract workload params from options
+                    workload_params = options.get('workload_params', None)
+                    
+                    # Run the benchmark
+                    result = benchmark_runner.run_benchmark(
+                        dataset=dataset,
+                        engine=engine,
+                        scenario=scenario,
+                        job_id=job_id,
+                        enable_profiling=not options.get('no_profiling', False),
+                        enable_metrics=not options.get('no_metrics', False),
+                        workload_params=workload_params
+                    )
+                    
+                    # Update job with results
+                    job_result = get_job(job_id)
+                    if job_result:
+                        # Store the benchmark result in the 'result' field
+                        job_result['result'] = result
+                        # Update job status based on benchmark result
+                        job_result['status'] = result.get('status', 'completed')
+                        job_result['completed_at'] = datetime.utcnow().isoformat()
+                        save_job(job_id, job_result)
+                    
+                    logger.info(f"Job {job_id} completed with status: {result.get('status', 'completed')}")
             
         except Exception as e:
             logger.error(f"Error processing queue for engine {engine}: {e}", exc_info=True)
@@ -287,6 +293,103 @@ def process_engine_queue(engine: str):
                     pass
             # Don't break - continue processing queue
             time.sleep(5)
+
+
+def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any]):
+    """Process a batch job by running multiple scenarios sequentially"""
+    dataset = job['dataset']
+    engine = job['engine']
+    scenarios = job.get('scenarios', [])
+    results_base = job.get('results_base', job_id)
+    
+    logger.info(f"Starting batch job {job_id}: {len(scenarios)} scenarios")
+    
+    # Track overall batch results
+    batch_results = {
+        'scenarios_completed': 0,
+        'scenarios_failed': 0,
+        'scenario_results': {}
+    }
+    
+    # Run each scenario sequentially
+    for idx, scenario in enumerate(scenarios):
+        try:
+            # Update current scenario in job
+            job_data = get_job(job_id)
+            if job_data:
+                job_data['current_scenario'] = scenario
+                job_data['current_scenario_index'] = idx
+                if 'scenario_status' not in job_data:
+                    job_data['scenario_status'] = {}
+                job_data['scenario_status'][scenario] = 'running'
+                save_job(job_id, job_data)
+            
+            logger.info(f"Batch job {job_id}: Running scenario {idx+1}/{len(scenarios)}: {scenario}")
+            
+            # Create scenario-specific job ID for results directory
+            scenario_job_id = f"{results_base}/{scenario}"
+            
+            # Extract workload params from options
+            workload_params = options.get('workload_params', None)
+            
+            # Run the benchmark for this scenario
+            result = benchmark_runner.run_benchmark(
+                dataset=dataset,
+                engine=engine,
+                scenario=scenario,
+                job_id=scenario_job_id,
+                enable_profiling=not options.get('no_profiling', False),
+                enable_metrics=not options.get('no_metrics', False),
+                workload_params=workload_params
+            )
+            
+            # Store scenario result
+            batch_results['scenario_results'][scenario] = result
+            
+            if result.get('status') == 'completed':
+                batch_results['scenarios_completed'] += 1
+                # Update scenario status
+                job_data = get_job(job_id)
+                if job_data and 'scenario_status' in job_data:
+                    job_data['scenario_status'][scenario] = 'completed'
+                    save_job(job_id, job_data)
+                logger.info(f"Batch job {job_id}: Scenario {scenario} completed successfully")
+            else:
+                batch_results['scenarios_failed'] += 1
+                # Update scenario status
+                job_data = get_job(job_id)
+                if job_data and 'scenario_status' in job_data:
+                    job_data['scenario_status'][scenario] = 'failed'
+                    save_job(job_id, job_data)
+                logger.error(f"Batch job {job_id}: Scenario {scenario} failed")
+                
+        except Exception as e:
+            logger.error(f"Batch job {job_id}: Error running scenario {scenario}: {e}", exc_info=True)
+            batch_results['scenarios_failed'] += 1
+            # Update scenario status
+            job_data = get_job(job_id)
+            if job_data and 'scenario_status' in job_data:
+                job_data['scenario_status'][scenario] = 'error'
+                save_job(job_id, job_data)
+    
+    # Update final batch job status
+    job_data = get_job(job_id)
+    if job_data:
+        job_data['result'] = batch_results
+        job_data['current_scenario'] = None
+        
+        # Determine overall status
+        if batch_results['scenarios_failed'] == 0:
+            job_data['status'] = 'completed'
+        elif batch_results['scenarios_completed'] == 0:
+            job_data['status'] = 'failed'
+        else:
+            job_data['status'] = 'partial'
+        
+        job_data['completed_at'] = datetime.utcnow().isoformat()
+        save_job(job_id, job_data)
+    
+    logger.info(f"Batch job {job_id} finished: {batch_results['scenarios_completed']} completed, {batch_results['scenarios_failed']} failed")
 
 
 @app.route('/')
@@ -407,9 +510,102 @@ def discover():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/v1/benchmark/batch', methods=['POST'])
+def trigger_batch_benchmark():
+    """Trigger a batch benchmark job with multiple scenarios"""
+    try:
+        request_data = request.get_json() or {}
+        
+        # Extract parameters
+        dataset = request_data.get('dataset')
+        engine = request_data.get('engine')
+        scenarios = request_data.get('scenarios', [])  # List of scenario names
+        
+        if not dataset:
+            return jsonify({'error': 'dataset parameter is required'}), 400
+        if not engine:
+            return jsonify({'error': 'engine parameter is required'}), 400
+        if not scenarios or not isinstance(scenarios, list):
+            return jsonify({'error': 'scenarios parameter is required and must be a list'}), 400
+        
+        # Validate all scenarios exist
+        procedures = config_loader.get_test_procedures(dataset)
+        available_procedures = [p.get('name') if isinstance(p, dict) else p for p in procedures]
+        
+        for scenario in scenarios:
+            if scenario not in available_procedures:
+                return jsonify({'error': f'Invalid scenario: {scenario}'}), 400
+        
+        # Validate engine
+        error = benchmark_runner.validate_benchmark_request(dataset, engine, scenarios[0])
+        if error:
+            return jsonify({'error': error}), 400
+        
+        # Create batch job ID with timestamp (no "batch-" prefix)
+        timestamp = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
+        batch_id = timestamp
+        
+        # Create results directory structure: timestamp/dataset-engine/
+        results_base = f"{timestamp}/{dataset}-{engine}"
+        
+        # Get current queue position for this engine
+        with db_lock:
+            with sqlite3.connect(DB_PATH) as conn:
+                cursor = conn.execute("""
+                    SELECT COALESCE(MAX(queue_position), 0) + 1
+                    FROM jobs
+                    WHERE engine = ? AND status IN ('queued', 'running')
+                """, (engine,))
+                queue_position = cursor.fetchone()[0]
+        
+        # Create batch job data
+        batch_data = {
+            'job_id': batch_id,
+            'status': 'queued',
+            'dataset': dataset,
+            'engine': engine,
+            'scenarios': scenarios,
+            'results_base': results_base,
+            'created_at': datetime.utcnow().isoformat(),
+            'queue_position': queue_position,
+            'scenario_status': {scenario: 'queued' for scenario in scenarios},
+            'scenario_results': {},
+            'current_scenario': None,
+            'current_scenario_index': 0,
+            'options': {
+                'no_profiling': request_data.get('no_profiling', False),
+                'no_metrics': request_data.get('no_metrics', False),
+                'workload_params': request_data.get('workload_params', None)
+            }
+        }
+        
+        # Save batch job to database
+        save_job(batch_id, batch_data)
+        
+        # Ensure queue processor is running for this engine
+        ensure_processor_running(engine)
+        
+        logger.info(f"Batch job {batch_id} queued at position {queue_position}: dataset={dataset}, engine={engine}, scenarios={scenarios}")
+        
+        return jsonify({
+            'job_id': batch_id,
+            'status': 'queued',
+            'queue_position': queue_position,
+            'dataset': dataset,
+            'engine': engine,
+            'scenarios': scenarios,
+            'results_base': results_base,
+            'status_url': f'/api/v1/benchmark/{batch_id}'
+        }), 202
+        
+    except Exception as e:
+        logger.error(f"Error triggering batch benchmark: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/v1/benchmark', methods=['POST'])
 def trigger_benchmark():
-    """Trigger a new benchmark job"""
+    """Trigger a new benchmark job (single scenario)"""
     try:
         request_data = request.get_json() or {}
         
@@ -480,6 +676,7 @@ def trigger_benchmark():
         
         job_data = {
             'job_id': job_id,
+            'job_type': 'single',
             'status': 'queued',
             'dataset': dataset,
             'engine': engine,
