@@ -196,6 +196,7 @@ class BenchmarkRunner:
             # Note: scenario parameter is now the actual procedure name (not UI label)
             procedures = self.config.get_test_procedures(dataset)
             parameter_sweeps = []
+            has_sweeps = False
             
             for proc in procedures:
                 if isinstance(proc, dict):
@@ -205,6 +206,7 @@ class BenchmarkRunner:
                         sweeps = proc.get('parameter_sweeps', [])
                         if sweeps:
                             parameter_sweeps = sweeps
+                            has_sweeps = True
                             logger.info(f"Found {len(parameter_sweeps)} parameter sweeps for procedure '{scenario}'")
                         break
             
@@ -279,7 +281,11 @@ class BenchmarkRunner:
                     continue
                 
                 # Create results directory for this sweep
-                sweep_results_dir = self.results_dir / job_id / f"sweep-{sweep_idx}"
+                # Use scenario name, with sweep index if there are multiple sweeps
+                if has_sweeps:
+                    sweep_results_dir = self.results_dir / job_id / scenario / f"sweep-{sweep_idx}"
+                else:
+                    sweep_results_dir = self.results_dir / job_id / scenario
                 sweep_results_dir.mkdir(parents=True, exist_ok=True)
                 
                 # Clear benchmark logs before starting this sweep
