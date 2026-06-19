@@ -10,9 +10,9 @@ datasets:
     corpus_name: "cohere-1m"
     # Parameter files for different engines
     param_files:
-      faiss: "params/faiss-cohere-1m-768-dp.json"
-      lucene: "params/lucene-cohere-1m-768-dp.json"
-      jvector: "params/jvector-cohere-1m-768-dp.json"
+      faiss: "params/1million/faiss-cohere-1m-768-dp.json"
+      lucene: "params/1million/lucene-cohere-1m-768-dp.json"
+      jvector: "params/1million/jvector-cohere-1m-768-dp.json"
     test_procedures:
       - name: "create-index-only"
       - name: "bulk-ingest-only" 
