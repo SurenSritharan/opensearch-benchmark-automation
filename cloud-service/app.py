@@ -86,6 +86,19 @@ def save_job(job_id: str, job_data: Dict[str, Any]):
             options_json = json.dumps(job_data.get('options', {}))
             result_json = json.dumps(job_data.get('result', {})) if 'result' in job_data else None
             
+            # For batch jobs, store scenarios list in options to preserve it
+            if 'scenarios' in job_data and isinstance(job_data['scenarios'], list):
+                options_data = job_data.get('options', {}).copy()
+                options_data['_batch_scenarios'] = job_data['scenarios']
+                options_data['_batch_metadata'] = {
+                    'results_base': job_data.get('results_base'),
+                    'scenario_status': job_data.get('scenario_status', {}),
+                    'scenario_results': job_data.get('scenario_results', {}),
+                    'current_scenario': job_data.get('current_scenario'),
+                    'current_scenario_index': job_data.get('current_scenario_index', 0)
+                }
+                options_json = json.dumps(options_data)
+            
             conn.execute("""
                 INSERT OR REPLACE INTO jobs
                 (job_id, status, dataset, engine, scenario, ui_scenario,
@@ -123,6 +136,17 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
             # Deserialize JSON fields
             job['options'] = json.loads(job['options']) if job['options'] else {}
             job['result'] = json.loads(job['result']) if job['result'] else {}
+            
+            # Restore batch job fields from options if present
+            if '_batch_scenarios' in job['options']:
+                job['scenarios'] = job['options'].pop('_batch_scenarios')
+                batch_meta = job['options'].pop('_batch_metadata', {})
+                job['results_base'] = batch_meta.get('results_base')
+                job['scenario_status'] = batch_meta.get('scenario_status', {})
+                job['scenario_results'] = batch_meta.get('scenario_results', {})
+                job['current_scenario'] = batch_meta.get('current_scenario')
+                job['current_scenario_index'] = batch_meta.get('current_scenario_index', 0)
+            
             return job
 
 def get_all_jobs(limit: int = 50) -> list:
