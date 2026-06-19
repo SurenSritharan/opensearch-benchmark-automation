@@ -67,6 +67,7 @@ datasets:
             docvalue_fields: ["_id"]
             stored_fields: "_none_"
             _source: false
+          number_of_repetitions: 1000
         parameter_sweeps:
           - params:
               query_k: 10
@@ -94,6 +95,7 @@ datasets:
             docvalue_fields: ["_id"]
             stored_fields: "_none_"
             _source: false
+          number_of_repetitions: 1000
         parameter_sweeps:
           - params:
               query_k: 100
