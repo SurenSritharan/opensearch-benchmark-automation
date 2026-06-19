@@ -29,6 +29,9 @@ datasets:
       neighbors_data_set_format: "hdf5"
       neighbors_data_set_corpus: "cohere-1m"
       id_field_name: "_id"
+      # Build-time parameters (can be overridden in engine_params or workload_params)
+      hnsw_ef_construction: 128
+      hnsw_m: 16
     
     # Engine-specific parameters (override or extend default_params)
     engine_params:
