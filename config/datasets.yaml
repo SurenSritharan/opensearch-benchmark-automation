@@ -71,11 +71,6 @@ datasets:
         parameter_sweeps:
           - params:
               query_k: 10
-              search_clients: 1
-              warmup_time_period: 60
-              time_period: 300
-          - params:
-              query_k: 10
               search_clients: 2
               warmup_time_period: 60
               time_period: 300
@@ -87,6 +82,11 @@ datasets:
           - params:
               query_k: 10
               search_clients: 8
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 10
+              search_clients: 16
               warmup_time_period: 60
               time_period: 300
       
@@ -104,11 +104,6 @@ datasets:
         parameter_sweeps:
           - params:
               query_k: 100
-              search_clients: 1
-              warmup_time_period: 60
-              time_period: 300
-          - params:
-              query_k: 100
               search_clients: 2
               warmup_time_period: 60
               time_period: 300
@@ -119,7 +114,12 @@ datasets:
               time_period: 300
           - params:
               query_k: 100
-              search_clients: 4
+              search_clients: 8
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 100
+              search_clients: 16
               warmup_time_period: 60
               time_period: 300
   msmarco:
