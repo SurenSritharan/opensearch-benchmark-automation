@@ -323,17 +323,19 @@ def sync_config():
     
     This performs:
     1. git pull to get latest config/datasets.yaml and workload params
-    2. Reload configuration into memory
+    2. git pull to get latest workload definitions (workload.py, operations, etc.)
+    3. Reload configuration into memory
     """
     try:
         logger.info("Syncing configuration from git...")
         result = config_loader.reload_config(git_pull=True)
         
         # Build user-friendly message
-        if result['git_pull_success']:
-            message = f"✓ Synced from git\n✓ Loaded {result['datasets_count']} datasets: {', '.join(result['datasets'])}"
-        else:
-            message = f"⚠ Git pull failed, using existing files\n✓ Loaded {result['datasets_count']} datasets: {', '.join(result['datasets'])}"
+        automation_status = "✓ Synced automation repo" if result['git_pull_success'] else "⚠ Automation repo sync failed"
+        workloads_status = "✓ Synced workloads repo" if result['workloads_git_pull_success'] else "⚠ Workloads repo sync failed"
+        datasets_status = f"✓ Loaded {result['datasets_count']} datasets: {', '.join(result['datasets'])}"
+        
+        message = f"{automation_status}\n{workloads_status}\n{datasets_status}"
         
         logger.info(f"Sync complete: {result}")
         
@@ -342,6 +344,8 @@ def sync_config():
             'message': message,
             'git_pull_success': result['git_pull_success'],
             'git_output': result['git_output'],
+            'workloads_git_pull_success': result['workloads_git_pull_success'],
+            'workloads_git_output': result['workloads_git_output'],
             'datasets_count': result['datasets_count'],
             'datasets': result['datasets']
         })

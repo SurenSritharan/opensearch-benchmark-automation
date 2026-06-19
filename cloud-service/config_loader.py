@@ -18,6 +18,47 @@ class ConfigLoader:
         self.workloads_dir = Path(workloads_dir)
         self.datasets_config = self._load_datasets_config()
     
+    def _git_pull_repo(self, repo_path: Path, repo_name: str) -> Dict[str, Any]:
+        """Pull latest changes from a git repository
+        
+        Args:
+            repo_path: Path to the git repository
+            repo_name: Human-readable name for logging
+            
+        Returns:
+            Dict with pull status and output
+        """
+        result = {
+            'success': False,
+            'output': None
+        }
+        
+        try:
+            logger.info(f"Pulling latest changes from {repo_name}...")
+            git_result = subprocess.run(
+                ['git', 'pull', 'origin', 'main'],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            result['success'] = git_result.returncode == 0
+            result['output'] = git_result.stdout + git_result.stderr
+            
+            if git_result.returncode == 0:
+                logger.info(f"{repo_name} git pull successful: {git_result.stdout.strip()}")
+            else:
+                logger.warning(f"{repo_name} git pull failed (exit {git_result.returncode}): {git_result.stderr}")
+                
+        except subprocess.TimeoutExpired:
+            logger.error(f"{repo_name} git pull timed out after 30 seconds")
+            result['output'] = "Git pull timed out"
+        except Exception as e:
+            logger.error(f"{repo_name} git pull error: {e}")
+            result['output'] = f"Error: {str(e)}"
+        
+        return result
+    
     def reload_config(self, git_pull: bool = True) -> Dict[str, Any]:
         """Reload the datasets configuration from disk, optionally pulling latest from git
         
@@ -31,35 +72,23 @@ class ConfigLoader:
             'git_pull_attempted': git_pull,
             'git_pull_success': False,
             'git_output': None,
+            'workloads_git_pull_success': False,
+            'workloads_git_output': None,
             'datasets_count': 0,
             'datasets': []
         }
         
         # Attempt git pull if requested
         if git_pull:
-            try:
-                logger.info("Pulling latest changes from git...")
-                git_result = subprocess.run(
-                    ['git', 'pull', 'origin', 'main'],
-                    cwd=str(self.workspace_dir),
-                    capture_output=True,
-                    text=True,
-                    timeout=30
-                )
-                result['git_pull_success'] = git_result.returncode == 0
-                result['git_output'] = git_result.stdout + git_result.stderr
-                
-                if git_result.returncode == 0:
-                    logger.info(f"Git pull successful: {git_result.stdout.strip()}")
-                else:
-                    logger.warning(f"Git pull failed (exit {git_result.returncode}): {git_result.stderr}")
-                    
-            except subprocess.TimeoutExpired:
-                logger.error("Git pull timed out after 30 seconds")
-                result['git_output'] = "Git pull timed out"
-            except Exception as e:
-                logger.error(f"Git pull error: {e}")
-                result['git_output'] = f"Error: {str(e)}"
+            # Pull opensearch-benchmark-automation
+            automation_result = self._git_pull_repo(self.workspace_dir, "opensearch-benchmark-automation")
+            result['git_pull_success'] = automation_result['success']
+            result['git_output'] = automation_result['output']
+            
+            # Pull opensearch-benchmark-workloads
+            workloads_result = self._git_pull_repo(self.workloads_dir, "opensearch-benchmark-workloads")
+            result['workloads_git_pull_success'] = workloads_result['success']
+            result['workloads_git_output'] = workloads_result['output']
         
         # Reload configuration from disk
         logger.info("Reloading configuration from disk...")
