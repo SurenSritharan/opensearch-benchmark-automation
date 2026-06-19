@@ -86,7 +86,7 @@ spec:
       initContainers:
         # FIX: Added plugin container to guarantee cluster state mapping alignment
         - name: install-jvector-plugin
-          image: opensearchproject/opensearch:3.6.0
+          image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
           command:
             - bash
             - -c
@@ -98,7 +98,7 @@ spec:
               cp -r /usr/share/opensearch/plugins/* /mnt/plugins/
               
               # Download JVector plugin
-              curl -sL https://repo1.maven.org/maven2/org/opensearch/plugin/opensearch-jvector-plugin/3.6.0.0/opensearch-jvector-plugin-3.6.0.0.zip -o /tmp/jvector.zip
+              curl -sL https://repo1.maven.org/maven2/org/opensearch/plugin/opensearch-jvector-plugin/${OPENSEARCH_VERSION}.0/opensearch-jvector-plugin-${OPENSEARCH_VERSION}.0.zip -o /tmp/jvector.zip
               
               # Remove conflicting plugins
               rm -rf /mnt/plugins/opensearch-neural-search
@@ -131,7 +131,7 @@ spec:
       
       containers:
         - name: opensearch
-          image: opensearchproject/opensearch:3.6.0
+          image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
           securityContext:
             capabilities:
               drop:

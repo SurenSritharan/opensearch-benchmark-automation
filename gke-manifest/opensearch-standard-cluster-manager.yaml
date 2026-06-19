@@ -99,7 +99,7 @@ spec:
       
       containers:
         - name: opensearch
-          image: opensearchproject/opensearch:3.6.0
+          image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
           securityContext:
             capabilities:
               drop:

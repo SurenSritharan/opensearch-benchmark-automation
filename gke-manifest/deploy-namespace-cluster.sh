@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # Deploy separated cluster architecture to a specific namespace
-# Usage: ./deploy-namespace-cluster.sh <namespace> [--force] [--delete-pvcs]
+# Usage: ./deploy-namespace-cluster.sh <namespace> [--version VERSION] [--force] [--delete-pvcs]
 # Example: ./deploy-namespace-cluster.sh os-faiss
+# Example: ./deploy-namespace-cluster.sh os-faiss --version 3.7.0
 # Example: ./deploy-namespace-cluster.sh os-faiss --delete-pvcs  # Fresh start, deletes all data
 
 set -e
@@ -11,31 +12,40 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NAMESPACE=$1
+OPENSEARCH_VERSION="3.6.0"  # Default version
 FORCE_FLAG=""
 DELETE_PVCS=false
 
 if [ -z "$NAMESPACE" ]; then
-    echo "Usage: $0 <namespace> [--force] [--delete-pvcs]"
+    echo "Usage: $0 <namespace> [--version VERSION] [--force] [--delete-pvcs]"
     echo "Available namespaces: os-jvector, os-faiss, os-lucene"
     echo ""
     echo "Options:"
+    echo "  --version VER  OpenSearch version to deploy (default: 3.6.0)"
     echo "  --force        Skip confirmation prompts"
     echo "  --delete-pvcs  Delete PVCs (WARNING: destroys all indexed data and results)"
     exit 1
 fi
 
 # Parse additional arguments
-for arg in "${@:2}"; do
-    case "$arg" in
+shift  # Remove namespace from arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --version)
+            OPENSEARCH_VERSION="$2"
+            shift 2
+            ;;
         --force)
             FORCE_FLAG="--force"
+            shift
             ;;
         --delete-pvcs)
             DELETE_PVCS=true
+            shift
             ;;
         *)
-            echo "Error: Unknown option '$arg'"
-            echo "Usage: $0 <namespace> [--force] [--delete-pvcs]"
+            echo "Error: Unknown option '$1'"
+            echo "Usage: $0 <namespace> [--version VERSION] [--force] [--delete-pvcs]"
             exit 1
             ;;
     esac
@@ -48,7 +58,10 @@ if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene)$ ]]; then
 fi
 
 echo "=========================================="
-echo "Deploying OpenSearch cluster to namespace: $NAMESPACE"
+echo "Deploying OpenSearch cluster"
+echo "=========================================="
+echo "Namespace: $NAMESPACE"
+echo "OpenSearch Version: $OPENSEARCH_VERSION"
 echo "=========================================="
 
 # Create namespace if it doesn't exist
@@ -158,28 +171,34 @@ if [ "$NAMESPACE" == "os-jvector" ]; then
     echo ""
     echo "Deploying JVector cluster (with custom plugin)..."
     echo "1. Deploying cluster manager..."
-    kubectl apply -f "$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml"
+    sed "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+        "$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml" | kubectl apply -n $NAMESPACE -f -
     
     echo "2. Waiting for cluster manager to be ready..."
     kubectl wait --for=condition=ready pod -l app=opensearch-cluster-manager -n $NAMESPACE --timeout=300s || true
     
     echo "3. Deploying data nodes..."
-    kubectl apply -f "$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml"
+    sed "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+        "$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml" | kubectl apply -n $NAMESPACE -f -
     
 else
     # For os-faiss and os-lucene, use the standard manifests
     echo ""
     echo "Deploying standard OpenSearch cluster (FAISS/Lucene)..."
     
-    # Use kubectl -n flag instead of sed substitution (cleaner approach)
+    # Substitute both namespace and version
     echo "1. Deploying cluster manager..."
-    sed "s/\${NAMESPACE}/$NAMESPACE/g" "$SCRIPT_DIR/opensearch-standard-cluster-manager.yaml" | kubectl apply -n $NAMESPACE -f -
+    sed -e "s/\${NAMESPACE}/$NAMESPACE/g" \
+        -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+        "$SCRIPT_DIR/opensearch-standard-cluster-manager.yaml" | kubectl apply -n $NAMESPACE -f -
     
     echo "2. Waiting for cluster manager to be ready..."
     kubectl wait --for=condition=ready pod -l app=opensearch-cluster-manager -n $NAMESPACE --timeout=300s || true
     
     echo "3. Deploying data nodes..."
-    sed "s/\${NAMESPACE}/$NAMESPACE/g" "$SCRIPT_DIR/opensearch-standard-data-nodes.yaml" | kubectl apply -n $NAMESPACE -f -
+    sed -e "s/\${NAMESPACE}/$NAMESPACE/g" \
+        -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+        "$SCRIPT_DIR/opensearch-standard-data-nodes.yaml" | kubectl apply -n $NAMESPACE -f -
 fi
 
 # Deploy benchmark client

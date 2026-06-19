@@ -145,14 +145,14 @@ spec:
 
       initContainers:
         - name: install-plugins
-          image: opensearchproject/opensearch:3.6.0
+          image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
           env:
             - name: JVECTOR_PLUGIN_VERSION
-              value: "3.6.0.0"
+              value: "${OPENSEARCH_VERSION}.0"
             - name: PROMETHEUS_PLUGIN_VERSION
-              value: "3.6.0.0"
+              value: "${OPENSEARCH_VERSION}.0"
             - name: GCS_PLUGIN_VERSION
-              value: "3.6.0"
+              value: "${OPENSEARCH_VERSION}"
           command:
             - bash
             - -c
@@ -253,7 +253,7 @@ spec:
       
       containers:
         - name: opensearch
-          image: opensearchproject/opensearch:3.6.0
+          image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
           securityContext:
             capabilities:
               drop:

@@ -175,7 +175,7 @@ spec:
       
       containers:
         - name: opensearch
-          image: opensearchproject/opensearch:3.6.0
+          image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
           securityContext:
             capabilities:
               drop:
@@ -245,10 +245,10 @@ spec:
                 - -c
                 - |
                   # Fails if status is red.
-                curl -s -k \
-                  --cert /usr/share/opensearch/config/certs/admin.pem \
-                  --key /usr/share/opensearch/config/certs/admin-key.pem \
-                  https://localhost:9200/_cluster/health?local=true | grep -qE '"status":"(green|yellow)"'
+                  curl -s -k \
+                    --cert /usr/share/opensearch/config/certs/admin.pem \
+                    --key /usr/share/opensearch/config/certs/admin-key.pem \
+                    https://localhost:9200/_cluster/health?local=true | grep -qE '"status":"(green|yellow)"'
             initialDelaySeconds: 60
             periodSeconds: 10
             timeoutSeconds: 5
