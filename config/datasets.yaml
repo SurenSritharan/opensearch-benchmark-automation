@@ -214,7 +214,8 @@ datasets:
               ef_search: 100
               search_clients: 8
               warmup_time_period: 60
-              time_period: 300              # warmup_iterations: 100 # needs to be smaller than the number of queries for throughput metrics
+              time_period: 300              
+              # warmup_iterations: 100
               # iterations: 500
       - name: "vector-search"
         parameter_sweeps:
@@ -242,7 +243,7 @@ datasets:
               search_clients: 8
               warmup_time_period: 60
               time_period: 300
-              # warmup_iterations: 100 # needs to be smaller than the number of queries for throughput metrics
+              # warmup_iterations: 100
               # iterations: 1000
 
     
