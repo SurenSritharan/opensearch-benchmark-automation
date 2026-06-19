@@ -12,6 +12,7 @@ datasets:
     # Common parameters shared across all engines
     default_params:
       target_index_name: "cohere-1m-index"
+      target_index_body: "indices/index.json"
       target_index_primary_shards: 3
       target_index_replica_shards: 1
       target_index_dimension: 768
@@ -32,13 +33,16 @@ datasets:
     # Engine-specific parameters (override or extend default_params)
     engine_params:
       faiss:
-        target_index_body: "indices/faiss-index.json"
+        engine: "faiss"
+        method_name: "hnsw"
       
       lucene:
-        target_index_body: "indices/lucene-index.json"
+        engine: "lucene"
+        method_name: "hnsw"
       
       jvector:
-        target_index_body: "indices/jvector-index.json"
+        engine: "jvector"
+        method_name: "disk_ann"
         mode: "in_memory"
     
     # Test procedures with parameter sweeps
