@@ -308,11 +308,20 @@ class BenchmarkRunner:
                     continue
                 
                 # Create results directory for this sweep
-                # Use scenario name, with sweep index if there are multiple sweeps
-                if has_sweeps:
-                    sweep_results_dir = self.results_dir / job_id / scenario / f"sweep-{sweep_idx}"
+                # For batch jobs (job_id contains '/'), don't add scenario subdirectory
+                # For regular jobs, add scenario subdirectory
+                if '/' in job_id:
+                    # Batch job - job_id already includes full path structure
+                    if has_sweeps:
+                        sweep_results_dir = self.results_dir / job_id / f"sweep-{sweep_idx}"
+                    else:
+                        sweep_results_dir = self.results_dir / job_id
                 else:
-                    sweep_results_dir = self.results_dir / job_id / scenario
+                    # Regular job - add scenario subdirectory
+                    if has_sweeps:
+                        sweep_results_dir = self.results_dir / job_id / scenario / f"sweep-{sweep_idx}"
+                    else:
+                        sweep_results_dir = self.results_dir / job_id / scenario
                 sweep_results_dir.mkdir(parents=True, exist_ok=True)
                 
                 # Clear benchmark logs before starting this sweep
