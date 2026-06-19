@@ -9,34 +9,11 @@ datasets:
     workload: "vectorsearch" # needs to match opensearch-benchmark-workloads folder
     corpus_name: "cohere-1m"
     
-    # Common parameters shared across all engines
-    default_params:
+    # Common parameters shared across all scenarios
+    common_params:
       target_index_name: "cohere-1m-index"
-      target_index_body: "indices/index.json"
-      target_index_primary_shards: 3
-      target_index_replica_shards: 1
-      target_index_dimension: 768
-      target_index_max_num_segments: 1
       target_field_name: "target_field"
-      target_index_space_type: "innerproduct"
-      target_index_bulk_size: 500
-      target_index_bulk_index_data_set_format: "hdf5"
-      target_index_bulk_index_data_set_corpus: "cohere-1m"
-      train_index_name: "cohere-1m-train-index"
-      train_index_body: "indices/train-index.json"
-      query_data_set_format: "hdf5"
-      query_data_set_corpus: "cohere-1m"
-      neighbors_data_set_format: "hdf5"
-      neighbors_data_set_corpus: "cohere-1m"
       id_field_name: "_id"
-      # Build-time parameters (can be overridden in engine_params or workload_params)
-      hnsw_ef_construction: 128
-      hnsw_m: 16
-      # Query optimization parameters (reduce response size, improve performance)
-      query_body:
-        docvalue_fields: ["_id"]
-        stored_fields: "_none_"
-        _source: false
     
     # Engine-specific parameters (override or extend default_params)
     engine_params:
@@ -53,13 +30,37 @@ datasets:
         method_name: "disk_ann"
         mode: "in_memory"
     
-    # Test procedures with parameter sweeps
+    # Test procedures with their base parameters
     test_procedures:
       - name: "create-index-only"
+        params:
+          target_index_body: "indices/index.json"
+          target_index_primary_shards: 3
+          target_index_replica_shards: 1
+          target_index_dimension: 768
+          target_index_space_type: "innerproduct"
+          train_index_name: "cohere-1m-train-index"
+          train_index_body: "indices/train-index.json"
+          hnsw_ef_construction: 128
+          hnsw_m: 16
+      
       - name: "bulk-ingest-only"
-        workload_params:
+        params:
+          target_index_bulk_size: 500
+          target_index_bulk_index_data_set_format: "hdf5"
+          target_index_bulk_index_data_set_corpus: "cohere-1m"
           target_index_num_vectors: 1000000
+      
       - name: "search-only"
+        params:
+          query_data_set_format: "hdf5"
+          query_data_set_corpus: "cohere-1m"
+          neighbors_data_set_format: "hdf5"
+          neighbors_data_set_corpus: "cohere-1m"
+          query_body:
+            docvalue_fields: ["_id"]
+            stored_fields: "_none_"
+            _source: false
         parameter_sweeps:
           - params:
               query_k: 10
@@ -76,7 +77,17 @@ datasets:
               search_clients: 4
               warmup_time_period: 60
               time_period: 300
+      
       - name: "search-only"
+        params:
+          query_data_set_format: "hdf5"
+          query_data_set_corpus: "cohere-1m"
+          neighbors_data_set_format: "hdf5"
+          neighbors_data_set_corpus: "cohere-1m"
+          query_body:
+            docvalue_fields: ["_id"]
+            stored_fields: "_none_"
+            _source: false
         parameter_sweeps:
           - params:
               query_k: 100

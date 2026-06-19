@@ -263,9 +263,10 @@ def process_engine_queue(engine: str):
             # Update job with results
             job_result = get_job(job_id)
             if job_result:
-                job_result.update(result)
-                if 'status' not in result:
-                    job_result['status'] = 'completed'
+                # Store the benchmark result in the 'result' field
+                job_result['result'] = result
+                # Update job status based on benchmark result
+                job_result['status'] = result.get('status', 'completed')
                 job_result['completed_at'] = datetime.utcnow().isoformat()
                 save_job(job_id, job_result)
             
@@ -528,6 +529,14 @@ def get_job_status(job_id: str):
     if job['status'] == 'running':
         # Could add more detailed progress tracking here
         job['progress'] = 'in_progress'
+    
+    # Extract sweep_results from result and expose as sweeps array
+    # This provides the expected API format for the UI
+    if 'result' in job and isinstance(job['result'], dict):
+        sweep_results = job['result'].get('sweep_results', [])
+        job['sweeps'] = sweep_results
+    else:
+        job['sweeps'] = []
     
     return jsonify(job)
 

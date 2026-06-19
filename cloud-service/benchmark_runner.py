@@ -180,21 +180,30 @@ class BenchmarkRunner:
                         'error': 'Failed to download required dataset files. Check logs for details.'
                     }
             
-            # Get base params (default_params + engine_params for this engine)
-            base_params = self.config.get_workload_params(dataset, engine)
+            # Get dataset configuration
+            dataset_config = self.config.get_dataset_config(dataset)
+            
+            # Build base params from: common_params + engine_params
+            base_params = {}
+            
+            # 1. Start with common_params (shared across all scenarios)
+            common_params = dataset_config.get('common_params', {})
+            if common_params:
+                base_params.update(common_params)
+                logger.info(f"Loaded common params: {list(common_params.keys())}")
+            
+            # 2. Add engine-specific params
+            engine_params_config = dataset_config.get('engine_params', {})
+            if engine_params_config and engine in engine_params_config:
+                base_params.update(engine_params_config[engine])
+                logger.info(f"Loaded engine params for {engine}: {list(engine_params_config[engine].keys())}")
             
             # Extract ground_truth_files mapping before removing it
-            ground_truth_files_map = None
-            if base_params:
-                ground_truth_files_map = base_params.pop('ground_truth_files', None)
-                logger.info(f"Loaded base params for {engine}: {list(base_params.keys())}")
-            else:
-                base_params = {}
-                logger.warning(f"No base params found for {dataset}/{engine}")
+            ground_truth_files_map = base_params.pop('ground_truth_files', None)
             
-            # Get parameter sweeps for this procedure
-            # Note: scenario parameter is now the actual procedure name (not UI label)
+            # Get the specific procedure configuration
             procedures = self.config.get_test_procedures(dataset)
+            procedure_config = None
             parameter_sweeps = []
             has_sweeps = False
             
@@ -202,6 +211,7 @@ class BenchmarkRunner:
                 if isinstance(proc, dict):
                     proc_name = proc.get('name')
                     if proc_name == scenario:
+                        procedure_config = proc
                         # Found matching procedure, check for parameter sweeps
                         sweeps = proc.get('parameter_sweeps', [])
                         if sweeps:
@@ -210,9 +220,18 @@ class BenchmarkRunner:
                             logger.info(f"Found {len(parameter_sweeps)} parameter sweeps for procedure '{scenario}'")
                         break
             
-            # If no parameter sweeps, run once with base params + any runtime params
+            # 3. Add procedure's base params (scenario-specific)
+            procedure_base_params = {}
+            if procedure_config:
+                procedure_base_params = procedure_config.get('params', {})
+                if procedure_base_params:
+                    logger.info(f"Loaded procedure base params: {list(procedure_base_params.keys())}")
+            
+            # If no parameter sweeps, run once with all base params + runtime params
             if not parameter_sweeps:
+                # Merge: base_params + procedure_base_params + runtime params
                 merged_params = base_params.copy()
+                merged_params.update(procedure_base_params)
                 if workload_params:
                     merged_params.update(workload_params)
                     logger.info(f"Merged with runtime params: {list(workload_params.keys())}")
@@ -225,8 +244,10 @@ class BenchmarkRunner:
             for sweep_idx, sweep in enumerate(parameter_sweeps, 1):
                 logger.info(f"Running parameter sweep {sweep_idx}/{len(parameter_sweeps)}")
                 
-                # Merge: base_params + sweep params + runtime params
+                # Merge in order: base_params + procedure_base_params + sweep params + runtime params
                 final_params = base_params.copy()
+                final_params.update(procedure_base_params)
+                
                 sweep_params = sweep.get('params', {})
                 if sweep_params:
                     final_params.update(sweep_params)
