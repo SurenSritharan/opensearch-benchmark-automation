@@ -702,9 +702,11 @@ def get_job_results(job_id: str):
     if not results_dir.exists():
         return jsonify({'error': 'Results directory not found'}), 404
     
-    # Collect all sweep results
+    # Collect all sweep results - look in scenario subdirectories
     sweeps = []
-    for sweep_dir in sorted(results_dir.glob('sweep-*')):
+    
+    # Find all sweep directories (could be in subdirectories like vector-search/sweep-1)
+    for sweep_dir in sorted(results_dir.glob('**/sweep-*')):
         sweep_data = {
             'sweep_name': sweep_dir.name,
             'test_run': None,
