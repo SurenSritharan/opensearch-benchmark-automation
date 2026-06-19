@@ -121,44 +121,24 @@ datasets:
     index_name: cohere-msmarco-1024
     workload: "msmarco" # needs to match opensearch-benchmark-workloads folder
     data_dir: "/datasets/msmarco"
-    # Common parameters shared across all engines
-    default_params:
-      # Index configuration (common to all engines)
+    
+    # Common parameters shared across all scenarios
+    common_params:
       target_index_name: "cohere-msmarco-1024"
-      target_index_body: "indices/index.json"
-      target_index_primary_shards: 3
-      target_index_replica_shards: 1
-      target_index_dimension: 1024
-      target_index_max_num_segments: 1
       target_field_name: "vector"
       space_type: "cosinesimil"
-      query_body:
-        docvalue_fields: ["_id"]
-        stored_fields: "_none_"
-        _source: false
-      
-      # Query configuration (common)
-      queries_file: "/datasets/msmarco/cohere_msmarco_queries.fvec"
-      
-      # Ground truth file mapping based on k value
       ground_truth_files:
         10: "/datasets/msmarco/cohere_msmarco_indices_d1024_k10_1m.ivec"
         100: "/datasets/msmarco/cohere_msmarco_indices_d1024_k100_1m.ivec"
     
-    # Engine-specific parameters (override or extend default_params)
+    # Engine-specific parameters (used across scenarios)
     engine_params:
       jvector:
         engine: "jvector"
-        method_name: "disk_ann"
-        mode: "in_memory"
-      
       faiss:
         engine: "faiss"
-        method_name: "hnsw"
-      
       lucene:
         engine: "lucene"
-        method_name: "hnsw"
 
     data_files:
       - name: "cohere_msmarco_base.fvec"
@@ -174,31 +154,55 @@ datasets:
     # Test procedures for msmarco
     test_procedures:
       - name: "create-index-only"
+        params:
+          target_index_body: "indices/index.json"
+          target_index_primary_shards: 3
+          target_index_replica_shards: 1
+          target_index_dimension: 1024
+        engine_params:
+          jvector:
+            method_name: "disk_ann"
+            mode: "in_memory"
+          faiss:
+            method_name: "hnsw"
+          lucene:
+            method_name: "hnsw"
+      
       - name: "bulk-ingest-only"
+        params:
+          target_index_bulk_size: 500
+          target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base.fvec"
+          target_index_num_vectors: 1000000
+      
       - name: "refresh"
-      - name: "force-merge"         
+        params: {}
+      
+      - name: "force-merge"
+        params:
+          target_index_max_num_segments: 1
+      
       - name: "vector-search"
+        params:
+          queries_file: "/datasets/msmarco/cohere_msmarco_queries.fvec"
+          query_body:
+            docvalue_fields: ["_id"]
+            stored_fields: "_none_"
+            _source: false
         parameter_sweeps:
           - params:
-              # shard level find top k vectors
               query_k: 100
-              #(Exploration Factor for Search) is a crucial query-time hyperparameter used in Approximate Nearest Neighbor (ANN) vector search, specifically within the Hierarchical Navigable Small World (HNSW) graph algorithm.
               ef_search: 100
               search_clients: 1
               warmup_time_period: 60
               time_period: 300
           - params:
-              # shard level find top k vectors
               query_k: 100
-              #(Exploration Factor for Search) is a crucial query-time hyperparameter used in Approximate Nearest Neighbor (ANN) vector search, specifically within the Hierarchical Navigable Small World (HNSW) graph algorithm.
               ef_search: 100
               search_clients: 2
               warmup_time_period: 60
               time_period: 300
           - params:
-              # shard level find top k vectors
               query_k: 100
-              #(Exploration Factor for Search) is a crucial query-time hyperparameter used in Approximate Nearest Neighbor (ANN) vector search, specifically within the Hierarchical Navigable Small World (HNSW) graph algorithm.
               ef_search: 100
               search_clients: 4
               warmup_time_period: 60
