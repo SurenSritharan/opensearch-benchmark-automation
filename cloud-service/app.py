@@ -358,8 +358,8 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
             
             logger.info(f"Batch job {job_id}: Running scenario {idx+1}/{len(scenarios)}: {label} (procedure: {procedure_name})")
             
-            # Create scenario-specific job ID for results directory (use label for directory name)
-            scenario_job_id = f"{results_base}/{label}"
+            # Use results_base as job_id - benchmark_runner will add scenario/procedure name automatically
+            scenario_job_id = results_base
             
             # Extract workload params from options
             workload_params = options.get('workload_params', None)
@@ -638,6 +638,8 @@ def trigger_batch_benchmark():
             'status': 'queued',
             'dataset': dataset,
             'engine': engine,
+            'scenario': 'batch',  # Set to 'batch' to avoid null issues
+            'ui_scenario': f"{len(scenarios)} scenarios",  # Summary for display
             'scenarios': scenarios,  # List of {label, procedure_name}
             'results_base': results_base,
             'created_at': datetime.utcnow().isoformat(),
