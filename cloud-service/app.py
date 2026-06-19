@@ -243,8 +243,8 @@ def process_engine_queue(engine: str):
                 # Update job status to running
                 update_job_status(job_id, 'running', started_at=datetime.utcnow().isoformat())
                 
-                # Check if this is a batch job (has 'scenarios' array) or single job (has 'scenario' string)
-                if 'scenarios' in job and isinstance(job.get('scenarios'), list):
+                # Check if this is a batch job (has 'scenarios' list with mappings) or single job (has 'scenario' string)
+                if 'scenarios' in job and isinstance(job['scenarios'], list) and len(job['scenarios']) > 0 and isinstance(job['scenarios'][0], dict):
                     # Handle batch job - run multiple scenarios sequentially
                     process_batch_job(job_id, job, options)
                 else:
@@ -296,7 +296,10 @@ def process_engine_queue(engine: str):
 
 
 def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any]):
-    """Process a batch job by running multiple scenarios sequentially"""
+    """Process a batch job by running multiple scenarios sequentially
+    
+    Uses scenarios list which contains {label, procedure_name} for each scenario.
+    """
     dataset = job['dataset']
     engine = job['engine']
     scenarios = job.get('scenarios', [])
@@ -313,63 +316,66 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
     
     # Run each scenario sequentially
     for idx, scenario in enumerate(scenarios):
+        label = scenario['label']
+        procedure_name = scenario['procedure_name']
+        
         try:
             # Update current scenario in job
             job_data = get_job(job_id)
             if job_data:
-                job_data['current_scenario'] = scenario
+                job_data['current_scenario'] = label
                 job_data['current_scenario_index'] = idx
                 if 'scenario_status' not in job_data:
                     job_data['scenario_status'] = {}
-                job_data['scenario_status'][scenario] = 'running'
+                job_data['scenario_status'][label] = 'running'
                 save_job(job_id, job_data)
             
-            logger.info(f"Batch job {job_id}: Running scenario {idx+1}/{len(scenarios)}: {scenario}")
+            logger.info(f"Batch job {job_id}: Running scenario {idx+1}/{len(scenarios)}: {label} (procedure: {procedure_name})")
             
-            # Create scenario-specific job ID for results directory
-            scenario_job_id = f"{results_base}/{scenario}"
+            # Create scenario-specific job ID for results directory (use label for directory name)
+            scenario_job_id = f"{results_base}/{label}"
             
             # Extract workload params from options
             workload_params = options.get('workload_params', None)
             
-            # Run the benchmark for this scenario
+            # Run the benchmark for this scenario using the actual procedure name
             result = benchmark_runner.run_benchmark(
                 dataset=dataset,
                 engine=engine,
-                scenario=scenario,
+                scenario=procedure_name,  # Use actual procedure name
                 job_id=scenario_job_id,
                 enable_profiling=not options.get('no_profiling', False),
                 enable_metrics=not options.get('no_metrics', False),
                 workload_params=workload_params
             )
             
-            # Store scenario result
-            batch_results['scenario_results'][scenario] = result
+            # Store scenario result using label as key
+            batch_results['scenario_results'][label] = result
             
             if result.get('status') == 'completed':
                 batch_results['scenarios_completed'] += 1
                 # Update scenario status
                 job_data = get_job(job_id)
                 if job_data and 'scenario_status' in job_data:
-                    job_data['scenario_status'][scenario] = 'completed'
+                    job_data['scenario_status'][label] = 'completed'
                     save_job(job_id, job_data)
-                logger.info(f"Batch job {job_id}: Scenario {scenario} completed successfully")
+                logger.info(f"Batch job {job_id}: Scenario {label} completed successfully")
             else:
                 batch_results['scenarios_failed'] += 1
                 # Update scenario status
                 job_data = get_job(job_id)
                 if job_data and 'scenario_status' in job_data:
-                    job_data['scenario_status'][scenario] = 'failed'
+                    job_data['scenario_status'][label] = 'failed'
                     save_job(job_id, job_data)
-                logger.error(f"Batch job {job_id}: Scenario {scenario} failed")
+                logger.error(f"Batch job {job_id}: Scenario {label} failed")
                 
         except Exception as e:
-            logger.error(f"Batch job {job_id}: Error running scenario {scenario}: {e}", exc_info=True)
+            logger.error(f"Batch job {job_id}: Error running scenario {label}: {e}", exc_info=True)
             batch_results['scenarios_failed'] += 1
             # Update scenario status
             job_data = get_job(job_id)
             if job_data and 'scenario_status' in job_data:
-                job_data['scenario_status'][scenario] = 'error'
+                job_data['scenario_status'][label] = 'error'
                 save_job(job_id, job_data)
     
     # Update final batch job status
@@ -512,32 +518,74 @@ def discover():
 
 @app.route('/api/v1/benchmark/batch', methods=['POST'])
 def trigger_batch_benchmark():
-    """Trigger a batch benchmark job with multiple scenarios"""
+    """Trigger a batch benchmark job with multiple scenarios
+    
+    Accepts scenario labels (e.g., ["vector-search-scenario-1", "vector-search-scenario-2"])
+    and maps them to actual procedure names, just like the single benchmark endpoint.
+    """
     try:
         request_data = request.get_json() or {}
         
         # Extract parameters
         dataset = request_data.get('dataset')
         engine = request_data.get('engine')
-        scenarios = request_data.get('scenarios', [])  # List of scenario names
+        scenario_labels = request_data.get('scenarios', [])  # List of scenario labels from UI
         
         if not dataset:
             return jsonify({'error': 'dataset parameter is required'}), 400
         if not engine:
             return jsonify({'error': 'engine parameter is required'}), 400
-        if not scenarios or not isinstance(scenarios, list):
+        if not scenario_labels or not isinstance(scenario_labels, list):
             return jsonify({'error': 'scenarios parameter is required and must be a list'}), 400
         
-        # Validate all scenarios exist
+        # Map scenario labels to actual procedure names (same logic as single benchmark endpoint)
         procedures = config_loader.get_test_procedures(dataset)
-        available_procedures = [p.get('name') if isinstance(p, dict) else p for p in procedures]
+        scenarios = []  # List of {label, procedure_name}
         
-        for scenario in scenarios:
-            if scenario not in available_procedures:
-                return jsonify({'error': f'Invalid scenario: {scenario}'}), 400
+        for scenario_label in scenario_labels:
+            procedure_name = None
+            proc_counts = {}
+            
+            # Find matching procedure
+            for proc in procedures:
+                name = proc.get('name') if isinstance(proc, dict) else proc
+                proc_counts[name] = proc_counts.get(name, 0) + 1
+                
+                # Reconstruct the label for this procedure
+                total_count = sum(1 for p in procedures if (p.get('name') if isinstance(p, dict) else p) == name)
+                if total_count > 1:
+                    label = f"{name}-scenario-{proc_counts[name]}"
+                else:
+                    label = name
+                
+                if label == scenario_label:
+                    procedure_name = name
+                    break
+            
+            if not procedure_name:
+                available = []
+                proc_counts = {}
+                for proc in procedures:
+                    name = proc.get('name') if isinstance(proc, dict) else proc
+                    proc_counts[name] = proc_counts.get(name, 0) + 1
+                    total_count = sum(1 for p in procedures if (p.get('name') if isinstance(p, dict) else p) == name)
+                    label = f"{name}-scenario-{proc_counts[name]}" if total_count > 1 else name
+                    available.append(label)
+                
+                return jsonify({
+                    'error': f'Invalid scenario: {scenario_label}',
+                    'available_scenarios': available
+                }), 400
+            
+            scenarios.append({
+                'label': scenario_label,
+                'procedure_name': procedure_name
+            })
+            
+            logger.info(f"Scenario '{scenario_label}' maps to procedure '{procedure_name}'")
         
-        # Validate engine
-        error = benchmark_runner.validate_benchmark_request(dataset, engine, scenarios[0])
+        # Validate engine with first scenario
+        error = benchmark_runner.validate_benchmark_request(dataset, engine, scenarios[0]['procedure_name'])
         if error:
             return jsonify({'error': error}), 400
         
@@ -564,11 +612,11 @@ def trigger_batch_benchmark():
             'status': 'queued',
             'dataset': dataset,
             'engine': engine,
-            'scenarios': scenarios,
+            'scenarios': scenarios,  # List of {label, procedure_name}
             'results_base': results_base,
             'created_at': datetime.utcnow().isoformat(),
             'queue_position': queue_position,
-            'scenario_status': {scenario: 'queued' for scenario in scenarios},
+            'scenario_status': {s['label']: 'queued' for s in scenarios},
             'scenario_results': {},
             'current_scenario': None,
             'current_scenario_index': 0,
@@ -585,7 +633,7 @@ def trigger_batch_benchmark():
         # Ensure queue processor is running for this engine
         ensure_processor_running(engine)
         
-        logger.info(f"Batch job {batch_id} queued at position {queue_position}: dataset={dataset}, engine={engine}, scenarios={scenarios}")
+        logger.info(f"Batch job {batch_id} queued at position {queue_position}: dataset={dataset}, engine={engine}, scenarios={[s['label'] for s in scenarios]}")
         
         return jsonify({
             'job_id': batch_id,
@@ -593,7 +641,7 @@ def trigger_batch_benchmark():
             'queue_position': queue_position,
             'dataset': dataset,
             'engine': engine,
-            'scenarios': scenarios,
+            'scenarios': [s['label'] for s in scenarios],
             'results_base': results_base,
             'status_url': f'/api/v1/benchmark/{batch_id}'
         }), 202
