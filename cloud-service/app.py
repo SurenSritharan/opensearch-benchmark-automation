@@ -267,12 +267,14 @@ def process_engine_queue(engine: str):
                 # Update job status to running
                 update_job_status(job_id, 'running', started_at=datetime.utcnow().isoformat())
                 
-                # Check if this is a batch job (has 'scenarios' list with mappings) or single job (has 'scenario' string)
-                if 'scenarios' in job and isinstance(job['scenarios'], list) and len(job['scenarios']) > 0 and isinstance(job['scenarios'][0], dict):
+                # Check if this is a batch job (has 'scenarios' list) or single job (has 'scenario' string)
+                if 'scenarios' in job and isinstance(job['scenarios'], list):
                     # Handle batch job - run multiple scenarios sequentially
+                    logger.info(f"Processing BATCH job {job_id} with {len(job['scenarios'])} scenarios")
                     process_batch_job(job_id, job, options)
                 else:
                     # Handle single scenario job
+                    logger.info(f"Processing SINGLE job {job_id}")
                     scenario = job['scenario']
                     logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
                     
