@@ -532,11 +532,10 @@
             const job = data.job;
             const sweeps = data.sweeps || [];
             
-            // Display Test Environment
-            displayTestEnvironment(job);
-            
             // Analyze parameters across sweeps
             if (sweeps.length > 0) {
+                // Display Test Environment with sweep data for versions
+                displayTestEnvironment(job, sweeps);
                 const { commonParams, varyingParams } = analyzeParameters(sweeps);
                 
                 // Display Common Parameters
@@ -556,7 +555,21 @@
             }
         }
         
-        function displayTestEnvironment(job) {
+        function displayTestEnvironment(job, sweeps = []) {
+            // Try to get versions from first sweep's test_run data
+            let osVersion = 'N/A';
+            let benchmarkVersion = 'N/A';
+            
+            if (sweeps.length > 0 && sweeps[0].test_run) {
+                const testRun = sweeps[0].test_run;
+                if (testRun.cluster?.['distribution-version']) {
+                    osVersion = testRun.cluster['distribution-version'];
+                }
+                if (testRun.benchmark_version) {
+                    benchmarkVersion = testRun.benchmark_version;
+                }
+            }
+            
             const html = `
                 <div class="env-item">
                     <div class="env-label">Environment</div>
@@ -568,11 +581,11 @@
                 </div>
                 <div class="env-item">
                     <div class="env-label">OpenSearch</div>
-                    <div class="env-value">3.6.0</div>
+                    <div class="env-value">${osVersion}</div>
                 </div>
                 <div class="env-item">
                     <div class="env-label">Benchmark</div>
-                    <div class="env-value">2.3.0</div>
+                    <div class="env-value">${benchmarkVersion}</div>
                 </div>
                 <div class="env-item">
                     <div class="env-label">Engine</div>

@@ -369,8 +369,9 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
             
             logger.info(f"Batch job {job_id}: Running scenario {idx+1}/{len(scenarios)}: {label} (procedure: {procedure_name})")
             
-            # Use results_base as job_id - benchmark_runner will add scenario/procedure name automatically
-            scenario_job_id = results_base
+            # Create unique path for each scenario using the label
+            # This prevents scenarios with the same procedure name from overwriting each other
+            scenario_job_id = f"{results_base}/{label}"
             
             # Extract workload params from options
             workload_params = options.get('workload_params', None)
