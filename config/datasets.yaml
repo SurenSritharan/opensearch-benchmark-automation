@@ -32,6 +32,11 @@ datasets:
       # Build-time parameters (can be overridden in engine_params or workload_params)
       hnsw_ef_construction: 128
       hnsw_m: 16
+      # Query optimization parameters (reduce response size, improve performance)
+      query_body:
+        docvalue_fields: ["_id"]
+        stored_fields: "_none_"
+        _source: false
     
     # Engine-specific parameters (override or extend default_params)
     engine_params:
