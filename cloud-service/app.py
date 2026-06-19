@@ -333,16 +333,15 @@ def process_engine_queue(engine: str):
 
 
 def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any]):
-    """Process a batch job by running multiple scenarios sequentially
+    """Process a batch job by running multiple dataset+scenario combinations sequentially
     
-    Uses scenarios list which contains {label, procedure_name} for each scenario.
+    Uses scenarios list which contains {dataset, label, procedure_name, params} for each test.
     """
-    dataset = job['dataset']
     engine = job['engine']
     scenarios = job.get('scenarios', [])
     results_base = job.get('results_base', job_id)
     
-    logger.info(f"Starting batch job {job_id}: {len(scenarios)} scenarios")
+    logger.info(f"Starting batch job {job_id}: {len(scenarios)} tests")
     
     # Track overall batch results
     batch_results = {
@@ -351,8 +350,9 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
         'scenario_results': {}
     }
     
-    # Run each scenario sequentially
+    # Run each test sequentially
     for idx, scenario in enumerate(scenarios):
+        dataset = scenario['dataset']
         label = scenario['label']
         procedure_name = scenario['procedure_name']
         
@@ -367,11 +367,11 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
                 job_data['scenario_status'][label] = 'running'
                 save_job(job_id, job_data)
             
-            logger.info(f"Batch job {job_id}: Running scenario {idx+1}/{len(scenarios)}: {label} (procedure: {procedure_name})")
+            logger.info(f"Batch job {job_id}: Running test {idx+1}/{len(scenarios)}: dataset={dataset}, scenario={label} (procedure: {procedure_name})")
             
-            # Create unique path for each scenario using the label
-            # This prevents scenarios with the same procedure name from overwriting each other
-            scenario_job_id = f"{results_base}/{label}"
+            # Create unique path for each test: results_base/dataset-label
+            # This prevents tests from overwriting each other
+            scenario_job_id = f"{results_base}/{dataset}-{label}"
             
             # Merge global params with scenario-specific params
             # Scenario params override global params
@@ -379,9 +379,9 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
             scenario_params = scenario.get('params', {}) or {}
             workload_params = {**global_params, **scenario_params}
             
-            logger.info(f"Batch job {job_id}, scenario {label}: merged params = {workload_params}")
+            logger.info(f"Batch job {job_id}, test {label}: merged params = {workload_params}")
             
-            # Run the benchmark for this scenario using the actual procedure name
+            # Run the benchmark for this test using the actual procedure name
             result = benchmark_runner.run_benchmark(
                 dataset=dataset,
                 engine=engine,
@@ -568,38 +568,52 @@ def discover():
 
 @app.route('/api/v1/benchmark/batch', methods=['POST'])
 def trigger_batch_benchmark():
-    """Trigger a batch benchmark job with multiple scenarios
+    """Trigger a batch benchmark job with multiple dataset+scenario combinations for one engine
     
-    Accepts scenario labels (e.g., ["vector-search-k100-ef100", "vector-search-k10-ef32"])
-    and maps them to actual procedure names using aliases.
+    Request format:
+    {
+        "engine": "jvector",
+        "tests": [
+            {"dataset": "msmarco", "scenario": "vector-search-k100-ef100"},
+            {"dataset": "cohere-1m", "scenario": "search-only-k10"}
+        ]
+    }
     """
     try:
         request_data = request.get_json() or {}
         
         # Extract parameters
-        dataset = request_data.get('dataset')
         engine = request_data.get('engine')
-        scenario_labels = request_data.get('scenarios', [])  # List of scenario labels from UI
+        tests = request_data.get('tests', [])
         
-        if not dataset:
-            return jsonify({'error': 'dataset parameter is required'}), 400
         if not engine:
             return jsonify({'error': 'engine parameter is required'}), 400
-        if not scenario_labels or not isinstance(scenario_labels, list):
-            return jsonify({'error': 'scenarios parameter is required and must be a list'}), 400
+        if not tests or not isinstance(tests, list):
+            return jsonify({'error': 'tests parameter is required and must be a list'}), 400
         
-        # Map scenario labels to actual procedure names
-        procedures = config_loader.get_test_procedures(dataset)
+        # Validate each test has dataset and scenario
+        for idx, test in enumerate(tests):
+            if not isinstance(test, dict):
+                return jsonify({'error': f'Test {idx+1} must be an object with dataset and scenario'}), 400
+            if 'dataset' not in test or 'scenario' not in test:
+                return jsonify({'error': f'Test {idx+1} must have both dataset and scenario fields'}), 400
         
-        # Validate: check for duplicate procedure names without aliases
-        name_counts = {}
-        for proc in procedures:
-            name = proc.get('name') if isinstance(proc, dict) else proc
-            name_counts[name] = name_counts.get(name, 0) + 1
+        # Process each test and build scenarios list
+        scenarios = []  # List of {dataset, label, procedure_name, params}
         
-        scenarios = []  # List of {label, procedure_name, params}
-        
-        for scenario_label in scenario_labels:
+        for test in tests:
+            dataset = test['dataset']
+            scenario_label = test['scenario']
+            
+            # Get procedures for this dataset
+            procedures = config_loader.get_test_procedures(dataset)
+            
+            # Validate: check for duplicate procedure names without aliases
+            name_counts = {}
+            for proc in procedures:
+                name = proc.get('name') if isinstance(proc, dict) else proc
+                name_counts[name] = name_counts.get(name, 0) + 1
+            
             procedure_name = None
             matched_proc = None
             
@@ -619,7 +633,7 @@ def trigger_batch_benchmark():
                 
                 if label == scenario_label:
                     procedure_name = name
-                    matched_proc = proc  # Store the matched procedure instance
+                    matched_proc = proc
                     break
             
             if not procedure_name:
@@ -632,34 +646,35 @@ def trigger_batch_benchmark():
                     available.append(label)
                 
                 return jsonify({
-                    'error': f'Invalid scenario: {scenario_label}',
+                    'error': f'Invalid scenario "{scenario_label}" for dataset "{dataset}"',
                     'available_scenarios': available
                 }), 400
             
-            # Extract scenario-specific params from the matched procedure instance
+            # Validate engine is available for this dataset
+            error = benchmark_runner.validate_benchmark_request(dataset, engine, procedure_name)
+            if error:
+                return jsonify({'error': f'Dataset "{dataset}": {error}'}), 400
+            
+            # Extract scenario-specific params
             scenario_params = {}
             if matched_proc and isinstance(matched_proc, dict):
                 scenario_params = matched_proc.get('params', {})
             
             scenarios.append({
+                'dataset': dataset,
                 'label': scenario_label,
                 'procedure_name': procedure_name,
-                'params': scenario_params  # Add scenario-specific params
+                'params': scenario_params
             })
             
-            logger.info(f"Scenario '{scenario_label}' -> procedure '{procedure_name}' with params: {scenario_params}")
-        
-        # Validate engine with first scenario
-        error = benchmark_runner.validate_benchmark_request(dataset, engine, scenarios[0]['procedure_name'])
-        if error:
-            return jsonify({'error': error}), 400
+            logger.info(f"Test: dataset='{dataset}', scenario='{scenario_label}' -> procedure '{procedure_name}'")
         
         # Create batch job ID with timestamp (no "batch-" prefix)
         timestamp = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
         batch_id = timestamp
         
-        # Create results directory structure: timestamp/dataset-engine/
-        results_base = f"{timestamp}/{dataset}-{engine}"
+        # Create results directory structure: timestamp/engine/ (no dataset since we have multiple)
+        results_base = f"{timestamp}/{engine}"
         
         # Get current queue position for this engine
         with db_lock:
@@ -671,15 +686,20 @@ def trigger_batch_benchmark():
                 """, (engine,))
                 queue_position = cursor.fetchone()[0]
         
+        # Get unique datasets for summary
+        unique_datasets = list(set(s['dataset'] for s in scenarios))
+        datasets_summary = ', '.join(unique_datasets) if len(unique_datasets) <= 3 else f"{len(unique_datasets)} datasets"
+        
         # Create batch job data
         batch_data = {
             'job_id': batch_id,
             'status': 'queued',
-            'dataset': dataset,
+            'dataset': 'multi',  # Indicate multiple datasets
+            'datasets': unique_datasets,  # List of all datasets used
             'engine': engine,
             'scenario': 'batch',  # Set to 'batch' to avoid null issues
-            'ui_scenario': f"{len(scenarios)} scenarios",  # Summary for display
-            'scenarios': scenarios,  # List of {label, procedure_name}
+            'ui_scenario': f"{len(scenarios)} tests across {datasets_summary}",  # Summary for display
+            'scenarios': scenarios,  # List of {dataset, label, procedure_name, params}
             'results_base': results_base,
             'created_at': datetime.utcnow().isoformat(),
             'queue_position': queue_position,
@@ -700,15 +720,15 @@ def trigger_batch_benchmark():
         # Ensure queue processor is running for this engine
         ensure_processor_running(engine)
         
-        logger.info(f"Batch job {batch_id} queued at position {queue_position}: dataset={dataset}, engine={engine}, scenarios={[s['label'] for s in scenarios]}")
+        logger.info(f"Batch job {batch_id} queued at position {queue_position}: engine={engine}, tests={len(scenarios)}, datasets={unique_datasets}")
         
         return jsonify({
             'job_id': batch_id,
             'status': 'queued',
             'queue_position': queue_position,
-            'dataset': dataset,
+            'datasets': unique_datasets,
             'engine': engine,
-            'scenarios': [s['label'] for s in scenarios],
+            'tests': [{'dataset': s['dataset'], 'scenario': s['label']} for s in scenarios],
             'results_base': results_base,
             'status_url': f'/api/v1/benchmark/{batch_id}'
         }), 202
