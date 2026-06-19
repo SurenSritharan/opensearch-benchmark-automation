@@ -197,6 +197,17 @@ def get_next_queued_job(engine: str) -> Optional[Dict[str, Any]]:
             job = dict(row)
             job['options'] = json.loads(job['options']) if job['options'] else {}
             job['result'] = json.loads(job['result']) if job['result'] else {}
+            
+            # Restore batch job fields from options if present
+            if '_batch_scenarios' in job['options']:
+                job['scenarios'] = job['options'].pop('_batch_scenarios')
+                batch_meta = job['options'].pop('_batch_metadata', {})
+                job['results_base'] = batch_meta.get('results_base')
+                job['scenario_status'] = batch_meta.get('scenario_status', {})
+                job['scenario_results'] = batch_meta.get('scenario_results', {})
+                job['current_scenario'] = batch_meta.get('current_scenario')
+                job['current_scenario_index'] = batch_meta.get('current_scenario_index', 0)
+            
             return job
 
 def get_engine_lock(engine: str, timeout: int = -1):
