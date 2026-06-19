@@ -560,39 +560,86 @@ def cancel_job(job_id: str):
         })
     
     elif status == 'running':
-        # Kill the opensearch-benchmark process
+        # Gracefully terminate opensearch-benchmark process
         try:
-            # Find and kill opensearch-benchmark processes
+            import time
+            
+            # Step 1: Send SIGINT (Ctrl+C) for graceful shutdown
+            logger.info(f"Job {job_id}: Sending SIGINT to opensearch-benchmark process...")
             result = sp.run(
-                ['pkill', '-f', 'opensearch-benchmark'],
+                ['pkill', '-SIGINT', '-f', 'opensearch-benchmark'],
                 capture_output=True,
                 text=True
             )
+            
+            if result.returncode != 0:
+                logger.warning(f"Job {job_id}: No opensearch-benchmark process found (pkill returned {result.returncode})")
+            
+            # Step 2: Wait up to 60 seconds for graceful shutdown
+            logger.info(f"Job {job_id}: Waiting up to 60 seconds for graceful shutdown...")
+            for i in range(60):
+                time.sleep(1)
+                # Check if process still exists
+                check = sp.run(
+                    ['pgrep', '-f', 'opensearch-benchmark'],
+                    capture_output=True,
+                    text=True
+                )
+                if check.returncode != 0:
+                    # Process has terminated
+                    logger.info(f"Job {job_id}: Process terminated gracefully after {i+1} seconds")
+                    break
+            else:
+                # Step 3: If still running after 60s, send SIGTERM
+                logger.warning(f"Job {job_id}: Process still running after 60s, sending SIGTERM...")
+                sp.run(
+                    ['pkill', '-SIGTERM', '-f', 'opensearch-benchmark'],
+                    capture_output=True,
+                    text=True
+                )
+                
+                # Wait another 10 seconds for SIGTERM
+                time.sleep(10)
+                check = sp.run(
+                    ['pgrep', '-f', 'opensearch-benchmark'],
+                    capture_output=True,
+                    text=True
+                )
+                if check.returncode != 0:
+                    logger.info(f"Job {job_id}: Process terminated after SIGTERM")
+                else:
+                    # Step 4: Last resort - SIGKILL
+                    logger.error(f"Job {job_id}: Process still running, sending SIGKILL...")
+                    sp.run(
+                        ['pkill', '-SIGKILL', '-f', 'opensearch-benchmark'],
+                        capture_output=True,
+                        text=True
+                    )
             
             # Update job status
             update_job_status(
                 job_id,
                 'cancelled',
                 completed_at=datetime.utcnow().isoformat(),
-                error='Job cancelled by user - process terminated'
+                error='Job cancelled by user'
             )
             
-            logger.info(f"Job {job_id} cancelled - killed opensearch-benchmark process")
+            logger.info(f"Job {job_id} cancelled successfully")
             return jsonify({
-                'message': 'Job cancelled and process terminated',
+                'message': 'Job cancelled successfully',
                 'job_id': job_id,
                 'previous_status': status
             })
         except Exception as e:
-            logger.error(f"Error killing process for job {job_id}: {e}")
+            logger.error(f"Error cancelling job {job_id}: {e}")
             # Still mark as cancelled even if kill failed
             update_job_status(
                 job_id,
                 'cancelled',
-                error=f'Job cancellation requested but process kill failed: {e}'
+                error=f'Job cancellation requested but process termination failed: {e}'
             )
             return jsonify({
-                'message': 'Job marked as cancelled but process kill may have failed',
+                'message': 'Job marked as cancelled but process termination may have failed',
                 'job_id': job_id,
                 'previous_status': status,
                 'error': str(e)

@@ -323,14 +323,16 @@ class BenchmarkRunner:
                 logger.info(f"Target host: {target_host}")
                 logger.info(f"Workload path: {workload_path}")
                 
-                # Execute benchmark
+                # Execute benchmark in its own process group for proper signal handling
+                # This allows us to kill the entire process tree when cancelling
                 start_time = datetime.utcnow()
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
                     timeout=21600,  # 6 hour timeout
-                    env=env
+                    env=env,
+                    start_new_session=True  # Create new process group
                 )
                 end_time = datetime.utcnow()
                 
