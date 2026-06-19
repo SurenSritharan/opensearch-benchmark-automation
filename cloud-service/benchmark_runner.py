@@ -226,6 +226,12 @@ class BenchmarkRunner:
                 procedure_base_params = procedure_config.get('params', {})
                 if procedure_base_params:
                     logger.info(f"Loaded procedure base params: {list(procedure_base_params.keys())}")
+                
+                # 4. Add procedure-level engine-specific params (e.g., method_name for index creation)
+                procedure_engine_params = procedure_config.get('engine_params', {})
+                if procedure_engine_params and engine in procedure_engine_params:
+                    procedure_base_params.update(procedure_engine_params[engine])
+                    logger.info(f"Loaded procedure engine params for {engine}: {list(procedure_engine_params[engine].keys())}")
             
             # If no parameter sweeps, run once with all base params + runtime params
             if not parameter_sweeps:
