@@ -63,19 +63,16 @@ datasets:
         parameter_sweeps:
           - params:
               query_k: 10
-              query_count: 1000
               search_clients: 1
               warmup_time_period: 60
               time_period: 300
           - params:
               query_k: 10
-              query_count: 1000
               search_clients: 2
               warmup_time_period: 60
               time_period: 300
           - params:
               query_k: 10
-              query_count: 1000
               search_clients: 4
               warmup_time_period: 60
               time_period: 300
@@ -83,19 +80,16 @@ datasets:
         parameter_sweeps:
           - params:
               query_k: 100
-              query_count: 1000
               search_clients: 1
               warmup_time_period: 60
               time_period: 300
           - params:
               query_k: 100
-              query_count: 1000
               search_clients: 2
               warmup_time_period: 60
               time_period: 300
           - params:
               query_k: 100
-              query_count: 1000
               search_clients: 4
               warmup_time_period: 60
               time_period: 300
