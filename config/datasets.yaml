@@ -201,12 +201,6 @@ datasets:
           - params:
               query_k: 100
               ef_search: 100
-              search_clients: 1
-              warmup_time_period: 60
-              time_period: 300
-          - params:
-              query_k: 100
-              ef_search: 100
               search_clients: 2
               warmup_time_period: 60
               time_period: 300
@@ -217,11 +211,17 @@ datasets:
               warmup_time_period: 60
               time_period: 300
           - params:
+              query_k: 100
+              ef_search: 100
+              search_clients: 8
+              warmup_time_period: 60
+              time_period: 300
+          - params:
               # shard level find top k vectors
               query_k: 100
               #(Exploration Factor for Search) is a crucial query-time hyperparameter used in Approximate Nearest Neighbor (ANN) vector search, specifically within the Hierarchical Navigable Small World (HNSW) graph algorithm.
               ef_search: 100
-              search_clients: 8
+              search_clients: 16
               warmup_time_period: 60
               time_period: 300              
               # warmup_iterations: 100
@@ -231,12 +231,6 @@ datasets:
           - params:
               query_k: 10
               ef_search: 32
-              search_clients: 1
-              warmup_time_period: 60
-              time_period: 300
-          - params:
-              query_k: 10
-              ef_search: 32
               search_clients: 2
               warmup_time_period: 60
               time_period: 300
@@ -250,6 +244,12 @@ datasets:
               query_k: 10
               ef_search: 32
               search_clients: 8
+              warmup_time_period: 60
+              time_period: 300
+          - params:
+              query_k: 10
+              ef_search: 32
+              search_clients: 16
               warmup_time_period: 60
               time_period: 300
               # warmup_iterations: 100
