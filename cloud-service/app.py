@@ -373,8 +373,13 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
             # This prevents scenarios with the same procedure name from overwriting each other
             scenario_job_id = f"{results_base}/{label}"
             
-            # Extract workload params from options
-            workload_params = options.get('workload_params', None)
+            # Merge global params with scenario-specific params
+            # Scenario params override global params
+            global_params = options.get('workload_params', {}) or {}
+            scenario_params = scenario.get('params', {}) or {}
+            workload_params = {**global_params, **scenario_params}
+            
+            logger.info(f"Batch job {job_id}, scenario {label}: merged params = {workload_params}")
             
             # Run the benchmark for this scenario using the actual procedure name
             result = benchmark_runner.run_benchmark(
@@ -384,7 +389,7 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
                 job_id=scenario_job_id,
                 enable_profiling=not options.get('no_profiling', False),
                 enable_metrics=not options.get('no_metrics', False),
-                workload_params=workload_params
+                workload_params=workload_params if workload_params else None
             )
             
             # Store scenario result using label as key
@@ -516,20 +521,27 @@ def discover():
             dataset_name = dataset['name']
             procedures = config_loader.get_test_procedures(dataset_name)
             
+            # Validate: check for duplicate procedure names without aliases
+            name_counts = {}
+            for proc in procedures:
+                name = proc.get('name') if isinstance(proc, dict) else proc
+                name_counts[name] = name_counts.get(name, 0) + 1
+            
             # Build procedure metadata with UI labels and actual procedure names
             procedures_metadata = []
-            proc_counts = {}
             
             for idx, proc in enumerate(procedures):
                 name = proc.get('name') if isinstance(proc, dict) else proc
-                proc_counts[name] = proc_counts.get(name, 0) + 1
+                alias = proc.get('alias') if isinstance(proc, dict) else None
                 
-                # Determine UI label
-                total_count = sum(1 for p in procedures if (p.get('name') if isinstance(p, dict) else p) == name)
-                if total_count > 1:
-                    ui_label = f"{name}-scenario-{proc_counts[name]}"
-                else:
-                    ui_label = name
+                # Validate: if multiple procedures with same name, alias is required
+                if name_counts[name] > 1 and not alias:
+                    error_msg = f"Dataset '{dataset_name}': Multiple procedures with name '{name}' found but no alias defined. Please add 'alias' field to distinguish them."
+                    logger.error(error_msg)
+                    return jsonify({'error': error_msg}), 500
+                
+                # Use alias if available, otherwise use name directly
+                ui_label = alias if alias else name
                 
                 # Check for parameter sweeps
                 has_sweeps = isinstance(proc, dict) and 'parameter_sweeps' in proc
@@ -558,8 +570,8 @@ def discover():
 def trigger_batch_benchmark():
     """Trigger a batch benchmark job with multiple scenarios
     
-    Accepts scenario labels (e.g., ["vector-search-scenario-1", "vector-search-scenario-2"])
-    and maps them to actual procedure names, just like the single benchmark endpoint.
+    Accepts scenario labels (e.g., ["vector-search-k100-ef100", "vector-search-k10-ef32"])
+    and maps them to actual procedure names using aliases.
     """
     try:
         request_data = request.get_json() or {}
@@ -576,38 +588,47 @@ def trigger_batch_benchmark():
         if not scenario_labels or not isinstance(scenario_labels, list):
             return jsonify({'error': 'scenarios parameter is required and must be a list'}), 400
         
-        # Map scenario labels to actual procedure names (same logic as single benchmark endpoint)
+        # Map scenario labels to actual procedure names
         procedures = config_loader.get_test_procedures(dataset)
-        scenarios = []  # List of {label, procedure_name}
+        
+        # Validate: check for duplicate procedure names without aliases
+        name_counts = {}
+        for proc in procedures:
+            name = proc.get('name') if isinstance(proc, dict) else proc
+            name_counts[name] = name_counts.get(name, 0) + 1
+        
+        scenarios = []  # List of {label, procedure_name, params}
         
         for scenario_label in scenario_labels:
             procedure_name = None
-            proc_counts = {}
+            matched_proc = None
             
-            # Find matching procedure
+            # Find matching procedure using alias or name
             for proc in procedures:
                 name = proc.get('name') if isinstance(proc, dict) else proc
-                proc_counts[name] = proc_counts.get(name, 0) + 1
+                alias = proc.get('alias') if isinstance(proc, dict) else None
                 
-                # Reconstruct the label for this procedure
-                total_count = sum(1 for p in procedures if (p.get('name') if isinstance(p, dict) else p) == name)
-                if total_count > 1:
-                    label = f"{name}-scenario-{proc_counts[name]}"
-                else:
-                    label = name
+                # Validate: if multiple procedures with same name, alias is required
+                if name_counts[name] > 1 and not alias:
+                    error_msg = f"Dataset '{dataset}': Multiple procedures with name '{name}' found but no alias defined. Please add 'alias' field to distinguish them."
+                    logger.error(error_msg)
+                    return jsonify({'error': error_msg}), 500
+                
+                # Use alias if available, otherwise use name directly
+                label = alias if alias else name
                 
                 if label == scenario_label:
                     procedure_name = name
+                    matched_proc = proc  # Store the matched procedure instance
                     break
             
             if not procedure_name:
+                # Build list of available scenarios for error message
                 available = []
-                proc_counts = {}
                 for proc in procedures:
                     name = proc.get('name') if isinstance(proc, dict) else proc
-                    proc_counts[name] = proc_counts.get(name, 0) + 1
-                    total_count = sum(1 for p in procedures if (p.get('name') if isinstance(p, dict) else p) == name)
-                    label = f"{name}-scenario-{proc_counts[name]}" if total_count > 1 else name
+                    alias = proc.get('alias') if isinstance(proc, dict) else None
+                    label = alias if alias else name
                     available.append(label)
                 
                 return jsonify({
@@ -615,12 +636,18 @@ def trigger_batch_benchmark():
                     'available_scenarios': available
                 }), 400
             
+            # Extract scenario-specific params from the matched procedure instance
+            scenario_params = {}
+            if matched_proc and isinstance(matched_proc, dict):
+                scenario_params = matched_proc.get('params', {})
+            
             scenarios.append({
                 'label': scenario_label,
-                'procedure_name': procedure_name
+                'procedure_name': procedure_name,
+                'params': scenario_params  # Add scenario-specific params
             })
             
-            logger.info(f"Scenario '{scenario_label}' maps to procedure '{procedure_name}'")
+            logger.info(f"Scenario '{scenario_label}' -> procedure '{procedure_name}' with params: {scenario_params}")
         
         # Validate engine with first scenario
         error = benchmark_runner.validate_benchmark_request(dataset, engine, scenarios[0]['procedure_name'])
@@ -718,21 +745,29 @@ def trigger_benchmark():
         # For now, support single engine (can be extended for multiple)
         engine = engine_list[0]
         
-        # Look up the actual procedure name from UI label
+        # Look up the actual procedure name from UI label (support aliases)
         procedures = config_loader.get_test_procedures(dataset)
-        procedure_name = ui_scenario  # Default to UI label if not found
-        proc_counts = {}
+        
+        # Validate: check for duplicate procedure names without aliases
+        name_counts = {}
+        for proc in procedures:
+            name = proc.get('name') if isinstance(proc, dict) else proc
+            name_counts[name] = name_counts.get(name, 0) + 1
+        
+        procedure_name = None
         
         for proc in procedures:
             name = proc.get('name') if isinstance(proc, dict) else proc
-            proc_counts[name] = proc_counts.get(name, 0) + 1
+            alias = proc.get('alias') if isinstance(proc, dict) else None
             
-            # Reconstruct the UI label for this procedure
-            total_count = sum(1 for p in procedures if (p.get('name') if isinstance(p, dict) else p) == name)
-            if total_count > 1:
-                ui_label = f"{name}-scenario-{proc_counts[name]}"
-            else:
-                ui_label = name
+            # Validate: if multiple procedures with same name, alias is required
+            if name_counts[name] > 1 and not alias:
+                error_msg = f"Dataset '{dataset}': Multiple procedures with name '{name}' found but no alias defined. Please add 'alias' field to distinguish them."
+                logger.error(error_msg)
+                return jsonify({'error': error_msg}), 500
+            
+            # Use alias if available, otherwise use name directly
+            ui_label = alias if alias else name
             
             if ui_label == ui_scenario:
                 procedure_name = name

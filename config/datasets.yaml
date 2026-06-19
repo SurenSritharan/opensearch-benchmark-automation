@@ -58,6 +58,7 @@ datasets:
           target_index_num_vectors: 1000000
       
       - name: "search-only"
+        alias: "vector-search-k10"
         params:
           query_data_set_format: "hdf5"
           query_data_set_corpus: "cohere-1m"
@@ -68,34 +69,23 @@ datasets:
             stored_fields: "_none_"
             _source: false
           number_of_repetitions: 1000
+          query_k: 10
+          warmup_time_period: 60
+          time_period: 300
         parameter_sweeps:
           - params:
-              query_k: 10
               search_clients: 4
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 10
               search_clients: 8
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 10
               search_clients: 10
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 10
               search_clients: 12
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 10
               search_clients: 16
-              warmup_time_period: 60
-              time_period: 300
       
       - name: "search-only"
+        alias: "vector-search-k100"
         params:
           query_data_set_format: "hdf5"
           query_data_set_corpus: "cohere-1m"
@@ -106,32 +96,20 @@ datasets:
             stored_fields: "_none_"
             _source: false
           number_of_repetitions: 1000
+          query_k: 100
+          warmup_time_period: 60
+          time_period: 300
         parameter_sweeps:
           - params:
-              query_k: 100
               search_clients: 4
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 100
               search_clients: 8
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 100
               search_clients: 10
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 100
               search_clients: 12
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 100
               search_clients: 16
-              warmup_time_period: 60
-              time_period: 300
   msmarco:
     dimension: 1024
     format: fvec
@@ -201,81 +179,52 @@ datasets:
           target_index_max_num_segments: 1
       
       - name: "vector-search"
+        alias: "vector-search-k100-ef100"
         params:
           queries_file: "/datasets/msmarco/cohere_msmarco_queries.fvec"
           query_body:
             docvalue_fields: ["_id"]
             stored_fields: "_none_"
             _source: false
+          query_k: 100
+          ef_search: 100
+          warmup_time_period: 60
+          time_period: 300
         parameter_sweeps:
           - params:
-              query_k: 100
-              ef_search: 100
               search_clients: 4
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 100
-              ef_search: 100
               search_clients: 8
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 100
-              ef_search: 100
               search_clients: 10
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 100
-              ef_search: 100
               search_clients: 12
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              # shard level find top k vectors
-              query_k: 100
-              #(Exploration Factor for Search) is a crucial query-time hyperparameter used in Approximate Nearest Neighbor (ANN) vector search, specifically within the Hierarchical Navigable Small World (HNSW) graph algorithm.
-              ef_search: 100
               search_clients: 16
-              warmup_time_period: 60
-              time_period: 300              
-              # warmup_iterations: 100
-              # iterations: 500
+      
       - name: "vector-search"
+        alias: "vector-search-k10-ef32"
+        params:
+          queries_file: "/datasets/msmarco/cohere_msmarco_queries.fvec"
+          query_body:
+            docvalue_fields: ["_id"]
+            stored_fields: "_none_"
+            _source: false
+          query_k: 10
+          ef_search: 32
+          warmup_time_period: 60
+          time_period: 300
         parameter_sweeps:
           - params:
-              query_k: 10
-              ef_search: 32
               search_clients: 4
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 10
-              ef_search: 32
               search_clients: 8
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 10
-              ef_search: 32
               search_clients: 10
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 10
-              ef_search: 32
               search_clients: 12
-              warmup_time_period: 60
-              time_period: 300
           - params:
-              query_k: 10
-              ef_search: 32
               search_clients: 16
-              warmup_time_period: 60
-              time_period: 300
-              # warmup_iterations: 100
-              # iterations: 1000
 
     
 

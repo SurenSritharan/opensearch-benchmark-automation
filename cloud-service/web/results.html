@@ -348,6 +348,63 @@
         }
         
         .status-completed { background: #d4edda; color: #155724; }
+        
+        /* Scenario Selector Styles */
+        .scenario-selector-container {
+            margin: 25px 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #f6f8fa 0%, #ffffff 100%);
+            border: 2px solid #e1e4e8;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        
+        .scenario-selector-label {
+            font-size: 1.1em;
+            font-weight: 700;
+            color: #24292e;
+            margin-bottom: 12px;
+            display: block;
+        }
+        
+        .scenario-selector {
+            width: 100%;
+            padding: 15px 20px;
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #24292e;
+            background: white;
+            border: 2px solid #e1e4e8;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23667eea' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 15px center;
+            padding-right: 45px;
+        }
+        
+        .scenario-selector:hover {
+            border-color: #667eea;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
+        }
+        
+        .scenario-selector:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .scenario-content {
+            margin-top: 25px;
+            animation: fadeIn 0.3s;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
         .status-running { background: #fff3cd; color: #856404; }
         .status-queued { background: #d1ecf1; color: #0c5460; }
         .status-error { background: #f8d7da; color: #721c24; }
@@ -525,6 +582,55 @@
             document.getElementById('error').textContent = `Error: ${message}`;
         }
         
+        let currentScenarioGroups = {};
+        
+        function groupSweepsByScenario(sweeps, job) {
+            // For batch jobs, use the job's scenarios metadata
+            if (job.scenarios && Array.isArray(job.scenarios)) {
+                const groups = {};
+                const sweepsPerScenario = sweeps.length / job.scenarios.length;
+                
+                console.log('Grouping sweeps by scenario:');
+                console.log('Total sweeps:', sweeps.length);
+                console.log('Scenarios:', job.scenarios.map(s => s.label || s.procedure_name));
+                console.log('Sweeps per scenario:', sweepsPerScenario);
+                
+                // Log each sweep's name to see the pattern
+                sweeps.forEach((sweep, idx) => {
+                    console.log(`Sweep ${idx}: ${sweep.sweep_name}`);
+                });
+                
+                job.scenarios.forEach((scenario, index) => {
+                    const scenarioLabel = scenario.label || scenario.procedure_name;
+                    const startIdx = index * sweepsPerScenario;
+                    const endIdx = startIdx + sweepsPerScenario;
+                    groups[scenarioLabel] = sweeps.slice(startIdx, endIdx);
+                    
+                    console.log(`${scenarioLabel}: sweeps ${startIdx}-${endIdx-1}`);
+                });
+                
+                return groups;
+            }
+            
+            // Fallback: try to detect from sweep paths
+            const groups = {};
+            sweeps.forEach(sweep => {
+                let scenario = 'All Sweeps';
+                if (sweep.sweep_name && sweep.sweep_name.includes('/')) {
+                    scenario = sweep.sweep_name.split('/')[0];
+                }
+                if (!groups[scenario]) groups[scenario] = [];
+                groups[scenario].push(sweep);
+            });
+            return groups;
+        }
+        
+        function onScenarioChange() {
+            const selector = document.getElementById('scenarioSelector');
+            const selectedScenario = selector.value;
+            displayScenarioContent(selectedScenario, currentScenarioGroups[selectedScenario]);
+        }
+        
         function displayResults(data) {
             document.getElementById('loading').style.display = 'none';
             document.getElementById('results').style.display = 'block';
@@ -532,27 +638,353 @@
             const job = data.job;
             const sweeps = data.sweeps || [];
             
-            // Analyze parameters across sweeps
             if (sweeps.length > 0) {
-                // Display Test Environment with sweep data for versions
+                // Display Test Environment
                 displayTestEnvironment(job, sweeps);
-                const { commonParams, varyingParams } = analyzeParameters(sweeps);
                 
-                // Display Common Parameters
-                if (Object.keys(commonParams).length > 0) {
-                    displayCommonParameters(commonParams);
+                // Group sweeps by scenario
+                const scenarioGroups = groupSweepsByScenario(sweeps, job);
+                const scenarioNames = Object.keys(scenarioGroups);
+                
+                // Check if we need dropdown (multiple scenarios)
+                if (scenarioNames.length > 1 || (scenarioNames.length === 1 && scenarioNames[0] !== 'All Sweeps')) {
+                    currentScenarioGroups = scenarioGroups;
+                    displayWithDropdown(scenarioGroups);
+                } else {
+                    // Single group - display normally
+                    displaySingleGroup(sweeps);
                 }
-                
-                // Display Sweep Parameters
-                if (Object.keys(varyingParams).length > 0) {
-                    displaySweepParameters(sweeps, varyingParams);
-                }
-                
-                // Display Charts and Metrics
-                displayMetricsSummary(sweeps);
-                displayMetricsCharts(sweeps);
-                displayDetailedMetrics(sweeps);
             }
+        }
+        
+        function displaySingleGroup(sweeps) {
+            const { commonParams, varyingParams } = analyzeParameters(sweeps);
+            
+            if (Object.keys(commonParams).length > 0) {
+                displayCommonParameters(commonParams);
+            }
+            
+            if (Object.keys(varyingParams).length > 0) {
+                displaySweepParameters(sweeps, varyingParams);
+            }
+            
+            displayMetricsSummary(sweeps);
+            displayMetricsCharts(sweeps);
+            displayDetailedMetrics(sweeps);
+        }
+        
+        function displayWithDropdown(scenarioGroups) {
+            const container = document.getElementById('commonParamsSection');
+            if (!container) return;
+            
+            // Create dropdown selector
+            let dropdownHtml = `
+                <div class="scenario-selector-container">
+                    <label class="scenario-selector-label">📊 Select Scenario:</label>
+                    <select id="scenarioSelector" class="scenario-selector" onchange="onScenarioChange()">
+            `;
+            
+            Object.entries(scenarioGroups).forEach(([scenarioName, sweeps], index) => {
+                const selected = index === 0 ? 'selected' : '';
+                dropdownHtml += `
+                    <option value="${scenarioName}" ${selected}>
+                        ${scenarioName} (${sweeps.length} sweep${sweeps.length > 1 ? 's' : ''})
+                    </option>
+                `;
+            });
+            
+            dropdownHtml += `
+                    </select>
+                </div>
+                <div id="scenarioContent" class="scenario-content"></div>
+            `;
+            
+            container.insertAdjacentHTML('afterend', dropdownHtml);
+            
+            // Display first scenario by default
+            const firstScenario = Object.keys(scenarioGroups)[0];
+            displayScenarioContent(firstScenario, scenarioGroups[firstScenario]);
+            
+            // Hide original sections - hide ALL metric sections too
+            document.getElementById('commonParamsSection').style.display = 'none';
+            document.getElementById('sweepParamsSection').style.display = 'none';
+            
+            // Hide the original metrics sections
+            const metricsSummary = document.getElementById('metricsSummary');
+            if (metricsSummary) metricsSummary.style.display = 'none';
+            
+            const chartsSection = document.getElementById('chartsSection');
+            if (chartsSection) chartsSection.style.display = 'none';
+            
+            const detailedMetrics = document.getElementById('detailedMetrics');
+            if (detailedMetrics) detailedMetrics.style.display = 'none';
+        }
+        
+        function displayScenarioContent(scenarioName, sweeps) {
+            const container = document.getElementById('scenarioContent');
+            if (!container) return;
+            
+            const { commonParams, varyingParams } = analyzeParameters(sweeps);
+            
+            // Debug: log what we're analyzing
+            console.log(`Scenario: ${scenarioName}`);
+            console.log(`Sweeps count: ${sweeps.length}`);
+            console.log('Common params:', commonParams);
+            console.log('Varying params:', Object.keys(varyingParams));
+            
+            let html = '';
+            
+            // Common parameters
+            if (Object.keys(commonParams).length > 0) {
+                html += '<div class="section"><div class="section-title">Common Parameters</div><div class="params-grid">';
+                Object.entries(commonParams).forEach(([key, value]) => {
+                    html += `
+                        <div class="param-item">
+                            <div class="param-label">${key}</div>
+                            <div class="param-value">${JSON.stringify(value)}</div>
+                        </div>
+                    `;
+                });
+                html += '</div></div>';
+            }
+            
+            // Sweep parameters
+            if (Object.keys(varyingParams).length > 0) {
+                html += '<div class="section"><div class="section-title">Sweep Parameters</div><div class="sweep-params-container">';
+                sweeps.forEach((sweep, index) => {
+                    html += `<div class="sweep-param-card"><h4>${sweep.sweep_name || `Sweep ${index + 1}`}</h4>`;
+                    Object.keys(varyingParams).forEach(key => {
+                        const value = sweep.workload_params?.[key];
+                        if (value !== undefined) {
+                            html += `
+                                <div class="sweep-param-item">
+                                    <span class="sweep-param-key">${key}:</span>
+                                    <span class="sweep-param-val">${JSON.stringify(value)}</span>
+                                </div>
+                            `;
+                        }
+                    });
+                    html += '</div>';
+                });
+                html += '</div></div>';
+            }
+            
+            // Add placeholder sections for metrics that will be populated
+            html += `
+                <div id="scenario-metricsSummary-${scenarioName}" class="section" style="display: none;">
+                    <div class="section-title">Metrics Summary</div>
+                    <div id="scenario-metricsSummaryContent-${scenarioName}" class="metrics-summary"></div>
+                </div>
+                <div id="scenario-chartsSection-${scenarioName}" class="section">
+                    <div class="section-title">Performance Charts</div>
+                    <div id="scenario-latencyChart-${scenarioName}"></div>
+                    <div id="scenario-throughputChart-${scenarioName}"></div>
+                    <div id="scenario-recallChart-${scenarioName}"></div>
+                    <div id="scenario-combinedChart-${scenarioName}"></div>
+                </div>
+                <div id="scenario-detailedMetrics-${scenarioName}" class="section" style="display: none;">
+                    <div class="section-title">Detailed Metrics</div>
+                    <div id="scenario-detailedMetricsContent-${scenarioName}"></div>
+                </div>
+            `;
+            
+            container.innerHTML = html;
+            
+            // Now populate the metrics using the scenario-specific IDs
+            displayMetricsSummaryInContainer(sweeps, `scenario-metricsSummaryContent-${scenarioName}`, `scenario-metricsSummary-${scenarioName}`);
+            displayMetricsChartsInContainer(sweeps, scenarioName);
+            displayDetailedMetricsInContainer(sweeps, `scenario-detailedMetricsContent-${scenarioName}`, `scenario-detailedMetrics-${scenarioName}`);
+        }
+        
+        // Scenario-specific metric display functions
+        function displayMetricsSummaryInContainer(sweeps, contentId, sectionId) {
+            const metricsData = sweeps.map((sweep, index) => {
+                const testRun = sweep.test_run;
+                const opMetrics = testRun?.results?.op_metrics;
+                const correctnessMetrics = testRun?.results?.correctness_metrics;
+                
+                let latency = null, throughput = null, recallK = null;
+                
+                if (opMetrics) {
+                    const metricsArray = Array.isArray(opMetrics) ? opMetrics : Object.values(opMetrics);
+                    for (const op of metricsArray) {
+                        if (op.latency) latency = getMetricValue(op.latency);
+                        if (op.throughput) throughput = getMetricValue(op.throughput);
+                    }
+                }
+                
+                if (correctnessMetrics && Array.isArray(correctnessMetrics)) {
+                    for (const c of correctnessMetrics) {
+                        if (c['recall@k']) recallK = getMetricValue(c['recall@k']);
+                    }
+                }
+                
+                return { latency, throughput, recallK };
+            });
+            
+            const avgLatency = metricsData.filter(m => m.latency).reduce((sum, m) => sum + m.latency, 0) / metricsData.filter(m => m.latency).length;
+            const avgThroughput = metricsData.filter(m => m.throughput).reduce((sum, m) => sum + m.throughput, 0) / metricsData.filter(m => m.throughput).length;
+            const avgRecall = metricsData.filter(m => m.recallK).reduce((sum, m) => sum + m.recallK, 0) / metricsData.filter(m => m.recallK).length;
+            
+            let html = '';
+            if (!isNaN(avgLatency)) {
+                html += `
+                    <div class="metric-card">
+                        <div class="metric-label">Average Latency</div>
+                        <div class="metric-value">${avgLatency.toFixed(2)}<span class="metric-unit">ms</span></div>
+                    </div>
+                `;
+            }
+            if (!isNaN(avgThroughput)) {
+                html += `
+                    <div class="metric-card">
+                        <div class="metric-label">Average Throughput</div>
+                        <div class="metric-value">${avgThroughput.toFixed(2)}<span class="metric-unit">ops/s</span></div>
+                    </div>
+                `;
+            }
+            if (!isNaN(avgRecall)) {
+                html += `
+                    <div class="metric-card">
+                        <div class="metric-label">Average Recall@k</div>
+                        <div class="metric-value">${(avgRecall * 100).toFixed(2)}<span class="metric-unit">%</span></div>
+                    </div>
+                `;
+            }
+            html += `
+                <div class="metric-card">
+                    <div class="metric-label">Total Sweeps</div>
+                    <div class="metric-value">${sweeps.length}</div>
+                </div>
+            `;
+            
+            if (html) {
+                document.getElementById(contentId).innerHTML = html;
+                document.getElementById(sectionId).style.display = 'block';
+            }
+        }
+        
+        function displayMetricsChartsInContainer(sweeps, scenarioName) {
+            const metricsData = sweeps.map((sweep, index) => {
+                const testRun = sweep.test_run;
+                const opMetrics = testRun?.results?.op_metrics;
+                const correctnessMetrics = testRun?.results?.correctness_metrics;
+                
+                let latency = null, latencyP90 = null, throughput = null, recallK = null, recall1 = null;
+                
+                if (opMetrics) {
+                    const metricsArray = Array.isArray(opMetrics) ? opMetrics : Object.values(opMetrics);
+                    for (const op of metricsArray) {
+                        if (op.latency) {
+                            latency = getMetricValue(op.latency, 'mean');
+                            latencyP90 = getMetricValue(op.latency, 'p90');
+                        }
+                        if (op.throughput) throughput = getMetricValue(op.throughput);
+                    }
+                }
+                
+                if (correctnessMetrics && Array.isArray(correctnessMetrics)) {
+                    for (const c of correctnessMetrics) {
+                        if (c['recall@k']) recallK = getMetricValue(c['recall@k']);
+                        if (c['recall@1']) recall1 = getMetricValue(c['recall@1']);
+                    }
+                }
+                
+                return {
+                    name: sweep.sweep_name || `Sweep ${index + 1}`,
+                    latency,
+                    latencyP90,
+                    throughput,
+                    recallK,
+                    recall1
+                };
+            });
+            
+            if (metricsData.some(m => m.latency !== null || m.latencyP90 !== null)) {
+                displayLatencyChartInContainer(metricsData, `scenario-latencyChart-${scenarioName}`);
+            }
+            
+            if (metricsData.some(m => m.throughput !== null)) {
+                displayThroughputChartInContainer(metricsData, `scenario-throughputChart-${scenarioName}`);
+            }
+            
+            if (metricsData.some(m => m.recallK !== null || m.recall1 !== null)) {
+                displayRecallChartInContainer(metricsData, `scenario-recallChart-${scenarioName}`);
+            }
+            
+            displayCombinedChartInContainer(metricsData, `scenario-combinedChart-${scenarioName}`);
+        }
+        
+        function displayDetailedMetricsInContainer(sweeps, contentId, sectionId) {
+            const rows = sweeps.map((sweep, index) => {
+                const testRun = sweep.test_run;
+                const opMetrics = testRun?.results?.op_metrics;
+                const correctnessMetrics = testRun?.results?.correctness_metrics;
+                
+                let latency = null, throughput = null, recallK = null, recall1 = null;
+                
+                if (opMetrics) {
+                    const metricsArray = Array.isArray(opMetrics) ? opMetrics : Object.values(opMetrics);
+                    for (const op of metricsArray) {
+                        if (op.latency) latency = getMetricValue(op.latency);
+                        if (op.throughput) throughput = getMetricValue(op.throughput);
+                    }
+                }
+                
+                if (correctnessMetrics && Array.isArray(correctnessMetrics)) {
+                    for (const c of correctnessMetrics) {
+                        if (c['recall@k']) recallK = getMetricValue(c['recall@k']);
+                        if (c['recall@1']) recall1 = getMetricValue(c['recall@1']);
+                    }
+                }
+                
+                return `
+                    <tr>
+                        <td><strong>${sweep.sweep_name || `Sweep ${index + 1}`}</strong></td>
+                        <td>${latency ? latency.toFixed(2) : 'N/A'}</td>
+                        <td>${throughput ? throughput.toFixed(2) : 'N/A'}</td>
+                        <td>${recallK ? (recallK * 100).toFixed(2) + '%' : 'N/A'}</td>
+                        <td>${recall1 ? (recall1 * 100).toFixed(2) + '%' : 'N/A'}</td>
+                    </tr>
+                `;
+            }).join('');
+            
+            const html = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Sweep</th>
+                            <th>Latency (ms)</th>
+                            <th>Throughput (ops/s)</th>
+                            <th>Recall@k</th>
+                            <th>Recall@1</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            `;
+            
+            document.getElementById(contentId).innerHTML = html;
+            document.getElementById(sectionId).style.display = 'block';
+        }
+        
+        // Helper functions for charts in containers
+        function displayLatencyChartInContainer(data, containerId) {
+            displayLatencyChart(data, containerId);
+        }
+        
+        function displayThroughputChartInContainer(data, containerId) {
+            displayThroughputChart(data, containerId);
+        }
+        
+        function displayRecallChartInContainer(data, containerId) {
+            displayRecallChart(data, containerId);
+        }
+        
+        function displayCombinedChartInContainer(data, containerId) {
+            displayCombinedChart(data, containerId);
         }
         
         function displayTestEnvironment(job, sweeps = []) {
@@ -565,8 +997,9 @@
                 if (testRun.cluster?.['distribution-version']) {
                     osVersion = testRun.cluster['distribution-version'];
                 }
-                if (testRun.benchmark_version) {
-                    benchmarkVersion = testRun.benchmark_version;
+                // Note: field name is 'benchmark-version' (with hyphen) in test_run.json
+                if (testRun['benchmark-version']) {
+                    benchmarkVersion = testRun['benchmark-version'];
                 }
             }
             
@@ -828,7 +1261,7 @@
             displayCombinedChart(metricsData);
         }
         
-        function displayLatencyChart(data) {
+        function displayLatencyChart(data, containerId = 'latencyChartContent') {
             // Prepare data for line chart with both Average and P90
             const chartData = [];
             data.forEach(d => {
@@ -946,12 +1379,11 @@
                 color: ['#3b82f6', '#ef4444']
             };
             
-            const vchart = new VChart.default(spec, { dom: 'latencyChartContent' });
+            const vchart = new VChart.default(spec, { dom: containerId });
             vchart.renderSync();
-            document.getElementById('latencyChart').style.display = 'block';
         }
         
-        function displayThroughputChart(data) {
+        function displayThroughputChart(data, containerId = 'throughputChartContent') {
             const validData = data.filter(d => d.throughput !== null);
             if (validData.length === 0) return;
             
@@ -1042,12 +1474,11 @@
                 color: '#10b981'
             };
             
-            const vchart = new VChart.default(spec, { dom: 'throughputChartContent' });
+            const vchart = new VChart.default(spec, { dom: containerId });
             vchart.renderSync();
-            document.getElementById('throughputChart').style.display = 'block';
         }
         
-        function displayRecallChart(data) {
+        function displayRecallChart(data, containerId = 'recallChartContent') {
             const hasRecallK = data.some(d => d.recallK !== null);
             const hasRecall1 = data.some(d => d.recall1 !== null);
             
@@ -1171,12 +1602,11 @@
                 color: ['#8b5cf6', '#f59e0b']
             };
             
-            const vchart = new VChart.default(spec, { dom: 'recallChartContent' });
+            const vchart = new VChart.default(spec, { dom: containerId });
             vchart.renderSync();
-            document.getElementById('recallChart').style.display = 'block';
         }
         
-        function displayCombinedChart(data) {
+        function displayCombinedChart(data, containerId = 'combinedChartContent') {
             // Create normalized data for radar chart
             const hasLatency = data.some(d => d.latency !== null);
             const hasThroughput = data.some(d => d.throughput !== null);
@@ -1267,9 +1697,8 @@
                 }
             };
             
-            const vchart = new VChart.default(spec, { dom: 'combinedChartContent' });
+            const vchart = new VChart.default(spec, { dom: containerId });
             vchart.renderSync();
-            document.getElementById('combinedChart').style.display = 'block';
         }
         
         function displayDetailedMetrics(sweeps) {
