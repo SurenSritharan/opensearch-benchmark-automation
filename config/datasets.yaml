@@ -17,7 +17,7 @@ datasets:
       target_index_dimension: 768
       target_index_max_num_segments: 1
       target_field_name: "target_field"
-      space_type: "innerproduct"
+      target_index_space_type: "innerproduct"
       target_index_bulk_size: 500
       target_index_bulk_index_data_set_format: "hdf5"
       target_index_bulk_index_data_set_corpus: "cohere-1m"
@@ -32,19 +32,13 @@ datasets:
     # Engine-specific parameters (override or extend default_params)
     engine_params:
       faiss:
-        engine: "faiss"
         target_index_body: "indices/faiss-index.json"
-        method_name: "hnsw"
       
       lucene:
-        engine: "lucene"
         target_index_body: "indices/lucene-index.json"
-        method_name: "hnsw"
       
       jvector:
-        engine: "jvector"
         target_index_body: "indices/jvector-index.json"
-        method_name: "disk_ann"
         mode: "in_memory"
     
     # Test procedures with parameter sweeps
