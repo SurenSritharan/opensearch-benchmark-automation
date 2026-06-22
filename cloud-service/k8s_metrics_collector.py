@@ -2,14 +2,17 @@
 """
 Kubernetes-native metrics collector using direct HTTPS API URL requests.
 No official 'kubernetes' package dependency - loads service account tokens dynamically.
+Outputs the exact target payload schema required.
 """
 
 import time
 import json
 import logging
-from datetime import datetime
+import re
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
+from collections import defaultdict
 import requests
 
 logger = logging.getLogger(__name__)
@@ -38,14 +41,17 @@ class K8sMetricsCollector:
             self.base_url = "http://127.0.0.1:8001"
             self.ca_path = None
         
-        self.metrics_data = {
-            "start_time": None,
-            "end_time": None,
-            "duration_seconds": 0,
-            "namespace": namespace,
-            "samples": [],
-            "summary": {}
-        }
+        # Internal state tracking
+        self.scenario_name = ""
+        self.start_iso = ""
+        self.end_iso = ""
+        self.total_samples = 0
+        
+        # Aggregation buckets for the specified summary structure
+        self.node_cpu_raw = defaultdict(list)
+        self.node_mem_raw = defaultdict(list)
+        self.node_pools = {}
+        self.pod_metrics_history = defaultdict(lambda: {"cpu_samples": [], "memory_samples": []})
 
     def _get_api_headers(self) -> Dict[str, str]:
         headers = {"Accept": "application/json"}
@@ -69,159 +75,170 @@ class K8sMetricsCollector:
             logger.error(f"K8s API HTTP request failed for {endpoint}: {e}")
             return None
 
-    def _get_node_metrics(self) -> Dict[str, Any]:
-        if not self.enabled:
-            return {}
-        
-        node_metrics = {}
+    def _parse_cpu(self, cpu_str: str) -> float:
+        """Converts K8s CPU strings (e.g., '188m', '2') to float cores."""
+        if not cpu_str:
+            return 0.0
+        if cpu_str.endswith('m'):
+            return float(cpu_str[:-1]) / 1000.0
+        if cpu_str.endswith('n'):
+            return float(cpu_str[:-1]) / 1000000000.0
+        return float(cpu_str)
+
+    def _parse_memory_to_mi(self, mem_str: str) -> float:
+        """Converts K8s Memory strings (e.g., '2449Mi', '16Gi') to float MiB."""
+        if not mem_str:
+            return 0.0
+        if mem_str.endswith('Ki'):
+            return float(mem_str[:-2]) / 1024.0
+        if mem_str.endswith('Mi'):
+            return float(mem_str[:-2])
+        if mem_str.endswith('Gi'):
+            return float(mem_str[:-2]) * 1024.0
+        return float(mem_str)
+
+    def _cache_node_pools(self):
+        """Fetches nodes once at initialization to map node-pools."""
         nodes_data = self._make_request("/api/v1/nodes")
-        node_pool_map = {}
         if nodes_data:
             for node in nodes_data.get('items', []):
                 node_name = node['metadata']['name']
                 labels = node['metadata'].get('labels', {})
                 node_pool = labels.get('cloud.google.com/gke-nodepool', 'unknown')
-                node_pool_map[node_name] = node_pool
+                self.node_pools[node_name] = node_pool
 
+    def collect_sample(self):
+        """Polls endpoints and stores sample values in correct formats."""
+        if not self.enabled:
+            return
+        
+        self.total_samples += 1
+
+        # 1. Fetch and store Node Metric points
         metrics_data = self._make_request("/apis/metrics.k8s.io/v1beta1/nodes")
         if metrics_data:
             for item in metrics_data.get('items', []):
                 node_name = item['metadata']['name']
                 usage = item.get('usage', {})
-                
-                node_metrics[node_name] = {
-                    'node_pool': node_pool_map.get(node_name, 'unknown'),
-                    'cpu': usage.get('cpu', '0'),
-                    'memory': usage.get('memory', '0'),
-                    'timestamp': item.get('timestamp', datetime.utcnow().isoformat() + "Z")
-                }
-        return node_metrics
-    
-    def _get_pod_metrics(self) -> Dict[str, Any]:
-        if not self.enabled:
-            return {}
-        
-        pod_metrics = {}
-        metrics_data = self._make_request(f"/apis/metrics.k8s.io/v1beta1/namespaces/{self.namespace}/pods")
-        
-        if metrics_data:
-            for item in metrics_data.get('items', []):
+                self.node_cpu_raw[node_name].append(self._parse_cpu(usage.get('cpu', '0')))
+                self.node_mem_raw[node_name].append(self._parse_memory_to_mi(usage.get('memory', '0')))
+
+        # 2. Fetch and store Pod Metric points
+        pod_data = self._make_request(f"/apis/metrics.k8s.io/v1beta1/namespaces/{self.namespace}/pods")
+        if pod_data:
+            for item in pod_data.get('items', []):
                 pod_name = item['metadata']['name']
-                containers = item.get('containers', [])
                 
-                container_details = []
-                for container in containers:
-                    usage = container.get('usage', {})
-                    container_details.append({
-                        'name': container.get('name'),
-                        'cpu': usage.get('cpu', '0'),
-                        'memory': usage.get('memory', '0')
-                    })
+                total_pod_cpu_m = 0
+                total_pod_mem_ki = 0
                 
-                pod_metrics[pod_name] = {
-                    'containers': container_details,
-                    'timestamp': item.get('timestamp', datetime.utcnow().isoformat() + "Z")
-                }
-        return pod_metrics
-    
-    def _get_pod_status(self) -> Dict[str, Any]:
-        if not self.enabled:
-            return {}
-        
-        pod_status = {}
-        pods_data = self._make_request(f"/api/v1/namespaces/{self.namespace}/pods")
-        
-        if pods_data:
-            for pod in pods_data.get('items', []):
-                pod_name = pod['metadata']['name']
-                status = pod.get('status', {})
-                spec = pod.get('spec', {})
+                for container in item.get('containers', []):
+                    cpu_str = container.get('usage', {}).get('cpu', '0')
+                    mem_str = container.get('usage', {}).get('memory', '0')
+                    
+                    # Normalize CPU string chunks to millicores integer
+                    if cpu_str.endswith('m'):
+                        total_pod_cpu_m += int(cpu_str[:-1])
+                    elif cpu_str.endswith('n'):
+                        total_pod_cpu_m += int(cpu_str[:-1]) // 1000000
+                    else:
+                        total_pod_cpu_m += int(float(cpu_str) * 1000)
+                        
+                    # Normalize Memory string chunks to KiB integer
+                    if mem_str.endswith('Ki'):
+                        total_pod_mem_ki += int(mem_str[:-2])
+                    elif mem_str.endswith('Mi'):
+                        total_pod_mem_ki += int(mem_str[:-2]) * 1024
+                    elif mem_str.endswith('Gi'):
+                        total_pod_mem_ki += int(mem_str[:-2]) * 1024 * 1024
                 
-                pod_status[pod_name] = {
-                    'phase': status.get('phase'),
-                    'node': spec.get('nodeName'),
-                    'pod_ip': status.get('podIP'),
-                    'start_time': status.get('startTime'),
-                    'containers': []
-                }
-                
-                for container_status in status.get('containerStatuses', []):
-                    pod_status[pod_name]['containers'].append({
-                        'name': container_status.get('name'),
-                        'ready': container_status.get('ready'),
-                        'restart_count': container_status.get('restartCount', 0),
-                        'image': container_status.get('image')
-                    })
-        return pod_status
-    
-    def collect_sample(self) -> Dict[str, Any]:
-        if not self.enabled:
-            return {}
-        return {
-            'timestamp': datetime.utcnow().isoformat() + "Z",
-            'epoch': time.time(),
-            'node_metrics': self._get_node_metrics(),
-            'pod_metrics': self._get_pod_metrics(),
-            'pod_status': self._get_pod_status()
-        }
-    
-    def collect_single_snapshot(self, label: str = "snapshot") -> Dict[str, Any]:
-        if not self.enabled:
-            return {}
-        logger.info(f"📸 Collecting metrics snapshot: {label}")
-        return {
-            'label': label,
-            'timestamp': datetime.utcnow().isoformat() + "Z",
-            'namespace': self.namespace,
-            'metrics': self.collect_sample()
-        }
-    
+                # Append formatted string samples matching specifications
+                self.pod_metrics_history[pod_name]["cpu_samples"].append(f"{total_pod_cpu_m}m")
+                self.pod_metrics_history[pod_name]["memory_samples"].append(f"{int(total_pod_mem_ki / 1024)}Mi")
+
     def start_collection(self, scenario_name: str, interval: int = 10, duration: Optional[int] = None):
         if not self.enabled:
             return
         
-        self.metrics_data['start_time'] = datetime.utcnow().isoformat() + "Z"
-        self.metrics_data['scenario'] = scenario_name
-        self.metrics_data['interval_seconds'] = interval
+        self.scenario_name = scenario_name
+        self._cache_node_pools()
         
+        # Python 3.11+ preferred over utcnow()
+        self.start_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "")
         start_time = time.time()
-        while True:
-            sample = self.collect_sample()
-            if sample:
-                self.metrics_data['samples'].append(sample)
-            if duration and (time.time() - start_time) >= duration:
-                break
-            time.sleep(interval)
+        end_epoch = start_time + duration if duration else float('inf')
         
-        self.metrics_data['end_time'] = datetime.utcnow().isoformat() + "Z"
-        self.metrics_data['duration_seconds'] = time.time() - start_time
-    
+        logger.info(f"Starting metrics capture loop for scenario: {scenario_name}")
+        while time.time() < end_epoch:
+            loop_start = time.time()
+            self.collect_sample()
+            
+            elapsed = time.time() - loop_start
+            sleep_time = max(0.0, interval - elapsed)
+            if duration and (time.time() + sleep_time) >= end_epoch:
+                break
+            time.sleep(sleep_time)
+        
+        self.end_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "")
+        duration_seconds = time.time() - start_time
+        
+        # Build payload structure matching target output format
+        self.final_payload = {
+            "scenario": self.scenario_name,
+            "namespace": self.namespace,
+            "start_time": self.start_iso,
+            "end_time": self.end_iso,
+            "duration_seconds": duration_seconds,
+            "summary": self._calculate_summary()
+        }
+
+    def _calculate_summary(self) -> Dict[str, Any]:
+        summary = {
+            "nodes": {},
+            "pods": dict(self.pod_metrics_history),
+            "total_samples": self.total_samples
+        }
+        
+        all_nodes = set(self.node_cpu_raw.keys()).union(self.node_pools.keys())
+        for node in all_nodes:
+            cpu_list = self.node_cpu_raw.get(node, [0.0])
+            mem_list = self.node_mem_raw.get(node, [0.0])
+            
+            # Safe fallbacks if nodes disappear mid-run
+            cpu_avg = sum(cpu_list) / len(cpu_list) if cpu_list else 0.0
+            cpu_max = max(cpu_list) if cpu_list else 0.0
+            cpu_min = min(cpu_list) if cpu_list else 0.0
+            
+            mem_avg = sum(mem_list) / len(mem_list) if mem_list else 0.0
+            mem_max = max(mem_list) if mem_list else 0.0
+            mem_min = min(mem_list) if mem_list else 0.0
+            
+            summary["nodes"][node] = {
+                "node_pool": self.node_pools.get(node, "unknown"),
+                "cpu_avg": cpu_avg,
+                "cpu_max": cpu_max,
+                "cpu_min": cpu_min,
+                "memory_avg": mem_avg,
+                "memory_max": mem_max,
+                "memory_min": mem_min
+            }
+            
+        return summary
+
     def save_metrics(self, scenario_name: str):
-        if not self.enabled or not self.metrics_data['samples']:
+        if not self.enabled or not self.total_samples:
             return
         output_dir = self.results_dir / scenario_name
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        # Clean naming format matching expectations
         with open(output_dir / "k8s_metrics.json", 'w') as f:
-            json.dump(self.metrics_data, f, indent=2)
-        with open(output_dir / "k8s_metrics_summary.json", 'w') as f:
-            json.dump(self._calculate_summary(), f, indent=2)
-        logger.info(f"✓ Metrics saved to: {output_dir}")
-    
-    def _calculate_summary(self) -> Dict[str, Any]:
-        if not self.metrics_data['samples']:
-            return {}
-        summary = {'total_samples': len(self.metrics_data['samples']), 'nodes': {}, 'pods': {}}
-        for sample in self.metrics_data['samples']:
-            for node_name, metrics in sample.get('node_metrics', {}).items():
-                if node_name not in summary['nodes']:
-                    summary['nodes'][node_name] = {'node_pool': metrics.get('node_pool'), 'samples': []}
-                summary['nodes'][node_name]['samples'].append(metrics)
-            for pod_name, metrics in sample.get('pod_metrics', {}).items():
-                if pod_name not in summary['pods']:
-                    summary['pods'][pod_name] = {'samples': []}
-                summary['pods'][pod_name]['samples'].append(metrics)
-        return summary
+            json.dump(self.final_payload, f, indent=2)
+        logger.info(f"✓ Target JSON format payload saved to: {output_dir}")
 
     def reset(self):
-        self.metrics_data = {"start_time": None, "end_time": None, "duration_seconds": 0, "namespace": self.namespace, "samples": [], "summary": {}}
+        self.total_samples = 0
+        self.node_cpu_raw.clear()
+        self.node_mem_raw.clear()
+        self.node_pools.clear()
+        self.pod_metrics_history.clear()
