@@ -621,7 +621,13 @@
                     sweepIndex += sweepCount;
                 });
                 
-                return groups;
+                // Sort groups by display label (which starts with dataset name)
+                const sortedGroups = {};
+                Object.keys(groups).sort().forEach(key => {
+                    sortedGroups[key] = groups[key];
+                });
+                
+                return sortedGroups;
             }
             
             // Fallback: single group
