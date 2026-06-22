@@ -75,6 +75,29 @@ def init_db():
 init_db()
 logger.info(f"Initialized shared state in process (PID: {os.getpid()})")
 
+# Auto-start queue processors when module loads (for Gunicorn workers)
+def _start_queue_processors():
+    """Start queue processors for engines this worker should handle"""
+    if WORKER_ENGINES == 'none':
+        logger.info("WORKER_ENGINES=none: Not starting queue processors")
+        return
+    
+    if WORKER_ENGINES == 'all':
+        engines = ['jvector', 'faiss', 'lucene']
+    else:
+        engines = [e.strip() for e in WORKER_ENGINES.split(',')]
+    
+    logger.info(f"Auto-starting queue processors for engines: {engines}")
+    for engine in engines:
+        with processor_lock:
+            if engine not in running_processors:
+                running_processors.add(engine)
+                executor.submit(process_engine_queue, engine)
+                logger.info(f"✓ Started queue processor for engine: {engine}")
+
+# Start processors when module loads
+_start_queue_processors()
+
 def ensure_processor_running(engine: str):
     """Ensure a queue processor is running for the given engine (if this worker handles it)"""
     # Check if this worker should handle this engine
