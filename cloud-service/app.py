@@ -23,13 +23,6 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, static_folder='web', static_url_path='')
 CORS(app)
 
-# Worker configuration - which engines this worker should process
-# Values: 'all' (default), 'none' (API server only), or comma-separated list like 'jvector,faiss'
-WORKER_ENGINES = os.getenv('WORKER_ENGINES', 'all')
-WORKER_MODE = os.getenv('WORKER_MODE', 'combined')  # 'combined', 'api-only', 'worker-only'
-
-logger.info(f"Worker configuration: WORKER_ENGINES={WORKER_ENGINES}, WORKER_MODE={WORKER_MODE}")
-
 # Initialize components
 config_loader = ConfigLoader(workspace_dir='/workspace')
 benchmark_runner = BenchmarkRunner(config_loader, results_dir='/results')
@@ -76,23 +69,12 @@ init_db()
 logger.info(f"Initialized shared state in process (PID: {os.getpid()})")
 
 def ensure_processor_running(engine: str):
-    """Ensure a queue processor is running for the given engine (if this worker handles it)"""
-    # Check if this worker should handle this engine
-    if WORKER_ENGINES != 'all':
-        if WORKER_ENGINES == 'none':
-            logger.debug(f"Skipping processor for {engine} (worker mode: API-only)")
-            return
-        
-        handled_engines = [e.strip() for e in WORKER_ENGINES.split(',')]
-        if engine not in handled_engines:
-            logger.debug(f"Skipping processor for {engine} (worker handles: {WORKER_ENGINES})")
-            return
-    
+    """Ensure a queue processor is running for the given engine"""
     with processor_lock:
         if engine not in running_processors:
             running_processors.add(engine)
             executor.submit(process_engine_queue, engine)
-            logger.info(f"Started queue processor for engine: {engine} (worker: {WORKER_ENGINES})")
+            logger.info(f"Started queue processor for engine: {engine}")
         else:
             logger.debug(f"Queue processor already running for engine: {engine}")
 
