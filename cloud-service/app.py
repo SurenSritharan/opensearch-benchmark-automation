@@ -1113,6 +1113,25 @@ def get_job_results(job_id: str):
     if not results_dir.exists():
         return jsonify({'error': 'Results directory not found'}), 404
     
+    # Build a map of sweep paths to scenario info from job.result.scenario_results
+    sweep_to_scenario = {}
+    if job.get('result') and job['result'].get('scenario_results'):
+        for scenario_label, scenario_data in job['result']['scenario_results'].items():
+            results_subdir = scenario_data.get('results_dir', '')
+            dataset = scenario_data.get('dataset', '')
+            
+            # Map each sweep in this scenario
+            if scenario_data.get('sweep_results'):
+                for sweep_result in scenario_data['sweep_results']:
+                    sweep_name = sweep_result.get('sweep_name', '')
+                    if sweep_name:
+                        # Build the expected path for this sweep
+                        sweep_path = str(results_dir / results_subdir / sweep_name)
+                        sweep_to_scenario[sweep_path] = {
+                            'scenario_label': scenario_label,
+                            'dataset': dataset
+                        }
+    
     # Collect all sweep results - look in scenario subdirectories
     sweeps = []
     
@@ -1122,8 +1141,16 @@ def get_job_results(job_id: str):
             'sweep_name': sweep_dir.name,
             'test_run': None,
             'workload_params': None,
-            'benchmark_log': None
+            'benchmark_log': None,
+            'scenario_label': None,
+            'dataset': None
         }
+        
+        # Add scenario info if available
+        sweep_path = str(sweep_dir)
+        if sweep_path in sweep_to_scenario:
+            sweep_data['scenario_label'] = sweep_to_scenario[sweep_path]['scenario_label']
+            sweep_data['dataset'] = sweep_to_scenario[sweep_path]['dataset']
         
         # Read test_run.json
         test_run_file = sweep_dir / 'test_run.json'

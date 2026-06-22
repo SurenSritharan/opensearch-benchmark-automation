@@ -588,88 +588,22 @@
             console.log('Grouping sweeps by scenario:');
             console.log('Total sweeps:', sweeps.length);
             
-            // Build a map of scenario labels to datasets and expected sweep results_dirs
-            const scenarioInfo = {};
-            if (job.result && job.result.scenario_results) {
-                Object.entries(job.result.scenario_results).forEach(([label, data]) => {
-                    scenarioInfo[label] = {
-                        results_dir: data.results_dir || '',
-                        sweep_count: data.sweep_results?.length || 0
-                    };
-                });
-            }
-            
-            // Get dataset for each scenario from job.scenarios
-            const scenarioToDataset = {};
-            if (job.scenarios && Array.isArray(job.scenarios)) {
-                job.scenarios.forEach(scenario => {
-                    if (scenario.label && scenario.dataset) {
-                        scenarioToDataset[scenario.label] = scenario.dataset;
-                    }
-                });
-            }
-            
-            console.log('Scenario info:', scenarioInfo);
-            console.log('Scenario to dataset map:', scenarioToDataset);
-            
-            // Match each sweep to its scenario by checking test_run data
+            // Group sweeps by their scenario_label and dataset (now included in each sweep by the API)
             const groups = {};
-            const unmatchedSweeps = [];
             
             sweeps.forEach(sweep => {
-                if (!sweep.test_run || !sweep.test_run['workload-params']) {
-                    unmatchedSweeps.push(sweep);
-                    return;
-                }
+                // Use scenario_label and dataset from the sweep (added by API)
+                const scenarioLabel = sweep.scenario_label || 'Unknown';
+                const dataset = sweep.dataset || '';
                 
-                const params = sweep.test_run['workload-params'];
-                let matchedScenario = null;
+                // Create display label with dataset prefix
+                const displayLabel = dataset ? `${dataset}-${scenarioLabel}` : scenarioLabel;
                 
-                // Try to match this sweep to a scenario based on its parameters
-                for (const [scenarioLabel, info] of Object.entries(scenarioInfo)) {
-                    const dataset = scenarioToDataset[scenarioLabel];
-                    
-                    // Match based on dataset-specific parameters
-                    let isMatch = false;
-                    if (dataset === 'cohere-1m' && params.neighbors_data_set_corpus === 'cohere-1m') {
-                        // Match cohere-1m scenarios by query_k
-                        if (scenarioLabel.includes('k10') && params.query_k === 10) {
-                            isMatch = true;
-                        } else if (scenarioLabel.includes('k100') && params.query_k === 100) {
-                            isMatch = true;
-                        }
-                    } else if (dataset === 'msmarco' && params.target_index_name && params.target_index_name.includes('msmarco')) {
-                        // Match msmarco scenarios by query_k and ef_search
-                        if (scenarioLabel.includes('k10') && params.query_k === 10) {
-                            isMatch = true;
-                        } else if (scenarioLabel.includes('k100') && params.query_k === 100) {
-                            isMatch = true;
-                        }
-                    }
-                    
-                    if (isMatch) {
-                        matchedScenario = scenarioLabel;
-                        break;
-                    }
+                if (!groups[displayLabel]) {
+                    groups[displayLabel] = [];
                 }
-                
-                if (matchedScenario) {
-                    const dataset = scenarioToDataset[matchedScenario];
-                    const displayLabel = dataset ? `${dataset}-${matchedScenario}` : matchedScenario;
-                    
-                    if (!groups[displayLabel]) {
-                        groups[displayLabel] = [];
-                    }
-                    groups[displayLabel].push(sweep);
-                } else {
-                    unmatchedSweeps.push(sweep);
-                }
+                groups[displayLabel].push(sweep);
             });
-            
-            if (unmatchedSweeps.length > 0) {
-                console.warn('Unmatched sweeps:', unmatchedSweeps.length);
-                groups['Unmatched'] = unmatchedSweeps;
-            }
             
             console.log('Grouped scenarios:', Object.keys(groups));
             Object.entries(groups).forEach(([key, sweeps]) => {
