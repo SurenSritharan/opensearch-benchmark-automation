@@ -357,21 +357,22 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
         procedure_name = scenario['procedure_name']
         
         try:
+            # Create unique path for each test: results_base/dataset-label
+            # This prevents tests from overwriting each other
+            scenario_key = f"{dataset}-{label}"
+            scenario_job_id = f"{results_base}/{scenario_key}"
+            
             # Update current scenario in job
             job_data = get_job(job_id)
             if job_data:
-                job_data['current_scenario'] = label
+                job_data['current_scenario'] = scenario_key
                 job_data['current_scenario_index'] = idx
                 if 'scenario_status' not in job_data:
                     job_data['scenario_status'] = {}
-                job_data['scenario_status'][label] = 'running'
+                job_data['scenario_status'][scenario_key] = 'running'
                 save_job(job_id, job_data)
             
             logger.info(f"Batch job {job_id}: Running test {idx+1}/{len(scenarios)}: dataset={dataset}, scenario={label} (procedure: {procedure_name})")
-            
-            # Create unique path for each test: results_base/dataset-label
-            # This prevents tests from overwriting each other
-            scenario_job_id = f"{results_base}/{dataset}-{label}"
             
             # Merge global params with scenario-specific params
             # Scenario params override global params
@@ -392,34 +393,37 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
                 workload_params=workload_params if workload_params else None
             )
             
-            # Store scenario result using label as key, add dataset for frontend display
+            # Store scenario result using dataset-label as key for better identification
             result['dataset'] = dataset
-            batch_results['scenario_results'][label] = result
+            # Store relative path for get_job_results to find sweep directories
+            result['results_subdir'] = scenario_key
+            batch_results['scenario_results'][scenario_key] = result
             
             if result.get('status') == 'completed':
                 batch_results['scenarios_completed'] += 1
                 # Update scenario status
                 job_data = get_job(job_id)
                 if job_data and 'scenario_status' in job_data:
-                    job_data['scenario_status'][label] = 'completed'
+                    job_data['scenario_status'][scenario_key] = 'completed'
                     save_job(job_id, job_data)
-                logger.info(f"Batch job {job_id}: Scenario {label} completed successfully")
+                logger.info(f"Batch job {job_id}: Scenario {scenario_key} completed successfully")
             else:
                 batch_results['scenarios_failed'] += 1
                 # Update scenario status
                 job_data = get_job(job_id)
                 if job_data and 'scenario_status' in job_data:
-                    job_data['scenario_status'][label] = 'failed'
+                    job_data['scenario_status'][scenario_key] = 'failed'
                     save_job(job_id, job_data)
-                logger.error(f"Batch job {job_id}: Scenario {label} failed")
+                logger.error(f"Batch job {job_id}: Scenario {scenario_key} failed")
                 
         except Exception as e:
-            logger.error(f"Batch job {job_id}: Error running scenario {label}: {e}", exc_info=True)
+            scenario_key = f"{dataset}-{label}"
+            logger.error(f"Batch job {job_id}: Error running scenario {scenario_key}: {e}", exc_info=True)
             batch_results['scenarios_failed'] += 1
             # Update scenario status
             job_data = get_job(job_id)
             if job_data and 'scenario_status' in job_data:
-                job_data['scenario_status'][label] = 'error'
+                job_data['scenario_status'][scenario_key] = 'error'
                 save_job(job_id, job_data)
     
     # Update final batch job status
@@ -1117,7 +1121,8 @@ def get_job_results(job_id: str):
     sweep_to_scenario = {}
     if job.get('result') and job['result'].get('scenario_results'):
         for scenario_label, scenario_data in job['result']['scenario_results'].items():
-            results_subdir = scenario_data.get('results_dir', '')
+            # Get the relative subdirectory path (e.g., "cohere-10m-vector-search-k10")
+            results_subdir = scenario_data.get('results_subdir', '')
             dataset = scenario_data.get('dataset', '')
             
             # Map each sweep in this scenario
