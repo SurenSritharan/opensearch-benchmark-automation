@@ -1213,6 +1213,27 @@ def _start_queue_processors():
 _start_queue_processors()
 
 
+# Auto-start queue processors when module loads (for Gunicorn workers)
+def _start_queue_processors():
+    """Start queue processors for engines this worker should handle"""
+    if WORKER_ENGINES == 'none':
+        logger.info("WORKER_ENGINES=none: Not starting queue processors")
+        return
+    
+    engines = ['jvector', 'faiss', 'lucene'] if WORKER_ENGINES == 'all' else [e.strip() for e in WORKER_ENGINES.split(',')]
+    
+    logger.info(f"Auto-starting queue processors for engines: {engines}")
+    for engine in engines:
+        with processor_lock:
+            if engine not in running_processors:
+                running_processors.add(engine)
+                executor.submit(process_engine_queue, engine)
+                logger.info(f"✓ Started queue processor for engine: {engine}")
+
+# Start processors when module loads (after all functions are defined)
+_start_queue_processors()
+
+
 if __name__ == '__main__':
     logger.info("Starting Cloud-Native OpenSearch Benchmark Service")
     logger.info(f"Workspace: /workspace")
