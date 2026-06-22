@@ -306,9 +306,6 @@ def process_engine_queue(engine: str):
                     # Update job with results
                     job_result = get_job(job_id)
                     if job_result:
-                        # Add dataset and scenario_label to result for API consistency
-                        result['dataset'] = dataset
-                        result['scenario_label'] = job_result.get('ui_scenario') or scenario
                         # Store the benchmark result in the 'result' field
                         job_result['result'] = result
                         # Update job status based on benchmark result
@@ -1104,83 +1101,99 @@ def list_jobs():
     })
 
 
-def _parse_sweep_directory(sweep_dir: Path, sweep_name: str, scenario_label: str, dataset: str) -> dict:
-    """Helper function to cleanly read and parse artifacts for a single sweep directory."""
-    sweep_data = {
-        'sweep_name': sweep_name,
-        'test_run': None,
-        'workload_params': None,
-        'benchmark_log': None,
-        'scenario_label': scenario_label,
-        'dataset': dataset
-    }
-    
-    if not sweep_dir.exists():
-        return sweep_data
-
-    # Helper to safely load JSON files
-    for file_name, key in [('test_run.json', 'test_run'), ('workload-params.json', 'workload_params')]:
-        target_file = sweep_dir / file_name
-        if target_file.exists():
-            try:
-                sweep_data[key] = json.loads(target_file.read_text())
-            except Exception as e:
-                logger.error(f"Error reading {file_name} in {sweep_dir}: {e}")
-
-    # Read benchmark.log (last 100 lines)
-    log_file = sweep_dir / 'benchmark.log'
-    if log_file.exists():
-        try:
-            # Efficient way to read trailing lines without loading massive files into memory
-            lines = log_file.read_text().splitlines()
-            sweep_data['benchmark_log'] = '\n'.join(lines[-100:])
-        except Exception as e:
-            logger.error(f"Error reading benchmark.log in {sweep_dir}: {e}")
-
-    return sweep_data
-
-
 @app.route('/api/v1/benchmark/<job_id>/results')
 def get_job_results(job_id: str):
-    """Get results for a specific job by driving file resolution from job metadata."""
+    """Get results for a specific job"""
     job = get_job(job_id)
+    
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     
-    if job.get('status') not in ['completed', 'error']:
+    if job['status'] not in ['completed', 'error']:
         return jsonify({'error': f'Job is {job["status"]}, no results available yet'}), 400
     
+    # Read results from the job's result directory
     results_dir = Path('/results') / job_id
+    
     if not results_dir.exists():
         return jsonify({'error': 'Results directory not found'}), 404
-
+    
+    # Build a map of sweep paths to scenario info from job.result.scenario_results
+    sweep_to_scenario = {}
+    if job.get('result') and job['result'].get('scenario_results'):
+        for scenario_key, scenario_data in job['result']['scenario_results'].items():
+            # Get the relative subdirectory path (e.g., "cohere-10m-vector-search-k10")
+            results_subdir = scenario_data.get('results_subdir', '')
+            # Get dataset from scenario_data, or extract from scenario_key (format: "dataset-label")
+            dataset = scenario_data.get('dataset', '')
+            if not dataset and '-' in scenario_key:
+                # For existing jobs, extract dataset from scenario_key
+                dataset = scenario_key.split('-')[0]
+            # Get scenario_label from scenario_data, or use scenario_key as fallback
+            scenario_label = scenario_data.get('scenario_label', scenario_key)
+            
+            # Map each sweep in this scenario
+            if scenario_data.get('sweep_results'):
+                for sweep_result in scenario_data['sweep_results']:
+                    sweep_name = sweep_result.get('sweep_name', '')
+                    if sweep_name:
+                        # Build the expected path for this sweep
+                        sweep_path = str(results_dir / results_subdir / sweep_name)
+                        sweep_to_scenario[sweep_path] = {
+                            'scenario_label': scenario_label,
+                            'dataset': dataset
+                        }
+    
+    # Collect all sweep results - look in scenario subdirectories
     sweeps = []
     
-    # Extract scenarios from batch structure, or normalize single job to a uniform structure
-    scenario_results = job.get('result', {}).get('scenario_results')
-    
-    if scenario_results:
-        # --- Batch Job Path ---
-        for scenario_label, s_data in scenario_results.items():
-            subdir = s_data.get('results_subdir', '')
-            dataset = s_data.get('dataset', '')
-            label = s_data.get('scenario_label', scenario_label)
-            
-            for sweep in s_data.get('sweep_results', []):
-                sweep_name = sweep.get('sweep_name')
-                if sweep_name:
-                    sweep_path = results_dir / subdir / sweep_name
-                    sweeps.append(_parse_sweep_directory(sweep_path, sweep_name, label, dataset))
-    else:
-        # --- Single Job Path ---
-        # Fallback metadata logic extracted cleanly
-        dataset = job.get('result', {}).get('dataset') or job.get('dataset')
-        label = job.get('result', {}).get('scenario_label') or job.get('ui_scenario') or job.get('scenario')
+    # Find all sweep directories (could be in subdirectories like vector-search/sweep-1)
+    for sweep_dir in sorted(results_dir.glob('**/sweep-*')):
+        sweep_data = {
+            'sweep_name': sweep_dir.name,
+            'test_run': None,
+            'workload_params': None,
+            'benchmark_log': None,
+            'scenario_label': None,
+            'dataset': None
+        }
         
-        # If single jobs are just dropped directly in the root or a known subfolder:
-        for sweep_dir in sorted(results_dir.glob('**/sweep-*')):
-            sweeps.append(_parse_sweep_directory(sweep_dir, sweep_dir.name, label, dataset))
-
+        # Add scenario info if available
+        sweep_path = str(sweep_dir)
+        if sweep_path in sweep_to_scenario:
+            sweep_data['scenario_label'] = sweep_to_scenario[sweep_path]['scenario_label']
+            sweep_data['dataset'] = sweep_to_scenario[sweep_path]['dataset']
+        
+        # Read test_run.json
+        test_run_file = sweep_dir / 'test_run.json'
+        if test_run_file.exists():
+            try:
+                with open(test_run_file) as f:
+                    sweep_data['test_run'] = json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading test_run.json: {e}")
+        
+        # Read workload-params.json
+        params_file = sweep_dir / 'workload-params.json'
+        if params_file.exists():
+            try:
+                with open(params_file) as f:
+                    sweep_data['workload_params'] = json.load(f)
+            except Exception as e:
+                logger.error(f"Error reading workload-params.json: {e}")
+        
+        # Read benchmark.log (last 100 lines)
+        log_file = sweep_dir / 'benchmark.log'
+        if log_file.exists():
+            try:
+                with open(log_file) as f:
+                    lines = f.readlines()
+                    sweep_data['benchmark_log'] = ''.join(lines[-100:])
+            except Exception as e:
+                logger.error(f"Error reading benchmark.log: {e}")
+        
+        sweeps.append(sweep_data)
+    
     return jsonify({
         'job_id': job_id,
         'job': job,
@@ -1285,3 +1298,4 @@ if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=False)
 
 # Made with Bob
+
