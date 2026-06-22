@@ -1157,7 +1157,9 @@ def get_job_results(job_id: str):
     if job.get('status') not in ['completed', 'error']:
         return jsonify({'error': f'Job is {job.get("status", "unknown")}, no results available yet'}), 400
     
-    results_dir = Path('/results') / job_id
+    # Use results_base if available (batch jobs), otherwise use job_id (single jobs)
+    results_base = job.get('results_base', job_id)
+    results_dir = Path('/results') / results_base
     if not results_dir.exists():
         return jsonify({'error': 'Results directory not found'}), 404
 
