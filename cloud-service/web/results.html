@@ -588,50 +588,101 @@
             console.log('Grouping sweeps by scenario:');
             console.log('Total sweeps:', sweeps.length);
             
-            // Use scenario_results from job.result which already groups sweeps by scenario
+            // Build a map of scenario labels to datasets and expected sweep results_dirs
+            const scenarioInfo = {};
             if (job.result && job.result.scenario_results) {
-                const groups = {};
-                const scenarioResults = job.result.scenario_results;
-                
-                // Build a map of scenario labels to datasets from job.scenarios
-                const scenarioToDataset = {};
-                if (job.scenarios && Array.isArray(job.scenarios)) {
-                    job.scenarios.forEach(scenario => {
-                        if (scenario.label && scenario.dataset) {
-                            scenarioToDataset[scenario.label] = scenario.dataset;
-                        }
-                    });
-                }
-                
-                console.log('Scenario results:', Object.keys(scenarioResults));
-                console.log('Scenario to dataset map:', scenarioToDataset);
-                
-                // Match sweeps to scenarios using sweep counts from job.result
-                let sweepIndex = 0;
-                Object.entries(scenarioResults).forEach(([scenarioLabel, scenarioData]) => {
-                    const sweepCount = scenarioData.sweep_results?.length || 0;
-                    
-                    // Get dataset from scenarioData (new jobs) or from job.scenarios (old jobs)
-                    const dataset = scenarioData.dataset || scenarioToDataset[scenarioLabel] || '';
-                    
-                    // Create display label with dataset name
-                    const displayLabel = dataset ? `${dataset}-${scenarioLabel}` : scenarioLabel;
-                    groups[displayLabel] = sweeps.slice(sweepIndex, sweepIndex + sweepCount);
-                    console.log(`${displayLabel}: sweeps ${sweepIndex}-${sweepIndex + sweepCount - 1} (${groups[displayLabel].length} sweeps)`);
-                    sweepIndex += sweepCount;
+                Object.entries(job.result.scenario_results).forEach(([label, data]) => {
+                    scenarioInfo[label] = {
+                        results_dir: data.results_dir || '',
+                        sweep_count: data.sweep_results?.length || 0
+                    };
                 });
-                
-                // Sort groups by display label (which starts with dataset name)
-                const sortedGroups = {};
-                Object.keys(groups).sort().forEach(key => {
-                    sortedGroups[key] = groups[key];
-                });
-                
-                return sortedGroups;
             }
             
-            // Fallback: single group
-            return { 'All Sweeps': sweeps };
+            // Get dataset for each scenario from job.scenarios
+            const scenarioToDataset = {};
+            if (job.scenarios && Array.isArray(job.scenarios)) {
+                job.scenarios.forEach(scenario => {
+                    if (scenario.label && scenario.dataset) {
+                        scenarioToDataset[scenario.label] = scenario.dataset;
+                    }
+                });
+            }
+            
+            console.log('Scenario info:', scenarioInfo);
+            console.log('Scenario to dataset map:', scenarioToDataset);
+            
+            // Match each sweep to its scenario by checking test_run data
+            const groups = {};
+            const unmatchedSweeps = [];
+            
+            sweeps.forEach(sweep => {
+                if (!sweep.test_run || !sweep.test_run['workload-params']) {
+                    unmatchedSweeps.push(sweep);
+                    return;
+                }
+                
+                const params = sweep.test_run['workload-params'];
+                let matchedScenario = null;
+                
+                // Try to match this sweep to a scenario based on its parameters
+                for (const [scenarioLabel, info] of Object.entries(scenarioInfo)) {
+                    const dataset = scenarioToDataset[scenarioLabel];
+                    
+                    // Match based on dataset-specific parameters
+                    let isMatch = false;
+                    if (dataset === 'cohere-1m' && params.neighbors_data_set_corpus === 'cohere-1m') {
+                        // Match cohere-1m scenarios by query_k
+                        if (scenarioLabel.includes('k10') && params.query_k === 10) {
+                            isMatch = true;
+                        } else if (scenarioLabel.includes('k100') && params.query_k === 100) {
+                            isMatch = true;
+                        }
+                    } else if (dataset === 'msmarco' && params.target_index_name && params.target_index_name.includes('msmarco')) {
+                        // Match msmarco scenarios by query_k and ef_search
+                        if (scenarioLabel.includes('k10') && params.query_k === 10) {
+                            isMatch = true;
+                        } else if (scenarioLabel.includes('k100') && params.query_k === 100) {
+                            isMatch = true;
+                        }
+                    }
+                    
+                    if (isMatch) {
+                        matchedScenario = scenarioLabel;
+                        break;
+                    }
+                }
+                
+                if (matchedScenario) {
+                    const dataset = scenarioToDataset[matchedScenario];
+                    const displayLabel = dataset ? `${dataset}-${matchedScenario}` : matchedScenario;
+                    
+                    if (!groups[displayLabel]) {
+                        groups[displayLabel] = [];
+                    }
+                    groups[displayLabel].push(sweep);
+                } else {
+                    unmatchedSweeps.push(sweep);
+                }
+            });
+            
+            if (unmatchedSweeps.length > 0) {
+                console.warn('Unmatched sweeps:', unmatchedSweeps.length);
+                groups['Unmatched'] = unmatchedSweeps;
+            }
+            
+            console.log('Grouped scenarios:', Object.keys(groups));
+            Object.entries(groups).forEach(([key, sweeps]) => {
+                console.log(`  ${key}: ${sweeps.length} sweeps`);
+            });
+            
+            // Sort groups by display label
+            const sortedGroups = {};
+            Object.keys(groups).sort().forEach(key => {
+                sortedGroups[key] = groups[key];
+            });
+            
+            return sortedGroups;
         }
         
         function onScenarioChange() {
