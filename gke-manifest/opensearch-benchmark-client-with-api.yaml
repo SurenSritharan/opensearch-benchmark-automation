@@ -64,6 +64,7 @@ spec:
   resources:
     requests:
       storage: 10Gi
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -84,6 +85,10 @@ spec:
         app: opensearch-benchmark
         component: client
     spec:
+      # Explicit identity configuration to resolve the 401 Unauthorized K8s API issues
+      serviceAccountName: default
+      automountServiceAccountToken: true
+      
       nodeSelector:
         cloud.google.com/gke-nodepool: client-pool
       
@@ -99,7 +104,7 @@ spec:
             apt-get install -y -qq git curl wget vim libhdf5-dev gcc python3-dev jq nmon procps tini
             
             echo "Installing Python packages..."
-            pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn
+            pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn requests
             
             echo "Setting up directories..."
             mkdir -p /datasets/opensearch-benchmark /results /opt/benchmark-src /app/web
@@ -118,7 +123,6 @@ spec:
               git pull origin main || echo "Git pull failed, using existing version"
             fi
             
-            echo "Setting up workspace..."
             if [ ! -d "/workspace/.git" ]; then
               echo "Cloning benchmark automation project (first time)..."
               git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
@@ -142,8 +146,6 @@ spec:
             
             echo "Starting cloud-native API service..."
             cd /app
-            # Run the cloud-native service with Tini as PID 1 for proper signal handling
-            # Tini will forward signals to gunicorn and reap zombie processes
             exec /usr/bin/tini -- gunicorn --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 300 --access-logfile - app:app
         
         env:
@@ -179,14 +181,14 @@ spec:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 60
+          initialDelaySeconds: 300 # Increased to allow apt-get, pip installs, and git clones to finish
           periodSeconds: 30
         
         readinessProbe:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 30
+          initialDelaySeconds: 120 # Gives ample time for build sequence before checking app health
           periodSeconds: 10
       
       volumes:
