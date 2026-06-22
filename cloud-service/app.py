@@ -392,7 +392,8 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
                 workload_params=workload_params if workload_params else None
             )
             
-            # Store scenario result using label as key
+            # Store scenario result using label as key, add dataset for frontend display
+            result['dataset'] = dataset
             batch_results['scenario_results'][label] = result
             
             if result.get('status') == 'completed':

@@ -585,44 +585,34 @@
         let currentScenarioGroups = {};
         
         function groupSweepsByScenario(sweeps, job) {
-            // For batch jobs, use the job's scenarios metadata
-            if (job.scenarios && Array.isArray(job.scenarios)) {
+            console.log('Grouping sweeps by scenario:');
+            console.log('Total sweeps:', sweeps.length);
+            
+            // Use scenario_results from job.result which contains dataset and scenario labels
+            if (job.result && job.result.scenario_results) {
                 const groups = {};
-                const sweepsPerScenario = sweeps.length / job.scenarios.length;
+                const scenarioResults = job.result.scenario_results;
                 
-                console.log('Grouping sweeps by scenario:');
-                console.log('Total sweeps:', sweeps.length);
-                console.log('Scenarios:', job.scenarios.map(s => s.label || s.procedure_name));
-                console.log('Sweeps per scenario:', sweepsPerScenario);
+                console.log('Scenario results:', Object.keys(scenarioResults));
                 
-                // Log each sweep's name to see the pattern
-                sweeps.forEach((sweep, idx) => {
-                    console.log(`Sweep ${idx}: ${sweep.sweep_name}`);
-                });
-                
-                job.scenarios.forEach((scenario, index) => {
-                    const scenarioLabel = scenario.label || scenario.procedure_name;
-                    const startIdx = index * sweepsPerScenario;
-                    const endIdx = startIdx + sweepsPerScenario;
-                    groups[scenarioLabel] = sweeps.slice(startIdx, endIdx);
+                // Match sweeps to scenarios using sweep counts from job.result
+                let sweepIndex = 0;
+                Object.entries(scenarioResults).forEach(([scenarioLabel, scenarioData]) => {
+                    const sweepCount = scenarioData.sweep_results?.length || 0;
+                    const dataset = scenarioData.dataset || '';
                     
-                    console.log(`${scenarioLabel}: sweeps ${startIdx}-${endIdx-1}`);
+                    // Create display label with dataset name
+                    const displayLabel = dataset ? `${dataset}-${scenarioLabel}` : scenarioLabel;
+                    groups[displayLabel] = sweeps.slice(sweepIndex, sweepIndex + sweepCount);
+                    console.log(`${displayLabel}: sweeps ${sweepIndex}-${sweepIndex + sweepCount - 1} (${groups[displayLabel].length} sweeps)`);
+                    sweepIndex += sweepCount;
                 });
                 
                 return groups;
             }
             
-            // Fallback: try to detect from sweep paths
-            const groups = {};
-            sweeps.forEach(sweep => {
-                let scenario = 'All Sweeps';
-                if (sweep.sweep_name && sweep.sweep_name.includes('/')) {
-                    scenario = sweep.sweep_name.split('/')[0];
-                }
-                if (!groups[scenario]) groups[scenario] = [];
-                groups[scenario].push(sweep);
-            });
-            return groups;
+            // Fallback: single group
+            return { 'All Sweeps': sweeps };
         }
         
         function onScenarioChange() {
