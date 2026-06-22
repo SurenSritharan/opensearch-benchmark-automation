@@ -588,18 +588,31 @@
             console.log('Grouping sweeps by scenario:');
             console.log('Total sweeps:', sweeps.length);
             
-            // Use scenario_results from job.result which contains dataset and scenario labels
+            // Use scenario_results from job.result which already groups sweeps by scenario
             if (job.result && job.result.scenario_results) {
                 const groups = {};
                 const scenarioResults = job.result.scenario_results;
                 
+                // Build a map of scenario labels to datasets from job.scenarios
+                const scenarioToDataset = {};
+                if (job.scenarios && Array.isArray(job.scenarios)) {
+                    job.scenarios.forEach(scenario => {
+                        if (scenario.label && scenario.dataset) {
+                            scenarioToDataset[scenario.label] = scenario.dataset;
+                        }
+                    });
+                }
+                
                 console.log('Scenario results:', Object.keys(scenarioResults));
+                console.log('Scenario to dataset map:', scenarioToDataset);
                 
                 // Match sweeps to scenarios using sweep counts from job.result
                 let sweepIndex = 0;
                 Object.entries(scenarioResults).forEach(([scenarioLabel, scenarioData]) => {
                     const sweepCount = scenarioData.sweep_results?.length || 0;
-                    const dataset = scenarioData.dataset || '';
+                    
+                    // Get dataset from scenarioData (new jobs) or from job.scenarios (old jobs)
+                    const dataset = scenarioData.dataset || scenarioToDataset[scenarioLabel] || '';
                     
                     // Create display label with dataset name
                     const displayLabel = dataset ? `${dataset}-${scenarioLabel}` : scenarioLabel;
