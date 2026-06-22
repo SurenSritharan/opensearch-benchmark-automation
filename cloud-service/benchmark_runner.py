@@ -513,6 +513,12 @@ class BenchmarkRunner:
             available = ', '.join(available_engines)
             return f"Engine '{engine}' not supported for dataset '{dataset}'. Available: {available}"
         
+        # Skip file existence checks in API-only mode (files exist on workers, not API server)
+        worker_mode = os.environ.get('WORKER_MODE', 'standalone')
+        if worker_mode == 'api-only':
+            logger.info("Skipping file existence validation (API-only mode - files checked on worker)")
+            return None  # Valid - workers will validate files
+        
         # If using param_files (legacy), check if file exists
         if engine in param_files:
             try:
