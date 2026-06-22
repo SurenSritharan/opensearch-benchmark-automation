@@ -1164,8 +1164,8 @@ def get_job_results(job_id: str):
     sweeps = []
     scenario_results = job.get('result', {}).get('scenario_results')
     
-    if scenario_results:
-        # --- Batch Job Path ---
+    if scenario_results and len(scenario_results) > 0:
+        # --- Batch Job Path (with scenario_results populated) ---
         for scenario_key, s_data in scenario_results.items():
             subdir = s_data.get('results_subdir', '')
             dataset = s_data.get('dataset', '')
@@ -1176,6 +1176,19 @@ def get_job_results(job_id: str):
                 if sweep_name:
                     sweep_path = results_dir / subdir / sweep_name
                     sweeps.append(_parse_sweep_directory(sweep_path, sweep_name, label, dataset))
+    elif job.get('scenarios'):
+        # --- Batch Job Path (legacy/existing jobs without scenario_results) ---
+        # Reconstruct from job.scenarios and file system
+        for scenario in job.get('scenarios', []):
+            dataset = scenario.get('dataset', '')
+            label = scenario.get('label', '')
+            scenario_key = f"{dataset}-{label}"
+            
+            # Look for sweep directories in the scenario subdirectory
+            scenario_dir = results_dir / scenario_key
+            if scenario_dir.exists():
+                for sweep_dir in sorted(scenario_dir.glob('sweep-*')):
+                    sweeps.append(_parse_sweep_directory(sweep_dir, sweep_dir.name, label, dataset))
     else:
         # --- Single Job Path ---
         dataset = job.get('result', {}).get('dataset') or job.get('dataset')
