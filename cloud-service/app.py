@@ -881,7 +881,7 @@ def get_job_status(job_id: str):
     return jsonify(job)
 
 
-@app.route('/api/v1/benchmark/<job_id>', methods=['DELETE'])
+@app.route('/api/v1/benchmark/<job_id>/cancel', methods=['POST'])
 def cancel_job(job_id: str):
     """Cancel a queued or running job"""
     import subprocess as sp
@@ -1006,6 +1006,76 @@ def cancel_job(job_id: str):
             'error': f'Unknown job status: {status}',
             'job_id': job_id
         }), 400
+
+
+@app.route('/api/v1/benchmark/<job_id>', methods=['DELETE'])
+def delete_job(job_id: str):
+    """
+    Delete a job from the database and optionally clean up its results.
+    
+    Query parameters:
+    - cleanup_results: If 'true', also delete the results directory (default: false)
+    """
+    try:
+        job = get_job(job_id)
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+        
+        status = job['status']
+        
+        # Don't allow deletion of running jobs
+        if status == 'running':
+            return jsonify({
+                'error': 'Cannot delete a running job. Cancel it first.',
+                'job_id': job_id,
+                'status': status
+            }), 400
+        
+        # Check if we should clean up results
+        cleanup_results = request.args.get('cleanup_results', 'false').lower() == 'true'
+        results_deleted = False
+        
+        if cleanup_results:
+            # Determine results directory
+            results_dir = None
+            if job.get('options', {}).get('_batch_metadata', {}).get('results_base'):
+                # Batch job
+                results_dir = Path(job['options']['_batch_metadata']['results_base'])
+            elif job.get('result', {}).get('results_dir'):
+                # Single job
+                results_dir = Path(job['result']['results_dir'])
+            
+            # Delete results directory if it exists
+            if results_dir and results_dir.exists():
+                import shutil
+                try:
+                    shutil.rmtree(results_dir)
+                    results_deleted = True
+                    logger.info(f"Deleted results directory for job {job_id}: {results_dir}")
+                except Exception as e:
+                    logger.error(f"Failed to delete results directory {results_dir}: {e}")
+        
+        # Delete job from database
+        with db_lock:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+                conn.commit()
+        
+        logger.info(f"Deleted job {job_id} from database")
+        
+        return jsonify({
+            'message': 'Job deleted successfully',
+            'job_id': job_id,
+            'previous_status': status,
+            'results_deleted': results_deleted
+        })
+        
+    except Exception as e:
+        logger.error(f"Error deleting job {job_id}: {e}")
+        return jsonify({
+            'error': f'Failed to delete job: {str(e)}',
+            'job_id': job_id
+        }), 500
 
 
 @app.route('/api/v1/benchmark')
