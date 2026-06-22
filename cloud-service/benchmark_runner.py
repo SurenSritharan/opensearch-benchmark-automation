@@ -5,11 +5,13 @@ import logging
 import os
 import json
 import requests
+import threading
 from requests.auth import HTTPBasicAuth
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
 from config_loader import ConfigLoader
+from k8s_metrics_collector import K8sMetricsCollector
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +136,8 @@ class BenchmarkRunner:
         self.config = config_loader
         self.results_dir = Path(results_dir)
         self.results_dir.mkdir(parents=True, exist_ok=True)
+        self.metrics_collector = None
+        self.metrics_thread = None
     
     def run_benchmark(
         self,
@@ -324,6 +328,24 @@ class BenchmarkRunner:
                         sweep_results_dir = self.results_dir / job_id / scenario
                 sweep_results_dir.mkdir(parents=True, exist_ok=True)
                 
+                # Initialize metrics collector if enabled
+                if enable_metrics:
+                    # Determine namespace from engine
+                    namespace = f"os-{engine}"
+                    logger.info(f"📊 Initializing metrics collection for namespace: {namespace}")
+                    
+                    try:
+                        self.metrics_collector = K8sMetricsCollector(
+                            namespace=namespace,
+                            results_dir=sweep_results_dir,
+                            enabled=True
+                        )
+                        logger.info("✓ Metrics collector initialized")
+                    except Exception as e:
+                        logger.warning(f"Failed to initialize metrics collector: {e}")
+                        logger.warning("Continuing without metrics collection")
+                        self.metrics_collector = None
+                
                 # Clear benchmark logs before starting this sweep
                 self._clear_benchmark_logs()
                 
@@ -359,6 +381,25 @@ class BenchmarkRunner:
                 logger.info(f"Target host: {target_host}")
                 logger.info(f"Workload path: {workload_path}")
                 
+                # Start metrics collection in background thread if enabled
+                if self.metrics_collector:
+                    logger.info("📊 Starting metrics collection in background...")
+                    
+                    def collect_metrics():
+                        try:
+                            # Collect metrics continuously during benchmark
+                            self.metrics_collector.start_collection(
+                                scenario_name=f"{dataset}-{scenario}-sweep{sweep_idx}",
+                                interval=10,  # Collect every 10 seconds
+                                duration=None  # Run until benchmark completes
+                            )
+                        except Exception as e:
+                            logger.error(f"Error in metrics collection thread: {e}")
+                    
+                    self.metrics_thread = threading.Thread(target=collect_metrics, daemon=True)
+                    self.metrics_thread.start()
+                    logger.info("✓ Metrics collection started")
+                
                 # Execute benchmark in its own process group for proper signal handling
                 # This allows us to kill the entire process tree when cancelling
                 start_time = datetime.utcnow()
@@ -371,6 +412,16 @@ class BenchmarkRunner:
                     start_new_session=True  # Create new process group
                 )
                 end_time = datetime.utcnow()
+                
+                # Stop metrics collection
+                if self.metrics_collector and self.metrics_thread:
+                    logger.info("📊 Stopping metrics collection...")
+                    # The collector will stop when we save metrics
+                    try:
+                        self.metrics_collector.save_metrics(f"{dataset}-{scenario}-sweep{sweep_idx}")
+                        logger.info("✓ Metrics saved")
+                    except Exception as e:
+                        logger.error(f"Error saving metrics: {e}")
                 
                 duration = (end_time - start_time).total_seconds()
                 
