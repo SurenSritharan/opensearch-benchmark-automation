@@ -124,9 +124,6 @@ datasets:
       - name: "cohere_msmarco_base.fvec"
         url: "{{base_url}}/cohere_msmarco_base.fvec"
         # Range automatically calculated based on corpus_size and dimension
-      - name: "cohere_msmarco_indices_d1024_k{{k}}_{{corpus_size}}.ivec"
-        url: "{{base_url}}/cohere_msmarco_indices_d1024_k{{k}}_{{corpus_size}}.ivec"
-        # Downloaded for each k in supported_k_values
       - name: "cohere_msmarco_queries.fvec"
         url: "{{base_url}}/cohere_msmarco_queries.fvec"
     # Test procedures for msmarco

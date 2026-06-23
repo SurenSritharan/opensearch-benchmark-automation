@@ -257,6 +257,28 @@ class ConfigLoader:
         namespace = f"os-{engine}"
         return f"opensearch-cluster.{namespace}.svc.cluster.local:9200"
     
+    def resolve_workload_params(
+        self,
+        dataset_name: str,
+        base_params: Optional[Dict[str, Any]] = None,
+        runtime_params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Merge and resolve workload params in one place."""
+        dataset_config = self.get_dataset_config(dataset_name)
+        merged_params = (base_params or {}).copy()
+        if runtime_params:
+            merged_params.update(runtime_params)
+
+        resolved_params = self._resolve_template_vars(merged_params, dataset_config)
+
+        needs_ground_truth = 'queries_file' in resolved_params and ('query_k' in resolved_params or 'k' in resolved_params)
+        ground_truth_template = resolved_params.get('ground_truth_file_template')
+        if needs_ground_truth and ground_truth_template and 'ground_truth_file' not in resolved_params:
+            resolved_params['ground_truth_file'] = ground_truth_template
+            logger.info(f"Resolved ground_truth_file from template: {resolved_params['ground_truth_file']}")
+
+        return resolved_params
+
     def download_dataset_files(self, dataset_name: str, params: Optional[Dict[str, Any]] = None) -> bool:
         """Download dataset files locally for a dataset if they do not already exist."""
         dataset_config = self.get_dataset_config(dataset_name)
@@ -285,22 +307,17 @@ class ConfigLoader:
             if 'data_files' in dataset_config:
                 resolved_files = []
                 for file_info in dataset_config['data_files']:
-                    has_k_template = any('{{k}}' in str(v) for v in file_info.values())
-                    
-                    if has_k_template:
-                        logger.info(f"Skipping ground truth file template (will download on-demand per sweep): {file_info.get('name', 'unknown')}")
-                        continue
-                    
                     resolved_file = {}
                     for key, value in file_info.items():
                         if isinstance(value, str):
                             value = value.replace('{{base_url}}', base_url)
                             value = value.replace('{{corpus_size}}', corpus_size)
+                            value = value.replace('{{query_k}}', str(params.get('query_k', params.get('k', 100))))
                         resolved_file[key] = value
                     resolved_files.append(resolved_file)
                 
                 dataset_config['data_files'] = resolved_files
-                logger.info(f"Resolved {len(resolved_files)} base data files (ground truth files handled per-sweep)")
+                logger.info(f"Resolved {len(resolved_files)} data files")
         
         data_files = dataset_config.get('data_files', [])
         if not data_files:
@@ -435,13 +452,8 @@ class ConfigLoader:
         # Check if user provided num_vectors directly in params
         if 'num_vectors' in params or 'target_index_num_vectors' in params:
             num_vectors_raw = params.get('num_vectors', params.get('target_index_num_vectors'))
-            
-            # Parse num_vectors if it's a string (e.g., "1m", "10m")
-            if isinstance(num_vectors_raw, str):
-                num_vectors = get_num_vectors(num_vectors_raw)
-                logger.info(f"Parsed num_vectors '{num_vectors_raw}' to {num_vectors}")
-            else:
-                num_vectors = num_vectors_raw
+            num_vectors = get_num_vectors(num_vectors_raw)
+            logger.info(f"Parsed num_vectors '{num_vectors_raw}' to {num_vectors}")
             
             # Auto-select corpus_size from num_vectors
             corpus_size = self._select_corpus_size_from_num_vectors(num_vectors, dataset_config)
@@ -452,17 +464,17 @@ class ConfigLoader:
         
         # For cohere datasets, determine the appropriate source file
         # Use the smallest file that contains enough vectors
-        source_file = self._select_source_file(corpus_size, dataset_config)
+        source_file = self._select_source_file_for_count(num_vectors)
         
         # Corpus name for dynamic corpus definitions
         corpus_name = f"cohere-{corpus_size}" if 'cohere' in dataset_config.get('workload', '') else corpus_size
         
-        # Get k value from params (for ground truth files)
+        # Get query_k value from params (for ground truth files)
         # Validate against supported_k_values
-        k_value = params.get('query_k', params.get('k', 100))
+        query_k_value = params.get('query_k', params.get('k', 100))
         supported_k_values = dataset_config.get('supported_k_values', [100])
-        if k_value not in supported_k_values:
-            logger.warning(f"k={k_value} not in supported_k_values {supported_k_values}. Ground truth may not be available.")
+        if query_k_value not in supported_k_values:
+            logger.warning(f"query_k={query_k_value} not in supported_k_values {supported_k_values}. Ground truth may not be available.")
         
         template_vars = {
             'corpus_size': corpus_size,
@@ -470,7 +482,7 @@ class ConfigLoader:
             'num_vectors': num_vectors,
             'source_file': source_file,
             'base_url': base_url,
-            'k': k_value
+            'query_k': query_k_value
         }
         
         def resolve_value(value: Any) -> Any:

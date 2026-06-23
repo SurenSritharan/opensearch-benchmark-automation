@@ -105,8 +105,6 @@ class BenchmarkRunner:
             procedure_base_params = {}
             if procedure_config:
                 procedure_base_params = procedure_config.get('params', {}).copy()
-                # Resolve template variables in procedure params
-                procedure_base_params = self._resolve_template_vars(procedure_base_params, dataset_config)
                 if procedure_base_params:
                     logger.info(f"Loaded procedure base params: {list(procedure_base_params.keys())}")
                 
@@ -114,8 +112,6 @@ class BenchmarkRunner:
                 procedure_engine_params = procedure_config.get('engine_params', {})
                 if procedure_engine_params and engine in procedure_engine_params:
                     proc_engine_specific = procedure_engine_params[engine].copy()
-                    # Resolve template variables in procedure engine params
-                    proc_engine_specific = self._resolve_template_vars(proc_engine_specific, dataset_config)
                     procedure_base_params.update(proc_engine_specific)
                     logger.info(f"Loaded procedure engine params for {engine}: {list(procedure_engine_params[engine].keys())}")
             
@@ -125,17 +121,13 @@ class BenchmarkRunner:
                 merged_params = base_params.copy()
                 merged_params.update(procedure_base_params)
                 if workload_params:
-                    merged_params.update(workload_params)
                     logger.info(f"Merged with runtime params: {list(workload_params.keys())}")
 
-                merged_params = self.config._resolve_template_vars(merged_params, dataset_config)
-
-                ground_truth_template = merged_params.get('ground_truth_file_template')
-                if ground_truth_template and 'ground_truth_file' not in merged_params:
-                    merged_params['ground_truth_file'] = ground_truth_template
-                    logger.info(f"Resolved ground_truth_file from template: {merged_params['ground_truth_file']}")
-                
-                final_params = merged_params if merged_params else None
+                final_params = self.config.resolve_workload_params(
+                    dataset,
+                    merged_params,
+                    workload_params
+                )
                 parameter_sweeps = [{'params': final_params}] if final_params else [{}]
             
             # Run benchmark for each parameter sweep
@@ -144,23 +136,21 @@ class BenchmarkRunner:
                 logger.info(f"Running parameter sweep {sweep_idx}/{len(parameter_sweeps)}")
                 
                 # Merge in order: base_params + procedure_base_params + sweep params + runtime params
-                final_params = base_params.copy()
-                final_params.update(procedure_base_params)
+                merged_params = base_params.copy()
+                merged_params.update(procedure_base_params)
                 
                 sweep_params = sweep.get('params', {})
                 if sweep_params:
-                    final_params.update(sweep_params)
+                    merged_params.update(sweep_params)
                     logger.info(f"Sweep params: {list(sweep_params.keys())}")
                 if workload_params:
-                    final_params.update(workload_params)
                     logger.info(f"Runtime params: {list(workload_params.keys())}")
 
-                final_params = self.config._resolve_template_vars(final_params, dataset_config)
-
-                ground_truth_template = final_params.get('ground_truth_file_template')
-                if ground_truth_template and 'ground_truth_file' not in final_params:
-                    final_params['ground_truth_file'] = ground_truth_template
-                    logger.info(f"Resolved ground_truth_file from template: {final_params['ground_truth_file']}")
+                final_params = self.config.resolve_workload_params(
+                    dataset,
+                    merged_params,
+                    workload_params
+                )
                 
                 # Download dataset files for THIS sweep's corpus_size and k value
                 # Files are checked for existence, so no re-downloading if already present
@@ -540,112 +530,3 @@ class BenchmarkRunner:
 # Made with Bob
 
     
-    def _resolve_template_vars(self, params: Dict[str, Any], dataset_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Resolve template variables like {{corpus_size}} in parameters
-        
-        Args:
-            params: Parameters dictionary that may contain template variables
-            dataset_config: Dataset configuration containing variable values
-            
-        Returns:
-            Parameters with resolved template variables
-        """
-        # Get template variable values from dataset config
-        corpus_size = dataset_config.get('corpus_size', '1m')
-        corpus_size_map = dataset_config.get('corpus_size_map', {
-            '1m': 1000000,
-            '10m': 10000000,
-            '100m': 100000000,
-            '1b': 1000000000
-        })
-        
-        # Get num_vectors from corpus_size_map
-        num_vectors = corpus_size_map.get(corpus_size, 1000000)
-        
-        # For cohere datasets, determine the appropriate source file
-        source_file = self._select_source_file(corpus_size, dataset_config)
-        
-        # Corpus name for dynamic corpus definitions
-        corpus_name = f"cohere-{corpus_size}" if 'cohere' in dataset_config.get('workload', '') else corpus_size
-        
-        template_vars = {
-            'corpus_size': corpus_size,
-            'corpus_name': corpus_name,
-            'num_vectors': num_vectors,
-            'source_file': source_file
-        }
-        
-        def resolve_value(value: Any) -> Any:
-            """Recursively resolve template variables in a value"""
-            if isinstance(value, str):
-                # Replace {{variable}} patterns
-                for var_name, var_value in template_vars.items():
-                    pattern = f'{{{{{var_name}}}}}'
-                    if pattern in value:
-                        value = value.replace(pattern, str(var_value))
-                return value
-            elif isinstance(value, dict):
-                return {k: resolve_value(v) for k, v in value.items()}
-            elif isinstance(value, list):
-                return [resolve_value(item) for item in value]
-            else:
-                return value
-        
-        resolved_params = resolve_value(params)
-        
-        # Ensure we return a dict
-        if not isinstance(resolved_params, dict):
-            logger.warning(f"Template resolution did not return a dict, returning original params")
-            return params
-        
-        # Add num_vectors if not already present (for bulk ingestion)
-        if 'target_index_num_vectors' not in resolved_params and 'num_vectors' in template_vars:
-            resolved_params['target_index_num_vectors'] = template_vars['num_vectors']
-            logger.debug(f"Added target_index_num_vectors={template_vars['num_vectors']} based on corpus_size={corpus_size}")
-        
-        return resolved_params
-    
-    def _select_source_file(self, corpus_size: str, dataset_config: Dict[str, Any]) -> str:
-        """Select the appropriate source file for a given corpus size
-        
-        For sizes that match exactly, use the corresponding file.
-        For sizes in between, use the next larger file.
-        
-        Args:
-            corpus_size: The requested corpus size (e.g., "5m")
-            dataset_config: Dataset configuration
-            
-        Returns:
-            Source file name (e.g., "documents-10m.hdf5.bz2")
-        """
-        source_file_map = dataset_config.get('source_file_map', {})
-        corpus_size_map = dataset_config.get('corpus_size_map', {})
-        
-        # If exact match exists, use it
-        if corpus_size in source_file_map:
-            return source_file_map[corpus_size]
-        
-        # Otherwise, find the smallest file that contains enough vectors
-        requested_count = corpus_size_map.get(corpus_size, 1000000)
-        
-        # Sort available sizes by document count
-        available_sizes = sorted(
-            [(size, corpus_size_map.get(size, 0), source_file_map.get(size, ''))
-             for size in source_file_map.keys()],
-            key=lambda x: x[1]
-        )
-        
-        # Find the smallest file that has enough documents
-        for size, count, file in available_sizes:
-            if count >= requested_count:
-                logger.info(f"Selected source file '{file}' (contains {count} docs) for corpus_size '{corpus_size}' ({requested_count} docs)")
-                return file
-        
-        # Fallback to largest available file
-        if available_sizes:
-            largest_file = available_sizes[-1][2]
-            logger.warning(f"No file large enough for {requested_count} docs, using largest: {largest_file}")
-            return largest_file
-        
-        # Ultimate fallback
-        return "documents-1m.hdf5.bz2"
