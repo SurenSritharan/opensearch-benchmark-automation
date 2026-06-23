@@ -102,7 +102,6 @@ datasets:
     # Common parameters shared across all scenarios
     common_params:
       target_index_name: "cohere-msmarco-1024"
-      target_index_body: "indices/index.json"
     
     # Engine-specific parameters (used across scenarios)
     engine_params:
@@ -145,9 +144,10 @@ datasets:
       
       - name: "bulk-ingest-only"
         params:
-          target_index_bulk_size: 500
+          target_index_bulk_size: 5000
           target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base_{{corpus_size}}.fvec"
           target_index_bulk_indexing_clients: 8
+          num_vectors: "{{num_vectors}}"
       
       - name: "refresh"
         params: {}
@@ -161,6 +161,7 @@ datasets:
           queries_file: "/datasets/msmarco/cohere_msmarco_queries.fvec"
           ground_truth_file_template: "/datasets/msmarco/cohere_msmarco_indices_d1024_k{{query_k}}_{{corpus_size}}.ivec"
           target_field_name: "vector"
+          query_k: "{{query_k}}"
           query_body:
             docvalue_fields: ["_id"]
             stored_fields: "_none_"
