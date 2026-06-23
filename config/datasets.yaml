@@ -61,7 +61,6 @@ datasets:
           # target_index_num_vectors will be calculated dynamically based on corpus_size
       
       - name: "search-only"
-        alias: "vector-search-k10"
         params:
           # reads queries and ground truth from HDF5 corpus file (instead of generating from blobs)
           query_data_set_format: "hdf5"
@@ -73,47 +72,14 @@ datasets:
             stored_fields: "_none_"
             _source: false
           number_of_repetitions: 1000
-          query_k: 10
           warmup_time_period: 60
           time_period: 300
         parameter_sweeps:
-          - params:
-              search_clients: 4
-          - params:
-              search_clients: 8
-          - params:
-              search_clients: 10
-          - params:
-              search_clients: 12
-          - params:
-              search_clients: 16
-      
-      - name: "search-only"
-        alias: "vector-search-k100"
-        params:
-          query_data_set_format: "hdf5"
-          query_data_set_corpus: "cohere-{{corpus_size}}"
-          neighbors_data_set_format: "hdf5"
-          neighbors_data_set_corpus: "cohere-{{corpus_size}}"
-          query_body:
-            docvalue_fields: ["_id"]
-            stored_fields: "_none_"
-            _source: false
-          number_of_repetitions: 1000
-          query_k: 100
-          warmup_time_period: 60
-          time_period: 300
-        parameter_sweeps:
-          - params:
-              search_clients: 4
-          - params:
-              search_clients: 8
-          - params:
-              search_clients: 10
-          - params:
-              search_clients: 12
-          - params:
-              search_clients: 16
+          - params: { search_clients: 4 }
+          - params: { search_clients: 8 }
+          - params: { search_clients: 10 }
+          - params: { search_clients: 12 }
+          - params: { search_clients: 16 }
   msmarco:
     dimension: 1024
     format: fvec
@@ -140,8 +106,7 @@ datasets:
       target_field_name: "vector"
       space_type: "cosinesimil"
       corpus_size: "{{corpus_size}}"  # Pass to workload for dynamic resolution
-      # Ground truth files - dynamically generated for each k in supported_k_values
-      ground_truth_file_template: "/datasets/msmarco/cohere_msmarco_indices_d1024_k{{k}}_{{corpus_size}}.ivec"
+      
     
     # Engine-specific parameters (used across scenarios)
     engine_params:
@@ -186,7 +151,7 @@ datasets:
       - name: "bulk-ingest-only"
         params:
           target_index_bulk_size: 500
-          target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base.fvec"
+          target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base_{{corpus_size}}.fvec"
           target_index_bulk_indexing_clients: 8
       
       - name: "refresh"
@@ -197,52 +162,21 @@ datasets:
           target_index_max_num_segments: 1
       
       - name: "vector-search"
-        alias: "vector-search-k100-ef100"
         params:
           queries_file: "/datasets/msmarco/cohere_msmarco_queries.fvec"
+          ground_truth_file_template: "/datasets/msmarco/cohere_msmarco_indices_d1024_k{{query_k}}_{{corpus_size}}.ivec"
           query_body:
             docvalue_fields: ["_id"]
             stored_fields: "_none_"
             _source: false
-          query_k: 100
-          ef_search: 100
           warmup_time_period: 60
           time_period: 300
         parameter_sweeps:
-          - params:
-              search_clients: 4
-          - params:
-              search_clients: 8
-          - params:
-              search_clients: 10
-          - params:
-              search_clients: 12
-          - params:
-              search_clients: 16
-      
-      - name: "vector-search"
-        alias: "vector-search-k10-ef32"
-        params:
-          queries_file: "/datasets/msmarco/cohere_msmarco_queries.fvec"
-          query_body:
-            docvalue_fields: ["_id"]
-            stored_fields: "_none_"
-            _source: false
-          query_k: 10
-          ef_search: 32
-          warmup_time_period: 60
-          time_period: 300
-        parameter_sweeps:
-          - params:
-              search_clients: 4
-          - params:
-              search_clients: 8
-          - params:
-              search_clients: 10
-          - params:
-              search_clients: 12
-          - params:
-              search_clients: 16
+          - params: { search_clients: 4 }
+          - params: { search_clients: 8 }
+          - params: { search_clients: 10 }
+          - params: { search_clients: 12 }
+          - params: { search_clients: 16 }
 
     
 
