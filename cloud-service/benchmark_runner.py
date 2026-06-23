@@ -127,6 +127,13 @@ class BenchmarkRunner:
                 if workload_params:
                     merged_params.update(workload_params)
                     logger.info(f"Merged with runtime params: {list(workload_params.keys())}")
+
+                merged_params = self.config._resolve_template_vars(merged_params, dataset_config)
+
+                ground_truth_template = merged_params.get('ground_truth_file_template')
+                if ground_truth_template and 'ground_truth_file' not in merged_params:
+                    merged_params['ground_truth_file'] = ground_truth_template
+                    logger.info(f"Resolved ground_truth_file from template: {merged_params['ground_truth_file']}")
                 
                 final_params = merged_params if merged_params else None
                 parameter_sweeps = [{'params': final_params}] if final_params else [{}]
@@ -147,6 +154,13 @@ class BenchmarkRunner:
                 if workload_params:
                     final_params.update(workload_params)
                     logger.info(f"Runtime params: {list(workload_params.keys())}")
+
+                final_params = self.config._resolve_template_vars(final_params, dataset_config)
+
+                ground_truth_template = final_params.get('ground_truth_file_template')
+                if ground_truth_template and 'ground_truth_file' not in final_params:
+                    final_params['ground_truth_file'] = ground_truth_template
+                    logger.info(f"Resolved ground_truth_file from template: {final_params['ground_truth_file']}")
                 
                 # Download dataset files for THIS sweep's corpus_size and k value
                 # Files are checked for existence, so no re-downloading if already present
