@@ -386,7 +386,6 @@ class BenchmarkRunner:
                 # Download dataset files for THIS sweep's corpus_size and k value
                 # Files are checked for existence, so no re-downloading if already present
                 if dataset_config:
-                    logger.info(f"Checking dataset files for sweep {sweep_idx} (corpus_size from params)...")
                     if not download_dataset_files(dataset_config, final_params):
                         return {
                             'status': 'failed',
