@@ -381,14 +381,13 @@ class ConfigLoader:
                 
                 result = subprocess.run(
                     wget_cmd,
-                    capture_output=True,
-                    text=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     timeout=3600
                 )
                 
                 if result.returncode != 0:
                     logger.error(f"Failed to download {target_file_name}")
-                    logger.error(f"STDERR: {result.stderr}")
                     return False
                 
                 if file_path.exists():
