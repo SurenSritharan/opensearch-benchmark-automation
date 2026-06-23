@@ -269,7 +269,7 @@ class BenchmarkRunner:
                     '--client-options', 'timeout:300,use_ssl:true,verify_certs:false,basic_auth_user:admin,basic_auth_password:admin',
                     '--test-procedure', scenario,
                     '--kill-running-processes',  # Clean up any stuck processes
-                    '--user-tags', user_tags_str  # Add metadata tags
+                    f'--user-tag={user_tags_str}'  # Add metadata tags
                 ]
                 
                 # Write workload params to a JSON file for this sweep
