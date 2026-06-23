@@ -450,8 +450,8 @@ class ConfigLoader:
         base_url = dataset_config.get('base_url', '')
         
         # Check if user provided num_vectors directly in params
-        if 'num_vectors' in params or 'target_index_num_vectors' in params:
-            num_vectors_raw = params.get('num_vectors', params.get('target_index_num_vectors'))
+        if 'num_vectors' in params:
+            num_vectors_raw = params.get('num_vectors')
             num_vectors = get_num_vectors(num_vectors_raw)
             logger.info(f"Parsed num_vectors '{num_vectors_raw}' to {num_vectors}")
             
@@ -509,9 +509,18 @@ class ConfigLoader:
             return params
         
         # Add num_vectors if not already present (for bulk ingestion)
-        if 'target_index_num_vectors' not in resolved_params and 'num_vectors' in template_vars:
-            resolved_params['target_index_num_vectors'] = template_vars['num_vectors']
-            logger.debug(f"Added target_index_num_vectors={template_vars['num_vectors']} based on corpus_size={corpus_size}")
+        if 'num_vectors' not in resolved_params and 'num_vectors' in template_vars:
+            resolved_params['num_vectors'] = template_vars['num_vectors']
+            logger.debug(f"Added num_vectors={template_vars['num_vectors']} based on corpus_size={corpus_size}")
+        
+        # corpus_size and corpus_name are internal template-resolution helpers and
+        # should not be forwarded to OSB unless explicitly required by a workload template.
+        if 'corpus_size' in resolved_params:
+            resolved_params.pop('corpus_size')
+            logger.debug("Removed internal corpus_size from resolved workload params")
+        if 'corpus_name' in resolved_params:
+            resolved_params.pop('corpus_name')
+            logger.debug("Removed internal corpus_name from resolved workload params")
         
         return resolved_params
     
