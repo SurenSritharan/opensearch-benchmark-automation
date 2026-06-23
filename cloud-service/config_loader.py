@@ -147,6 +147,7 @@ class ConfigLoader:
         
         Merges default_params with engine-specific params from engine_params.
         Falls back to reading param_files if engine_params not available (legacy support).
+        Resolves template variables like {{corpus_size}}.
         """
         dataset_config = self.get_dataset_config(dataset_name)
         
@@ -157,6 +158,8 @@ class ConfigLoader:
             merged_params = dataset_config.get('default_params', {}).copy()
             merged_params.update(engine_params_config[engine])
             logger.debug(f"Using engine_params for {dataset_name}/{engine}")
+            # Resolve template variables
+            merged_params = self._resolve_template_vars(merged_params, dataset_config)
             return merged_params
         
         # Fallback: Try to read from param_files (legacy approach)
@@ -226,5 +229,188 @@ class ConfigLoader:
         """Get list of test procedure names for a dataset"""
         procedures = self.get_test_procedures(dataset_name)
         return [p.get('name') if isinstance(p, dict) else p for p in procedures]
+    
+    def _resolve_template_vars(self, params: Dict[str, Any], dataset_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Recursively resolve template variables like {{corpus_size}} in parameters
+        
+        Args:
+            params: Parameters dictionary that may contain template variables
+            dataset_config: Dataset configuration containing variable values
+            
+        Returns:
+            Parameters with resolved template variables
+        """
+        # Get template variable values from dataset config
+        corpus_size = dataset_config.get('corpus_size', '1m')
+        base_url = dataset_config.get('base_url', '')
+        
+        # Check if user provided num_vectors directly in params
+        if 'num_vectors' in params or 'target_index_num_vectors' in params:
+            num_vectors_raw = params.get('num_vectors', params.get('target_index_num_vectors'))
+            
+            # Parse num_vectors if it's a string (e.g., "1m", "10m")
+            if isinstance(num_vectors_raw, str):
+                num_vectors = self._parse_corpus_size(num_vectors_raw)
+                logger.info(f"Parsed num_vectors '{num_vectors_raw}' to {num_vectors}")
+            else:
+                num_vectors = num_vectors_raw
+            
+            # Auto-select corpus_size from num_vectors
+            corpus_size = self._select_corpus_size_from_num_vectors(num_vectors, dataset_config)
+            logger.info(f"Auto-selected corpus_size '{corpus_size}' for num_vectors={num_vectors}")
+        else:
+            # Parse corpus_size to get num_vectors
+            num_vectors = self._parse_corpus_size(corpus_size)
+        
+        # For cohere datasets, determine the appropriate source file
+        # Use the smallest file that contains enough vectors
+        source_file = self._select_source_file(corpus_size, dataset_config)
+        
+        # Corpus name for dynamic corpus definitions
+        corpus_name = f"cohere-{corpus_size}" if 'cohere' in dataset_config.get('workload', '') else corpus_size
+        
+        # Get k value from params (for ground truth files)
+        # Validate against supported_k_values
+        k_value = params.get('query_k', params.get('k', 100))
+        supported_k_values = dataset_config.get('supported_k_values', [100])
+        if k_value not in supported_k_values:
+            logger.warning(f"k={k_value} not in supported_k_values {supported_k_values}. Ground truth may not be available.")
+        
+        template_vars = {
+            'corpus_size': corpus_size,
+            'corpus_name': corpus_name,
+            'num_vectors': num_vectors,
+            'source_file': source_file,
+            'base_url': base_url,
+            'k': k_value
+        }
+        
+        def resolve_value(value: Any) -> Any:
+            """Recursively resolve template variables in a value"""
+            if isinstance(value, str):
+                # Replace {{variable}} patterns
+                for var_name, var_value in template_vars.items():
+                    pattern = f'{{{{{var_name}}}}}'
+                    if pattern in value:
+                        value = value.replace(pattern, str(var_value))
+                return value
+            elif isinstance(value, dict):
+                return {k: resolve_value(v) for k, v in value.items()}
+            elif isinstance(value, list):
+                return [resolve_value(item) for item in value]
+            else:
+                return value
+        
+        resolved_params = resolve_value(params)
+        
+        # Ensure we return a dict
+        if not isinstance(resolved_params, dict):
+            logger.warning(f"Template resolution did not return a dict, returning original params")
+            return params
+        
+        # Add num_vectors if not already present (for bulk ingestion)
+        if 'target_index_num_vectors' not in resolved_params and 'num_vectors' in template_vars:
+            resolved_params['target_index_num_vectors'] = template_vars['num_vectors']
+            logger.debug(f"Added target_index_num_vectors={template_vars['num_vectors']} based on corpus_size={corpus_size}")
+        
+        return resolved_params
+    
+    def _parse_corpus_size(self, corpus_size) -> int:
+        """Parse corpus size to number of vectors
+        
+        Supports both string formats ("1m", "10m", "1b") and raw numbers (1000000, 10000000)
+        
+        Args:
+            corpus_size: Size string like "1k", "100k", "1m", "10m", "1b" OR raw number
+            
+        Returns:
+            Number of vectors as integer
+        """
+        # If already an integer, return it directly
+        if isinstance(corpus_size, int):
+            return corpus_size
+        
+        corpus_size_str = str(corpus_size).lower().strip()
+        
+        try:
+            # Try parsing as string format first
+            if corpus_size_str.endswith('b'):
+                return int(float(corpus_size_str[:-1]) * 1_000_000_000)
+            elif corpus_size_str.endswith('m'):
+                return int(float(corpus_size_str[:-1]) * 1_000_000)
+            elif corpus_size_str.endswith('k'):
+                return int(float(corpus_size_str[:-1]) * 1_000)
+            else:
+                # Try parsing as raw number
+                return int(corpus_size_str)
+        except (ValueError, AttributeError):
+            logger.warning(f"Could not parse corpus_size '{corpus_size}', defaulting to 1000000")
+            return 1000000
+    
+    def _select_corpus_size_from_num_vectors(self, num_vectors: int, dataset_config: Dict[str, Any]) -> str:
+        """Auto-select the closest corpus_size from supported_corpus_sizes based on num_vectors
+        
+        Args:
+            num_vectors: Number of vectors requested
+            dataset_config: Dataset configuration
+            
+        Returns:
+            Closest corpus_size string (e.g., "10m", "50m")
+        """
+        supported_sizes = dataset_config.get('supported_corpus_sizes', [])
+        
+        if not supported_sizes:
+            # Fallback: convert num_vectors to corpus_size format
+            if num_vectors >= 1_000_000_000:
+                return f"{num_vectors / 1_000_000_000:.0f}b"
+            elif num_vectors >= 1_000_000:
+                return f"{num_vectors / 1_000_000:.0f}m"
+            elif num_vectors >= 1_000:
+                return f"{num_vectors / 1_000:.0f}k"
+            else:
+                return str(num_vectors)
+        
+        # Find the closest supported corpus size
+        closest_size = None
+        min_diff = float('inf')
+        
+        for size_str in supported_sizes:
+            size_num = self._parse_corpus_size(size_str)
+            diff = abs(size_num - num_vectors)
+            if diff < min_diff:
+                min_diff = diff
+                closest_size = size_str
+        
+        return closest_size if closest_size else "1m"
+    
+    def _select_source_file_for_count(self, requested_count: int) -> str:
+        """Select the appropriate source file for a given document count
+        
+        Uses the smallest available file that contains enough vectors.
+        
+        Args:
+            requested_count: Number of vectors needed
+            
+        Returns:
+            Source file name (e.g., "documents-10m.hdf5.bz2")
+        """
+        # Available source files with their capacities
+        available_files = [
+            (1_000, "documents-1k.hdf5.bz2"),
+            (100_000, "documents-100k.hdf5.bz2"),
+            (1_000_000, "documents-1m.hdf5.bz2"),
+            (10_000_000, "documents-10m.hdf5.bz2"),
+        ]
+        
+        # Find the smallest file that has enough documents
+        for capacity, filename in available_files:
+            if capacity >= requested_count:
+                logger.info(f"Selected source file '{filename}' (capacity {capacity:,}) for {requested_count:,} vectors")
+                return filename
+        
+        # If requested count exceeds all available files, use the largest
+        largest_file = available_files[-1][1]
+        logger.warning(f"Requested {requested_count:,} vectors exceeds largest file, using: {largest_file}")
+        return largest_file
 
 # Made with Bob

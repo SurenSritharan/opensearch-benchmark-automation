@@ -16,9 +16,43 @@ from k8s_metrics_collector import K8sMetricsCollector
 logger = logging.getLogger(__name__)
 
 
+def _parse_corpus_size(corpus_size) -> int:
+    """Parse corpus size to number of vectors
+    
+    Supports both string formats ("1m", "10m", "1b") and raw numbers (1000000, 10000000)
+    
+    Args:
+        corpus_size: Size string like "1k", "100k", "1m", "10m", "1b" OR raw number
+        
+    Returns:
+        Number of vectors as integer
+    """
+    # If already an integer, return it directly
+    if isinstance(corpus_size, int):
+        return corpus_size
+    
+    corpus_size_str = str(corpus_size).lower().strip()
+    
+    try:
+        # Try parsing as string format first
+        if corpus_size_str.endswith('b'):
+            return int(float(corpus_size_str[:-1]) * 1_000_000_000)
+        elif corpus_size_str.endswith('m'):
+            return int(float(corpus_size_str[:-1]) * 1_000_000)
+        elif corpus_size_str.endswith('k'):
+            return int(float(corpus_size_str[:-1]) * 1_000)
+        else:
+            # Try parsing as raw number
+            return int(corpus_size_str)
+    except (ValueError, AttributeError):
+        logger.warning(f"Could not parse corpus_size '{corpus_size}', defaulting to 1000000")
+        return 1000000
+
+
 def download_dataset_files(dataset_config: Dict[str, Any]) -> bool:
     """
     Download dataset files if they don't exist locally.
+    Automatically calculates byte range for base vector files based on corpus_size.
     
     Args:
         dataset_config: Dataset configuration from datasets.yaml
@@ -39,6 +73,11 @@ def download_dataset_files(dataset_config: Dict[str, Any]) -> bool:
     # Create data directory if it doesn't exist
     data_dir_path.mkdir(parents=True, exist_ok=True)
     
+    # Get corpus size configuration for dynamic range calculation
+    corpus_size = dataset_config.get('corpus_size', '1m')
+    dimension = dataset_config.get('dimension', 1024)
+    num_vectors = _parse_corpus_size(corpus_size)
+    
     for file_info in data_files:
         file_name = file_info.get('name')
         file_url = file_info.get('url')
@@ -49,6 +88,17 @@ def download_dataset_files(dataset_config: Dict[str, Any]) -> bool:
             continue
         
         file_path = data_dir_path / file_name
+        
+        # Always auto-calculate range for base vector files
+        if "_base.fvec" in file_name:
+            # fvec format: 4 bytes (dimension) + (dimension * 4 bytes per float)
+            bytes_per_vector = 4 + (dimension * 4)
+            byte_range_end = (num_vectors * bytes_per_vector) - 1
+            file_range = f"0-{byte_range_end}"
+            logger.info(f"Auto-calculated range for {file_name}: {file_range}")
+            logger.info(f"  Corpus size: {corpus_size} ({num_vectors:,} vectors)")
+            logger.info(f"  Bytes per vector: {bytes_per_vector}")
+            logger.info(f"  Total bytes: {byte_range_end + 1:,} ({(byte_range_end + 1) / (1024**3):.2f} GB)")
         
         # Calculate expected file size from range
         expected_size = None
@@ -227,14 +277,19 @@ class BenchmarkRunner:
             # 3. Add procedure's base params (scenario-specific)
             procedure_base_params = {}
             if procedure_config:
-                procedure_base_params = procedure_config.get('params', {})
+                procedure_base_params = procedure_config.get('params', {}).copy()
+                # Resolve template variables in procedure params
+                procedure_base_params = self._resolve_template_vars(procedure_base_params, dataset_config)
                 if procedure_base_params:
                     logger.info(f"Loaded procedure base params: {list(procedure_base_params.keys())}")
                 
                 # 4. Add procedure-level engine-specific params (e.g., method_name for index creation)
                 procedure_engine_params = procedure_config.get('engine_params', {})
                 if procedure_engine_params and engine in procedure_engine_params:
-                    procedure_base_params.update(procedure_engine_params[engine])
+                    proc_engine_specific = procedure_engine_params[engine].copy()
+                    # Resolve template variables in procedure engine params
+                    proc_engine_specific = self._resolve_template_vars(proc_engine_specific, dataset_config)
+                    procedure_base_params.update(proc_engine_specific)
                     logger.info(f"Loaded procedure engine params for {engine}: {list(procedure_engine_params[engine].keys())}")
             
             # If no parameter sweeps, run once with all base params + runtime params
@@ -349,6 +404,22 @@ class BenchmarkRunner:
                 # Clear benchmark logs before starting this sweep
                 self._clear_benchmark_logs()
                 
+                # Build user tags for metadata
+                user_tags = {
+                    'dataset': dataset,
+                    'engine': engine,
+                    'num_vectors': final_params.get('target_index_num_vectors'),
+                    'dimension': dataset_config.get('dimension'),
+                    'space_type': dataset_config.get('space_type'),
+                    'query_k': final_params.get('query_k'),
+                    'ef_search': final_params.get('ef_search'),
+                    'search_clients': final_params.get('search_clients'),
+                    'method_name': final_params.get('method_name')
+                }
+                # Remove None values
+                user_tags = {k: v for k, v in user_tags.items() if v is not None}
+                user_tags_str = ','.join([f"{k}:{v}" for k, v in user_tags.items()])
+                
                 # Build opensearch-benchmark command
                 cmd = [
                     'opensearch-benchmark',
@@ -357,7 +428,8 @@ class BenchmarkRunner:
                     '--target-hosts', target_host,
                     '--client-options', 'timeout:300,use_ssl:true,verify_certs:false,basic_auth_user:admin,basic_auth_password:admin',
                     '--test-procedure', scenario,
-                    '--kill-running-processes'  # Clean up any stuck processes
+                    '--kill-running-processes',  # Clean up any stuck processes
+                    '--user-tags', user_tags_str  # Add metadata tags
                 ]
                 
                 # Write workload params to a JSON file for this sweep
@@ -367,6 +439,7 @@ class BenchmarkRunner:
                 
                 logger.info(f"Workload params written to: {params_file}")
                 logger.info(f"Workload params content:\n{json.dumps(final_params, indent=2)}")
+                logger.info(f"User tags: {user_tags_str}")
                 
                 # Pass the file path to opensearch-benchmark
                 cmd.extend(['--workload-params', str(params_file)])
@@ -615,3 +688,114 @@ class BenchmarkRunner:
             logger.error(f"Error downloading benchmark.log: {e}")
 
 # Made with Bob
+
+    
+    def _resolve_template_vars(self, params: Dict[str, Any], dataset_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve template variables like {{corpus_size}} in parameters
+        
+        Args:
+            params: Parameters dictionary that may contain template variables
+            dataset_config: Dataset configuration containing variable values
+            
+        Returns:
+            Parameters with resolved template variables
+        """
+        # Get template variable values from dataset config
+        corpus_size = dataset_config.get('corpus_size', '1m')
+        corpus_size_map = dataset_config.get('corpus_size_map', {
+            '1m': 1000000,
+            '10m': 10000000,
+            '100m': 100000000,
+            '1b': 1000000000
+        })
+        
+        # Get num_vectors from corpus_size_map
+        num_vectors = corpus_size_map.get(corpus_size, 1000000)
+        
+        # For cohere datasets, determine the appropriate source file
+        source_file = self._select_source_file(corpus_size, dataset_config)
+        
+        # Corpus name for dynamic corpus definitions
+        corpus_name = f"cohere-{corpus_size}" if 'cohere' in dataset_config.get('workload', '') else corpus_size
+        
+        template_vars = {
+            'corpus_size': corpus_size,
+            'corpus_name': corpus_name,
+            'num_vectors': num_vectors,
+            'source_file': source_file
+        }
+        
+        def resolve_value(value: Any) -> Any:
+            """Recursively resolve template variables in a value"""
+            if isinstance(value, str):
+                # Replace {{variable}} patterns
+                for var_name, var_value in template_vars.items():
+                    pattern = f'{{{{{var_name}}}}}'
+                    if pattern in value:
+                        value = value.replace(pattern, str(var_value))
+                return value
+            elif isinstance(value, dict):
+                return {k: resolve_value(v) for k, v in value.items()}
+            elif isinstance(value, list):
+                return [resolve_value(item) for item in value]
+            else:
+                return value
+        
+        resolved_params = resolve_value(params)
+        
+        # Ensure we return a dict
+        if not isinstance(resolved_params, dict):
+            logger.warning(f"Template resolution did not return a dict, returning original params")
+            return params
+        
+        # Add num_vectors if not already present (for bulk ingestion)
+        if 'target_index_num_vectors' not in resolved_params and 'num_vectors' in template_vars:
+            resolved_params['target_index_num_vectors'] = template_vars['num_vectors']
+            logger.debug(f"Added target_index_num_vectors={template_vars['num_vectors']} based on corpus_size={corpus_size}")
+        
+        return resolved_params
+    
+    def _select_source_file(self, corpus_size: str, dataset_config: Dict[str, Any]) -> str:
+        """Select the appropriate source file for a given corpus size
+        
+        For sizes that match exactly, use the corresponding file.
+        For sizes in between, use the next larger file.
+        
+        Args:
+            corpus_size: The requested corpus size (e.g., "5m")
+            dataset_config: Dataset configuration
+            
+        Returns:
+            Source file name (e.g., "documents-10m.hdf5.bz2")
+        """
+        source_file_map = dataset_config.get('source_file_map', {})
+        corpus_size_map = dataset_config.get('corpus_size_map', {})
+        
+        # If exact match exists, use it
+        if corpus_size in source_file_map:
+            return source_file_map[corpus_size]
+        
+        # Otherwise, find the smallest file that contains enough vectors
+        requested_count = corpus_size_map.get(corpus_size, 1000000)
+        
+        # Sort available sizes by document count
+        available_sizes = sorted(
+            [(size, corpus_size_map.get(size, 0), source_file_map.get(size, ''))
+             for size in source_file_map.keys()],
+            key=lambda x: x[1]
+        )
+        
+        # Find the smallest file that has enough documents
+        for size, count, file in available_sizes:
+            if count >= requested_count:
+                logger.info(f"Selected source file '{file}' (contains {count} docs) for corpus_size '{corpus_size}' ({requested_count} docs)")
+                return file
+        
+        # Fallback to largest available file
+        if available_sizes:
+            largest_file = available_sizes[-1][2]
+            logger.warning(f"No file large enough for {requested_count} docs, using largest: {largest_file}")
+            return largest_file
+        
+        # Ultimate fallback
+        return "documents-1m.hdf5.bz2"

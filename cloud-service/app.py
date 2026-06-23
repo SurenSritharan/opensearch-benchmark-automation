@@ -599,11 +599,15 @@ def trigger_batch_benchmark():
             return jsonify({'error': 'tests parameter is required and must be a list'}), 400
         
         # Validate each test has dataset and scenario
-        for idx, test in enumerate(tests):
+        for test in tests:
             if not isinstance(test, dict):
-                return jsonify({'error': f'Test {idx+1} must be an object with dataset and scenario'}), 400
+                return jsonify({'error': 'Each test must be an object with dataset and scenario'}), 400
             if 'dataset' not in test or 'scenario' not in test:
-                return jsonify({'error': f'Test {idx+1} must have both dataset and scenario fields'}), 400
+                return jsonify({'error': 'Each test must have both dataset and scenario fields'}), 400
+            
+            # Validate params if provided
+            if 'params' in test and not isinstance(test.get('params'), dict):
+                return jsonify({'error': f'Test params must be an object for {test.get("dataset")}/{test.get("scenario")}'}), 400
         
         # Process each test and build scenarios list
         scenarios = []  # List of {dataset, label, procedure_name, params}
@@ -665,7 +669,13 @@ def trigger_batch_benchmark():
             # Extract scenario-specific params
             scenario_params = {}
             if matched_proc and isinstance(matched_proc, dict):
-                scenario_params = matched_proc.get('params', {})
+                scenario_params = matched_proc.get('params', {}).copy()
+            
+            # Merge with per-test params (test params override scenario params)
+            test_params = test.get('params', {})
+            if test_params:
+                scenario_params.update(test_params)
+                logger.info(f"Applying custom params for {dataset}/{scenario_label}: {test_params}")
             
             scenarios.append({
                 'dataset': dataset,
