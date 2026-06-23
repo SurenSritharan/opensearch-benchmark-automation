@@ -2,11 +2,48 @@
 """Configuration loader for cloud-native benchmark service"""
 import yaml
 import subprocess
+import copy
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def get_num_vectors(corpus_size) -> int:
+    """Parse corpus size to number of vectors."""
+    if isinstance(corpus_size, int):
+        return corpus_size
+    
+    corpus_size_str = str(corpus_size).lower().strip()
+    
+    try:
+        if corpus_size_str.endswith('b'):
+            return int(float(corpus_size_str[:-1]) * 1_000_000_000)
+        elif corpus_size_str.endswith('m'):
+            return int(float(corpus_size_str[:-1]) * 1_000_000)
+        elif corpus_size_str.endswith('k'):
+            return int(float(corpus_size_str[:-1]) * 1_000)
+        else:
+            return int(corpus_size_str)
+    except (ValueError, AttributeError):
+        logger.warning(f"Could not parse corpus_size '{corpus_size}', defaulting to 1000000")
+        return 1000000
+
+
+def get_corpus_size(num_vectors) -> str:
+    """Convert number of vectors to corpus size string format."""
+    if isinstance(num_vectors, str):
+        return num_vectors
+    
+    if num_vectors >= 1_000_000_000:
+        return f"{num_vectors / 1_000_000_000:.0f}b"
+    elif num_vectors >= 1_000_000:
+        return f"{num_vectors / 1_000_000:.0f}m"
+    elif num_vectors >= 1_000:
+        return f"{num_vectors / 1_000:.0f}k"
+    else:
+        return str(num_vectors)
 
 
 class ConfigLoader:
@@ -220,6 +257,154 @@ class ConfigLoader:
         namespace = f"os-{engine}"
         return f"opensearch-cluster.{namespace}.svc.cluster.local:9200"
     
+    def download_dataset_files(self, dataset_name: str, params: Optional[Dict[str, Any]] = None) -> bool:
+        """Download dataset files locally for a dataset if they do not already exist."""
+        dataset_config = self.get_dataset_config(dataset_name)
+        if not dataset_config:
+            logger.warning(f"Dataset '{dataset_name}' not found in configuration")
+            return False
+        
+        if params:
+            dataset_config = copy.deepcopy(dataset_config)
+            
+            if 'num_vectors' in params:
+                corpus_size = get_corpus_size(params['num_vectors'])
+                dataset_config['corpus_size'] = corpus_size
+                logger.info(f"Converted num_vectors to corpus_size: {corpus_size}")
+            elif 'corpus_size' in params and '{{' not in str(params['corpus_size']):
+                dataset_config['corpus_size'] = params['corpus_size']
+                logger.info(f"Using corpus_size from params: {params['corpus_size']}")
+            
+            base_url = dataset_config.get('base_url', '')
+            corpus_size = dataset_config.get('corpus_size', '1m')
+            
+            if 'data_files' in dataset_config:
+                resolved_files = []
+                for file_info in dataset_config['data_files']:
+                    has_k_template = any('{{k}}' in str(v) for v in file_info.values())
+                    
+                    if has_k_template:
+                        logger.info(f"Skipping ground truth file template (will download on-demand per sweep): {file_info.get('name', 'unknown')}")
+                        continue
+                    
+                    resolved_file = {}
+                    for key, value in file_info.items():
+                        if isinstance(value, str):
+                            value = value.replace('{{base_url}}', base_url)
+                            value = value.replace('{{corpus_size}}', corpus_size)
+                        resolved_file[key] = value
+                    resolved_files.append(resolved_file)
+                
+                dataset_config['data_files'] = resolved_files
+                logger.info(f"Resolved {len(resolved_files)} base data files (ground truth files handled per-sweep)")
+        
+        data_files = dataset_config.get('data_files', [])
+        if not data_files:
+            logger.info("No data files to download")
+            return True
+        
+        data_dir = dataset_config.get('data_dir', '/datasets')
+        data_dir_path = Path(data_dir)
+        
+        logger.info(f"Checking dataset files in {data_dir}...")
+        data_dir_path.mkdir(parents=True, exist_ok=True)
+        
+        corpus_size = dataset_config.get('corpus_size', '1m')
+        dimension = dataset_config.get('dimension', 1024)
+        num_vectors = get_num_vectors(corpus_size)
+        
+        for file_info in data_files:
+            file_name = file_info.get('name')
+            file_url = file_info.get('url')
+            file_range = file_info.get('range')
+            
+            if not file_name or not file_url:
+                logger.warning(f"Skipping file with missing name or URL: {file_info}")
+                continue
+            
+            target_file_name = file_name
+            
+            if "_base.fvec" in file_name:
+                target_file_name = file_name.replace('.fvec', f'_{corpus_size}.fvec')
+                bytes_per_vector = 4 + (dimension * 4)
+                byte_range_end = (num_vectors * bytes_per_vector) - 1
+                file_range = f"0-{byte_range_end}"
+                logger.info(f"Using corpus-specific filename: {target_file_name}")
+                logger.info(f"Auto-calculated range for {target_file_name}: {file_range}")
+                logger.info(f"  Corpus size: {corpus_size} ({num_vectors:,} vectors)")
+                logger.info(f"  Bytes per vector: {bytes_per_vector}")
+                logger.info(f"  Total bytes: {byte_range_end + 1:,} ({(byte_range_end + 1) / (1024**3):.2f} GB)")
+            elif file_range:
+                path_obj = Path(file_name)
+                target_file_name = f"{path_obj.stem}.range-{file_range}{path_obj.suffix}"
+            
+            file_path = data_dir_path / target_file_name
+            
+            expected_size = None
+            if file_range:
+                try:
+                    start, end = file_range.split('-')
+                    expected_size = int(end) - int(start) + 1
+                except Exception as e:
+                    logger.warning(f"Could not parse range '{file_range}': {e}")
+            
+            if file_path.exists():
+                current_size = file_path.stat().st_size
+                if expected_size is None or current_size == expected_size:
+                    logger.info(f"✓ File already exists: {target_file_name} ({current_size / (1024**3):.2f} GB)")
+                    continue
+                
+                logger.warning(f"File size mismatch for existing file {target_file_name}")
+                logger.warning(f"  Current: {current_size} bytes, Expected: {expected_size} bytes")
+                logger.warning("  Preserving existing file and skipping overwrite")
+                continue
+            
+            logger.info(f"File not found: {target_file_name}, will download")
+            logger.info(f"📥 Downloading {target_file_name}...")
+            logger.info(f"  URL: {file_url}")
+            if file_range:
+                if expected_size:
+                    size_gb = expected_size / (1024**3)
+                    logger.info(f"  Range: {file_range} ({size_gb:.2f} GB)")
+                else:
+                    logger.info(f"  Range: {file_range}")
+            
+            try:
+                wget_cmd = ['wget', '-q', '--show-progress', '-O', str(file_path)]
+                if file_range:
+                    wget_cmd.extend(['--header', f'Range: bytes={file_range}'])
+                wget_cmd.append(file_url)
+                
+                result = subprocess.run(
+                    wget_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=3600
+                )
+                
+                if result.returncode != 0:
+                    logger.error(f"Failed to download {target_file_name}")
+                    logger.error(f"STDERR: {result.stderr}")
+                    return False
+                
+                if file_path.exists():
+                    downloaded_size = file_path.stat().st_size
+                    downloaded_gb = downloaded_size / (1024**3)
+                    logger.info(f"✓ Downloaded: {target_file_name} ({downloaded_gb:.2f} GB)")
+                else:
+                    logger.error(f"Download completed but file not found: {file_path}")
+                    return False
+                    
+            except subprocess.TimeoutExpired:
+                logger.error(f"Download timed out for {target_file_name}")
+                return False
+            except Exception as e:
+                logger.error(f"Failed to download {target_file_name}: {e}")
+                return False
+        
+        logger.info("✓ All dataset files are ready")
+        return True
+    
     def get_test_procedures(self, dataset_name: str) -> List[Dict[str, Any]]:
         """Get available test procedures for a dataset with their configurations"""
         dataset_config = self.get_dataset_config(dataset_name)
@@ -250,7 +435,7 @@ class ConfigLoader:
             
             # Parse num_vectors if it's a string (e.g., "1m", "10m")
             if isinstance(num_vectors_raw, str):
-                num_vectors = self._parse_corpus_size(num_vectors_raw)
+                num_vectors = get_num_vectors(num_vectors_raw)
                 logger.info(f"Parsed num_vectors '{num_vectors_raw}' to {num_vectors}")
             else:
                 num_vectors = num_vectors_raw
@@ -260,7 +445,7 @@ class ConfigLoader:
             logger.info(f"Auto-selected corpus_size '{corpus_size}' for num_vectors={num_vectors}")
         else:
             # Parse corpus_size to get num_vectors
-            num_vectors = self._parse_corpus_size(corpus_size)
+            num_vectors = get_num_vectors(corpus_size)
         
         # For cohere datasets, determine the appropriate source file
         # Use the smallest file that contains enough vectors
@@ -315,38 +500,6 @@ class ConfigLoader:
         
         return resolved_params
     
-    def _parse_corpus_size(self, corpus_size) -> int:
-        """Parse corpus size to number of vectors
-        
-        Supports both string formats ("1m", "10m", "1b") and raw numbers (1000000, 10000000)
-        
-        Args:
-            corpus_size: Size string like "1k", "100k", "1m", "10m", "1b" OR raw number
-            
-        Returns:
-            Number of vectors as integer
-        """
-        # If already an integer, return it directly
-        if isinstance(corpus_size, int):
-            return corpus_size
-        
-        corpus_size_str = str(corpus_size).lower().strip()
-        
-        try:
-            # Try parsing as string format first
-            if corpus_size_str.endswith('b'):
-                return int(float(corpus_size_str[:-1]) * 1_000_000_000)
-            elif corpus_size_str.endswith('m'):
-                return int(float(corpus_size_str[:-1]) * 1_000_000)
-            elif corpus_size_str.endswith('k'):
-                return int(float(corpus_size_str[:-1]) * 1_000)
-            else:
-                # Try parsing as raw number
-                return int(corpus_size_str)
-        except (ValueError, AttributeError):
-            logger.warning(f"Could not parse corpus_size '{corpus_size}', defaulting to 1000000")
-            return 1000000
-    
     def _select_corpus_size_from_num_vectors(self, num_vectors: int, dataset_config: Dict[str, Any]) -> str:
         """Auto-select the closest corpus_size from supported_corpus_sizes based on num_vectors
         
@@ -362,20 +515,14 @@ class ConfigLoader:
         if not supported_sizes:
             # Fallback: convert num_vectors to corpus_size format
             if num_vectors >= 1_000_000_000:
-                return f"{num_vectors / 1_000_000_000:.0f}b"
-            elif num_vectors >= 1_000_000:
-                return f"{num_vectors / 1_000_000:.0f}m"
-            elif num_vectors >= 1_000:
-                return f"{num_vectors / 1_000:.0f}k"
-            else:
-                return str(num_vectors)
+                return get_corpus_size(num_vectors)
         
         # Find the closest supported corpus size
         closest_size = None
         min_diff = float('inf')
         
         for size_str in supported_sizes:
-            size_num = self._parse_corpus_size(size_str)
+            size_num = get_num_vectors(size_str)
             diff = abs(size_num - num_vectors)
             if diff < min_diff:
                 min_diff = diff
