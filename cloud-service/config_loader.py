@@ -271,6 +271,10 @@ class ConfigLoader:
                 corpus_size = get_corpus_size(params['num_vectors'])
                 dataset_config['corpus_size'] = corpus_size
                 logger.info(f"Converted num_vectors to corpus_size: {corpus_size}")
+            elif 'target_index_num_vectors' in params:
+                corpus_size = get_corpus_size(params['target_index_num_vectors'])
+                dataset_config['corpus_size'] = corpus_size
+                logger.info(f"Converted target_index_num_vectors to corpus_size: {corpus_size}")
             elif 'corpus_size' in params and '{{' not in str(params['corpus_size']):
                 dataset_config['corpus_size'] = params['corpus_size']
                 logger.info(f"Using corpus_size from params: {params['corpus_size']}")
