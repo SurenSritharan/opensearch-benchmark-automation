@@ -159,7 +159,7 @@ datasets:
       - name: "vector-search"
         params:
           queries_file: "/datasets/msmarco/cohere_msmarco_queries.fvec"
-          ground_truth_file_template: "/datasets/msmarco/cohere_msmarco_indices_d1024_k{{query_k}}_{{corpus_size}}.ivec"
+          ground_truth_file: "/datasets/msmarco/cohere_msmarco_indices_d1024_k{{query_k}}_{{corpus_size}}.ivec"
           target_field_name: "vector"
           query_body:
             docvalue_fields: ["_id"]
