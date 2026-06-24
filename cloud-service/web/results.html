@@ -641,11 +641,11 @@
                 const scenarioNames = Object.keys(scenarioGroups);
                 
                 // Check if we need dropdown (multiple scenarios)
-                if (scenarioNames.length > 1 || (scenarioNames.length === 1 && scenarioNames[0] !== 'All Sweeps')) {
+                if (scenarioNames.length > 1) {
                     currentScenarioGroups = scenarioGroups;
                     displayWithDropdown(scenarioGroups);
                 } else {
-                    // Single group - display normally
+                    // Single scenario or single non-sweep run - display normally
                     displaySingleGroup(sweeps);
                 }
             }
@@ -1189,7 +1189,7 @@
             }
             html += `
                 <div class="metric-card">
-                    <div class="metric-label">Total Sweeps</div>
+                    <div class="metric-label">${sweeps.length === 1 ? 'Total Runs' : 'Total Sweeps'}</div>
                     <div class="metric-value">${sweeps.length}</div>
                 </div>
             `;

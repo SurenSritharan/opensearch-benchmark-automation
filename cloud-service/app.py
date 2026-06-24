@@ -1251,10 +1251,37 @@ def get_job_results(job_id: str):
         dataset = job.get('result', {}).get('dataset') or job.get('dataset')
         label = job.get('result', {}).get('scenario_label') or job.get('ui_scenario') or job.get('scenario')
         
-        #  OPTIMIZED: Sorted by folder name explicitly to prevent nested path sorting anomalies
+        # First prefer explicit sweep directories if present
         sorted_dirs = sorted(results_dir.glob('**/sweep-*'), key=lambda p: p.name)
         for sweep_dir in sorted_dirs:
             sweeps.append(_parse_sweep_directory(sweep_dir, sweep_dir.name, label, dataset))
+        
+        # Fallback for non-sweep runs where artifacts are written directly in the scenario/results dir
+        if not sweeps:
+            candidate_dirs = []
+            if job.get('result', {}).get('results_dir'):
+                candidate_dirs.append(Path(job['result']['results_dir']))
+            candidate_dirs.append(results_dir)
+            
+            seen_dirs = set()
+            for candidate_dir in candidate_dirs:
+                try:
+                    resolved = candidate_dir.resolve()
+                except Exception:
+                    resolved = candidate_dir
+                resolved_key = str(resolved)
+                if resolved_key in seen_dirs:
+                    continue
+                seen_dirs.add(resolved_key)
+                
+                if not candidate_dir.exists() or not candidate_dir.is_dir():
+                    continue
+                
+                has_artifacts = any((candidate_dir / name).exists() for name in ['test_run.json', 'workload-params.json', 'benchmark.log'])
+                if has_artifacts:
+                    sweep_name = candidate_dir.name if candidate_dir != results_dir else (label or 'run')
+                    sweeps.append(_parse_sweep_directory(candidate_dir, sweep_name, label, dataset))
+                    break
 
     return jsonify({
         'job_id': job_id,
