@@ -74,6 +74,7 @@ datasets:
           number_of_repetitions: 1000
           warmup_time_period: 60
           time_period: 300
+          hnsw_ef_search: 128
         parameter_sweeps:
           - params: { search_clients: 4 }
           - params: { search_clients: 8 }
@@ -166,6 +167,7 @@ datasets:
             _source: false
           warmup_time_period: 60
           time_period: 300
+          hnsw_ef_search: 128
         parameter_sweeps:
           - params: { search_clients: 4 }
           - params: { search_clients: 8 }

@@ -274,8 +274,14 @@ class ConfigLoader:
         needs_ground_truth = 'queries_file' in resolved_params and ('query_k' in resolved_params or 'k' in resolved_params)
         ground_truth_template = resolved_params.get('ground_truth_file_template')
         if needs_ground_truth and ground_truth_template and 'ground_truth_file' not in resolved_params:
-            resolved_params['ground_truth_file'] = ground_truth_template
-            logger.info(f"Resolved ground_truth_file from template: {resolved_params['ground_truth_file']}")
+            # Resolve the template with current params (query_k, corpus_size, etc.)
+            ground_truth_file = ground_truth_template
+            for key, value in resolved_params.items():
+                placeholder = f"{{{{{key}}}}}"
+                if placeholder in ground_truth_file:
+                    ground_truth_file = ground_truth_file.replace(placeholder, str(value))
+            resolved_params['ground_truth_file'] = ground_truth_file
+            logger.info(f"Resolved ground_truth_file from template '{ground_truth_template}' to: {ground_truth_file}")
 
         return resolved_params
 
@@ -513,14 +519,21 @@ class ConfigLoader:
             resolved_params['num_vectors'] = template_vars['num_vectors']
             logger.debug(f"Added num_vectors={template_vars['num_vectors']} based on corpus_size={corpus_size}")
         
-        # corpus_size and corpus_name are internal template-resolution helpers and
-        # should not be forwarded to OSB unless explicitly required by a workload template.
+        # Clean up internal/template parameters that should not be passed to OpenSearch Benchmark
+                
+        # Remove ground_truth_file_template after it's been resolved to ground_truth_file
+        if 'ground_truth_file_template' in resolved_params:
+            resolved_params.pop('ground_truth_file_template')
+            logger.debug("Removed 'ground_truth_file_template' (already resolved to 'ground_truth_file')")
+        
+        # Remove corpus_size and corpus_name (internal template helpers)
         if 'corpus_size' in resolved_params:
             resolved_params.pop('corpus_size')
-            logger.debug("Removed internal corpus_size from resolved workload params")
+            logger.debug("Removed internal 'corpus_size' from resolved workload params")
         if 'corpus_name' in resolved_params:
             resolved_params.pop('corpus_name')
-            logger.debug("Removed internal corpus_name from resolved workload params")
+            logger.debug("Removed internal 'corpus_name' from resolved workload params")
+        
         
         return resolved_params
     
