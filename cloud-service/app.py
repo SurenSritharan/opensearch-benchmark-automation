@@ -765,7 +765,7 @@ def trigger_batch_benchmark():
             'results_base': results_base,
             'created_at': datetime.utcnow().isoformat(),
             'queue_position': queue_position,
-            'scenario_status': {s['label']: 'queued' for s in scenarios},
+            'scenario_status': {f"{s['dataset']}-{s['label']}": 'queued' for s in scenarios},
             'scenario_results': {},
             'current_scenario': None,
             'current_scenario_index': 0,

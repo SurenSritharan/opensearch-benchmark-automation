@@ -645,6 +645,9 @@
                 const content = document.getElementById('liveStatusContent');
                 section.style.display = 'block';
                 
+                // Populate Test Environment from live job data
+                displayTestEnvironment(data);
+
                 // Hide other sections for running tests
                 document.getElementById('metricsSummary').style.display = 'none';
                 document.getElementById('commonParamsSection').style.display = 'none';
