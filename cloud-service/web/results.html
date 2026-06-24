@@ -850,10 +850,17 @@
                     `;
                 }
                 
+                // Save scroll positions of open log panels before replacing DOM
+                const savedScrollPositions = {};
+                openElements.forEach(elementId => {
+                    const el = document.getElementById(elementId);
+                    if (el) savedScrollPositions[elementId] = el.scrollTop;
+                });
+                
                 content.innerHTML = html;
                 
-                // Restore previously open elements after refresh
-                restoreOpenElements();
+                // Restore previously open elements and their scroll positions after refresh
+                restoreOpenElements(savedScrollPositions);
             } catch (error) {
                 console.error('Error displaying live status:', error);
             }
@@ -877,12 +884,15 @@
             }
         }
         
-        function restoreOpenElements() {
-            // Restore previously open elements after refresh
+        function restoreOpenElements(savedScrollPositions = {}) {
+            // Restore previously open elements and their scroll positions after refresh
             openElements.forEach(elementId => {
                 const element = document.getElementById(elementId);
                 if (element) {
                     element.style.display = 'block';
+                    if (savedScrollPositions[elementId] !== undefined) {
+                        element.scrollTop = savedScrollPositions[elementId];
+                    }
                 }
             });
         }

@@ -1444,16 +1444,20 @@ def _collect_live_data(sweep_dir: Path, live_data: dict, scenario_label: Optiona
         except Exception as e:
             logger.error(f"Error reading workload-params.json from {sweep_dir}: {e}")
     
-    # Try to read last 200 lines of benchmark.log
+    # Try to read last 200 lines of benchmark.log.
+    # While a sweep is running the file hasn't been copied to sweep_dir yet,
+    # so fall back to the live log in the OSB home directory.
     log_file = sweep_dir / 'benchmark.log'
-    if log_file.exists():
+    live_log_file = Path('/datasets/opensearch-benchmark/.osb/logs/benchmark.log')
+    source_log = log_file if log_file.exists() else (live_log_file if live_log_file.exists() else None)
+    if source_log:
         try:
-            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+            with open(source_log, 'r', encoding='utf-8', errors='ignore') as f:
                 last_lines = deque(f, maxlen=200)
             sweep_info['benchmark_log'] = ''.join(last_lines)
             live_data['benchmark_logs'].append(sweep_info.copy())
         except Exception as e:
-            logger.error(f"Error reading benchmark.log from {sweep_dir}: {e}")
+            logger.error(f"Error reading benchmark.log from {source_log}: {e}")
 
 
 @app.route('/results/<job_id>')
