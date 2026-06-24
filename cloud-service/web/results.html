@@ -539,6 +539,12 @@
                     </div>
                 </div>
                 
+                <!-- GKE Infrastructure Metrics -->
+                <div id="gkeMetricsChart" class="section" style="display: none;">
+                    <div class="section-title">☁️ GKE Infrastructure Metrics</div>
+                    <div id="gkeMetricsChartContent"></div>
+                </div>
+
                 <!-- Detailed Metrics Table -->
                 <div id="detailedMetrics" class="section" style="display: none;">
                     <div class="section-title">Detailed Metrics</div>
@@ -988,6 +994,7 @@
             
             displayMetricsSummary(sweeps);
             displayMetricsCharts(sweeps);
+            displayGkeMetricsCharts(sweeps, 'gkeMetricsChartContent', 'gkeMetricsChart');
             displayDetailedMetrics(sweeps);
         }
         
@@ -1100,6 +1107,10 @@
                     <div id="scenario-recallChart-${scenarioName}"></div>
                     <div id="scenario-combinedChart-${scenarioName}"></div>
                 </div>
+                <div id="scenario-gkeMetrics-${scenarioName}" class="section" style="display: none;">
+                    <div class="section-title">☁️ GKE Infrastructure Metrics</div>
+                    <div id="scenario-gkeMetricsContent-${scenarioName}"></div>
+                </div>
                 <div id="scenario-detailedMetrics-${scenarioName}" class="section" style="display: none;">
                     <div class="section-title">Detailed Metrics</div>
                     <div id="scenario-detailedMetricsContent-${scenarioName}"></div>
@@ -1111,6 +1122,7 @@
             // Now populate the metrics using the scenario-specific IDs
             displayMetricsSummaryInContainer(sweeps, `scenario-metricsSummaryContent-${scenarioName}`, `scenario-metricsSummary-${scenarioName}`);
             displayMetricsChartsInContainer(sweeps, scenarioName);
+            displayGkeMetricsCharts(sweeps, `scenario-gkeMetricsContent-${scenarioName}`, `scenario-gkeMetrics-${scenarioName}`);
             displayDetailedMetricsInContainer(sweeps, `scenario-detailedMetricsContent-${scenarioName}`, `scenario-detailedMetrics-${scenarioName}`);
         }
         
@@ -1578,6 +1590,126 @@
             // Display Combined Chart
             displayCombinedChart(metricsData);
         }
+
+        function displayGkeMetricsCharts(sweeps, contentId, sectionId) {
+            // Only render if at least one sweep has k8s_metrics
+            const sweepsWithMetrics = sweeps.filter(s => s.k8s_metrics && s.k8s_metrics.summary);
+            if (sweepsWithMetrics.length === 0) return;
+
+            const section = document.getElementById(sectionId);
+            const container = document.getElementById(contentId);
+            if (!section || !container) return;
+            section.style.display = 'block';
+
+            let html = '';
+
+            sweepsWithMetrics.forEach((sweep, idx) => {
+                const metrics = sweep.k8s_metrics;
+                const summary = metrics.summary;
+                const sweepLabel = sweep.sweep_name || `Sweep ${idx + 1}`;
+
+                // --- Node CPU/Memory summary table ---
+                const nodes = summary.nodes || {};
+                const nodeEntries = Object.entries(nodes);
+
+                if (nodeEntries.length > 0) {
+                    html += `
+                        <div style="margin-bottom: 24px;">
+                            <div class="section-subtitle" style="margin-bottom: 10px;">
+                                🖥️ ${sweepLabel} — Node Resource Usage
+                                <span style="font-size: 0.85em; color: #6b7280; margin-left: 8px;">(${summary.total_samples} samples · ${Math.round(metrics.duration_seconds)}s)</span>
+                            </div>
+                            <table>
+                                <thead><tr>
+                                    <th>Node</th><th>Node Pool</th>
+                                    <th>CPU Avg (cores)</th><th>CPU Max</th>
+                                    <th>Mem Avg (MiB)</th><th>Mem Max (MiB)</th>
+                                </tr></thead>
+                                <tbody>
+                    `;
+                    nodeEntries.forEach(([nodeName, n]) => {
+                        html += `<tr>
+                            <td style="font-family: monospace; font-size: 0.85em;">${nodeName}</td>
+                            <td>${n.node_pool}</td>
+                            <td>${n.cpu_avg.toFixed(3)}</td>
+                            <td>${n.cpu_max.toFixed(3)}</td>
+                            <td>${Math.round(n.memory_avg)}</td>
+                            <td>${Math.round(n.memory_max)}</td>
+                        </tr>`;
+                    });
+                    html += `</tbody></table></div>`;
+                }
+
+                // --- Pod CPU/Memory time-series charts ---
+                const pods = summary.pods || {};
+                const podEntries = Object.entries(pods);
+                if (podEntries.length > 0) {
+                    const chartId = `gke-pod-chart-${sectionId}-${idx}`;
+                    html += `
+                        <div style="margin-bottom: 24px;">
+                            <div class="section-subtitle" style="margin-bottom: 10px;">🫛 ${sweepLabel} — Pod CPU Usage Over Time</div>
+                            <div id="${chartId}-cpu" class="chart-wrapper"></div>
+                            <div class="section-subtitle" style="margin-bottom: 10px; margin-top: 16px;">🫛 ${sweepLabel} — Pod Memory Usage Over Time</div>
+                            <div id="${chartId}-mem" class="chart-wrapper"></div>
+                        </div>
+                    `;
+
+                    // Defer chart rendering until the innerHTML above has been set
+                    setTimeout(() => {
+                        // Build time-offset labels from sample index (collector polls every 10s)
+                        const maxSamples = Math.max(...podEntries.map(([, p]) => p.cpu_samples.length));
+                        const labels = Array.from({length: maxSamples}, (_, i) => `+${i * 10}s`);
+
+                        // Flatten into VChart's { id, values } format with seriesField='pod'
+                        const cpuValues = [];
+                        const memValues = [];
+                        podEntries.forEach(([podName, p]) => {
+                            p.cpu_samples.forEach((v, i) => {
+                                cpuValues.push({ time: labels[i], pod: podName, value: parseFloat(v.replace('m', '')) / 1000 });
+                            });
+                            p.memory_samples.forEach((v, i) => {
+                                memValues.push({ time: labels[i], pod: podName, value: parseFloat(v.replace('Mi', '')) });
+                            });
+                        });
+
+                        const makeSpec = (values, yTitle, formatFn) => ({
+                            type: 'line',
+                            data: [{ id: 'gke', values }],
+                            xField: 'time',
+                            yField: 'value',
+                            seriesField: 'pod',
+                            point: { visible: false },
+                            legends: { visible: true, orient: 'top', position: 'end' },
+                            axes: [
+                                { orient: 'bottom', type: 'band', sampling: 'greedy',
+                                  label: { style: { fontSize: 10 } },
+                                  title: { visible: true, text: 'Time (offset from sweep start)', style: { fontSize: 11 } } },
+                                { orient: 'left', type: 'linear',
+                                  label: { formatMethod: formatFn, style: { fontSize: 11 } },
+                                  title: { visible: true, text: yTitle, style: { fontSize: 12, fontWeight: 'bold' } } }
+                            ],
+                            tooltip: {
+                                mark: { content: [{ key: d => d.pod, value: d => formatFn(d.value) }] }
+                            }
+                        });
+
+                        new VChart.default(
+                            makeSpec(cpuValues, 'CPU (cores)', v => v.toFixed(2) + ' cores'),
+                            { dom: `${chartId}-cpu` }
+                        ).renderSync();
+
+                        new VChart.default(
+                            makeSpec(memValues, 'Memory (MiB)', v => Math.round(v) + ' MiB'),
+                            { dom: `${chartId}-mem` }
+                        ).renderSync();
+                    }, 0);
+                }
+            });
+
+            container.innerHTML = html;
+        }
+
+
         
         function displayLatencyChart(data, containerId = 'latencyChartContent') {
             // Prepare data for line chart with both Average and P90

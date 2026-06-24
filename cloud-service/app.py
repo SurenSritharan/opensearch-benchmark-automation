@@ -659,52 +659,20 @@ def trigger_batch_benchmark():
         
         for test in tests:
             dataset = test['dataset']
-            scenario_label = test['scenario']
-            
-            # Get procedures for this dataset
+            scenario_label = test.get('label') or test['scenario']
+            procedure_name = test['scenario']
+
+            # Validate procedure exists for this dataset
             procedures = config_loader.get_test_procedures(dataset)
-            
-            # Validate: check for duplicate procedure names without aliases
-            name_counts = {}
-            for proc in procedures:
-                name = proc.get('name') if isinstance(proc, dict) else proc
-                name_counts[name] = name_counts.get(name, 0) + 1
-            
-            procedure_name = None
-            matched_proc = None
-            
-            # Find matching procedure using alias or name
-            for proc in procedures:
-                name = proc.get('name') if isinstance(proc, dict) else proc
-                alias = proc.get('alias') if isinstance(proc, dict) else None
-                
-                # Validate: if multiple procedures with same name, alias is required
-                if name_counts[name] > 1 and not alias:
-                    error_msg = f"Dataset '{dataset}': Multiple procedures with name '{name}' found but no alias defined. Please add 'alias' field to distinguish them."
-                    logger.error(error_msg)
-                    return jsonify({'error': error_msg}), 500
-                
-                # Use alias if available, otherwise use name directly
-                label = alias if alias else name
-                
-                if label == scenario_label:
-                    procedure_name = name
-                    matched_proc = proc
-                    break
-            
-            if not procedure_name:
-                # Build list of available scenarios for error message
-                available = []
-                for proc in procedures:
-                    name = proc.get('name') if isinstance(proc, dict) else proc
-                    alias = proc.get('alias') if isinstance(proc, dict) else None
-                    label = alias if alias else name
-                    available.append(label)
-                
+            available = [p.get('name') if isinstance(p, dict) else p for p in procedures]
+
+            if procedure_name not in available:
                 return jsonify({
-                    'error': f'Invalid scenario "{scenario_label}" for dataset "{dataset}"',
+                    'error': f'Invalid scenario "{procedure_name}" for dataset "{dataset}"',
                     'available_scenarios': available
                 }), 400
+
+            matched_proc = next((p for p in procedures if (p.get('name') if isinstance(p, dict) else p) == procedure_name), None)
             
             # Validate engine is available for this dataset
             error = benchmark_runner.validate_benchmark_request(dataset, engine, procedure_name)
@@ -827,39 +795,15 @@ def trigger_benchmark():
         # For now, support single engine (can be extended for multiple)
         engine = engine_list[0]
         
-        # Look up the actual procedure name from UI label (support aliases)
+        # Validate procedure exists for this dataset
         procedures = config_loader.get_test_procedures(dataset)
-        
-        # Validate: check for duplicate procedure names without aliases
-        name_counts = {}
-        for proc in procedures:
-            name = proc.get('name') if isinstance(proc, dict) else proc
-            name_counts[name] = name_counts.get(name, 0) + 1
-        
-        procedure_name = None
-        
-        for proc in procedures:
-            name = proc.get('name') if isinstance(proc, dict) else proc
-            alias = proc.get('alias') if isinstance(proc, dict) else None
-            
-            # Validate: if multiple procedures with same name, alias is required
-            if name_counts[name] > 1 and not alias:
-                error_msg = f"Dataset '{dataset}': Multiple procedures with name '{name}' found but no alias defined. Please add 'alias' field to distinguish them."
-                logger.error(error_msg)
-                return jsonify({'error': error_msg}), 500
-            
-            # Use alias if available, otherwise use name directly
-            ui_label = alias if alias else name
-            
-            if ui_label == ui_scenario:
-                procedure_name = name
-                break
-        
-        logger.info(f"UI scenario '{ui_scenario}' maps to procedure '{procedure_name}'")
-        
-        # Ensure we have a valid procedure name
-        if not procedure_name:
-            return jsonify({'error': f'Invalid scenario: {ui_scenario}'}), 400
+        available = [p.get('name') if isinstance(p, dict) else p for p in procedures]
+        procedure_name = ui_scenario
+
+        if procedure_name not in available:
+            return jsonify({'error': f'Invalid scenario: {ui_scenario}', 'available_scenarios': available}), 400
+
+        logger.info(f"Using procedure '{procedure_name}'")
         
         # Validate request using the actual procedure name
         error = benchmark_runner.validate_benchmark_request(dataset, engine, procedure_name)
@@ -1169,6 +1113,7 @@ def _parse_sweep_directory(
         'test_run': None,
         'workload_params': None,
         'benchmark_log': None,
+        'k8s_metrics': None,
         'scenario_label': scenario_label,
         'dataset': dataset
     }
@@ -1177,7 +1122,7 @@ def _parse_sweep_directory(
         return sweep_data
 
     # 1. Safely load JSON configuration files
-    for file_name, key in [('test_run.json', 'test_run'), ('workload-params.json', 'workload_params')]:
+    for file_name, key in [('test_run.json', 'test_run'), ('workload-params.json', 'workload_params'), ('k8s_metrics.json', 'k8s_metrics')]:
         target_file = sweep_dir / file_name
         if target_file.exists():
             try:
