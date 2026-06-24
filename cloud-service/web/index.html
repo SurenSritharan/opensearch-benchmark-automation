@@ -88,9 +88,27 @@
         .job-item.running { border-left-color: #f59e0b; }
         .job-item.completed { border-left-color: #10b981; }
         .job-item.failed { border-left-color: #ef4444; }
+        .job-item.queued { border-left-color: #3b82f6; }
         .status-badge { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
         .status-queued { background: #e3f2fd; color: #1976d2; }
-        .status-running { background: #fff3e0; color: #f57c00; }
+        .status-running { background: #fff3e0; color: #f57c00; animation: pulse-bg 2s infinite; }
+        @keyframes pulse-bg {
+            0%, 100% { background: #fff3e0; }
+            50% { background: #ffe0b2; }
+        }
+        .live-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #ef4444;
+            border-radius: 50%;
+            margin-right: 6px;
+            animation: pulse-dot 2s infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.2); }
+        }
         .status-completed { background: #e8f5e9; color: #388e3c; }
         .status-failed { background: #ffebee; color: #d32f2f; }
         .status-error { background: #ffebee; color: #d32f2f; }
@@ -141,7 +159,12 @@
         </div>
 
         <div class="card">
-            <h2>Recent Jobs</h2>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <h2 style="margin: 0;">Recent Jobs</h2>
+                <a href="/compare.html" style="display: inline-block; padding: 10px 20px; background: #8b5cf6; color: white; text-decoration: none; border-radius: 8px; font-weight: 600;">
+                    📊 Compare Jobs
+                </a>
+            </div>
             <div id="jobList" class="job-list">Loading...</div>
         </div>
 
@@ -257,14 +280,16 @@
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                             <div>
                                 <strong>Job ${job.job_id.substring(0, 8)}</strong>
-                                <span class="status-badge status-${job.status}">${job.status}</span>
+                                <span class="status-badge status-${job.status}">
+                                    ${job.status === 'running' ? '<span class="live-indicator"></span>' : ''}${job.status}
+                                </span>
                             </div>
                             <div style="font-size: 12px; color: #666;">
                                 ${new Date(job.created_at).toLocaleString()}
                             </div>
                         </div>
                         <div class="info-text">
-                            <div>Dataset: ${job.dataset} | Engine: ${job.engine} | Scenario: ${job.scenario}</div>
+                            <div>Dataset: ${job.dataset} | Engine: ${job.engine} | Scenario: ${job.scenario || job.ui_scenario || 'N/A'}</div>
                             <div>Duration: ${durationStr}</div>
                             ${job.error ? `<div style="color: #d32f2f; margin-top: 4px;">Error: ${job.error}</div>` : ''}
                             ${job.status === 'completed' ?
@@ -276,7 +301,9 @@
                                 </div>` : ''}
                             ${job.status === 'queued' || job.status === 'running' ?
                                 `<div style="margin-top: 8px;">
-                                    <button onclick="cancelJob('${job.job_id}')" style="padding: 6px 12px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">❌ Cancel Job</button>
+                                    <a href="/results/${job.job_id}?job_id=${job.job_id}" style="display: inline-block; padding: 6px 12px; background: #f59e0b; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;">🔴 View Live Status</a>
+                                    <a href="/api/v1/benchmark/${job.job_id}/live-status" target="_blank" style="display: inline-block; padding: 6px 12px; background: #10b981; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em; margin-left: 8px;">📊 Live JSON</a>
+                                    <button onclick="cancelJob('${job.job_id}')" style="padding: 6px 12px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; margin-left: 8px;">❌ Cancel Job</button>
                                 </div>` : ''}
                             ${job.status === 'cancelled' || job.status === 'error' || job.status === 'failed' ?
                                 `<div style="margin-top: 8px;">

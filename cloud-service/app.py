@@ -1290,6 +1290,116 @@ def get_job_results(job_id: str):
     })
 
 
+@app.route('/api/v1/benchmark/<job_id>/live-status')
+def get_live_status(job_id: str):
+    """Get live status for an ongoing test including partial results
+    
+    This endpoint works for both running and completed jobs.
+    For running jobs, it returns whatever data is available so far.
+    """
+    job = get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    status = job.get('status', 'unknown')
+    
+    # Build response with job metadata
+    response = {
+        'job_id': job_id,
+        'status': status,
+        'dataset': job.get('dataset'),
+        'engine': job.get('engine'),
+        'scenario': job.get('ui_scenario') or job.get('scenario'),
+        'created_at': job.get('created_at'),
+        'started_at': job.get('started_at'),
+        'completed_at': job.get('completed_at'),
+        'current_scenario': job.get('current_scenario'),
+        'scenario_status': job.get('scenario_status', {}),
+        'live_data': {}
+    }
+    
+    # For running or completed jobs, try to get live data
+    if status in ['running', 'completed', 'error', 'partial_failure']:
+        results_base = job.get('results_base', job_id)
+        results_dir = Path('/results') / results_base
+        
+        # Try to find the most recent test_run.json and benchmark.log
+        live_data = {
+            'test_runs': [],
+            'benchmark_logs': [],
+            'workload_params': []
+        }
+        
+        # Search for all sweep directories and collect their data
+        if results_dir.exists():
+            # For batch jobs, look in scenario subdirectories
+            if job.get('scenarios'):
+                for scenario in job.get('scenarios', []):
+                    dataset = scenario.get('dataset', '')
+                    label = scenario.get('label', '')
+                    scenario_key = f"{dataset}-{label}"
+                    scenario_dir = results_dir / scenario_key
+                    
+                    if scenario_dir.exists():
+                        for sweep_dir in sorted(scenario_dir.glob('sweep-*')):
+                            _collect_live_data(sweep_dir, live_data, scenario_key)
+            else:
+                # For single jobs, look for sweep directories or direct artifacts
+                sweep_dirs = sorted(results_dir.glob('**/sweep-*'), key=lambda p: p.name)
+                if sweep_dirs:
+                    for sweep_dir in sweep_dirs:
+                        _collect_live_data(sweep_dir, live_data, None)
+                else:
+                    # Check if artifacts are in the root results directory
+                    _collect_live_data(results_dir, live_data, None)
+        
+        response['live_data'] = live_data
+    
+    return jsonify(response)
+
+
+def _collect_live_data(sweep_dir: Path, live_data: dict, scenario_label: Optional[str] = None):
+    """Helper to collect live data from a sweep directory"""
+    if not sweep_dir.exists():
+        return
+    
+    sweep_info = {
+        'sweep_name': sweep_dir.name,
+        'scenario_label': scenario_label
+    }
+    
+    # Try to read test_run.json
+    test_run_file = sweep_dir / 'test_run.json'
+    if test_run_file.exists():
+        try:
+            test_run_data = json.loads(test_run_file.read_text())
+            sweep_info['test_run'] = test_run_data
+            live_data['test_runs'].append(sweep_info.copy())
+        except Exception as e:
+            logger.error(f"Error reading test_run.json from {sweep_dir}: {e}")
+    
+    # Try to read workload-params.json
+    params_file = sweep_dir / 'workload-params.json'
+    if params_file.exists():
+        try:
+            params_data = json.loads(params_file.read_text())
+            sweep_info['workload_params'] = params_data
+            live_data['workload_params'].append(sweep_info.copy())
+        except Exception as e:
+            logger.error(f"Error reading workload-params.json from {sweep_dir}: {e}")
+    
+    # Try to read last 200 lines of benchmark.log
+    log_file = sweep_dir / 'benchmark.log'
+    if log_file.exists():
+        try:
+            with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+                last_lines = deque(f, maxlen=200)
+            sweep_info['benchmark_log'] = ''.join(last_lines)
+            live_data['benchmark_logs'].append(sweep_info.copy())
+        except Exception as e:
+            logger.error(f"Error reading benchmark.log from {sweep_dir}: {e}")
+
+
 @app.route('/results/<job_id>')
 def view_results(job_id: str):
     """Serve the results viewer page"""
