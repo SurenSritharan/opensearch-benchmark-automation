@@ -1319,7 +1319,7 @@ def get_live_status(job_id: str):
     }
     
     # For running or completed jobs, try to get live data
-    if status in ['running', 'completed', 'error', 'partial_failure']:
+    if status in ['running', 'completed', 'error', 'failed', 'partial_failure']:
         results_base = job.get('results_base', job_id)
         results_dir = Path('/results') / results_base
         
@@ -1334,15 +1334,38 @@ def get_live_status(job_id: str):
         if results_dir.exists():
             # For batch jobs, look in scenario subdirectories
             if job.get('scenarios'):
+                engine = job.get('engine', '')
                 for scenario in job.get('scenarios', []):
                     dataset = scenario.get('dataset', '')
                     label = scenario.get('label', '')
                     scenario_key = f"{dataset}-{label}"
-                    scenario_dir = results_dir / scenario_key
                     
-                    if scenario_dir.exists():
-                        for sweep_dir in sorted(scenario_dir.glob('sweep-*')):
-                            _collect_live_data(sweep_dir, live_data, scenario_key)
+                    # Try multiple directory structures (engine dir is primary):
+                    # 1. /results/<job_id>/<engine>/<scenario_key>/ (most common)
+                    # 2. /results/<job_id>/<scenario_key>/ (fallback)
+                    possible_dirs = [
+                        results_dir / engine / scenario_key if engine else None,
+                        results_dir / scenario_key
+                    ]
+                    
+                    scenario_dir = None
+                    for dir_path in possible_dirs:
+                        if dir_path and dir_path.exists():
+                            scenario_dir = dir_path
+                            break
+                    
+                    if scenario_dir:
+                        # First check for sweep directories
+                        sweep_dirs = sorted(scenario_dir.glob('sweep-*'))
+                        if sweep_dirs:
+                            for sweep_dir in sweep_dirs:
+                                _collect_live_data(sweep_dir, live_data, scenario_key)
+                        else:
+                            # No sweep dirs, check for files directly in scenario directory
+                            _collect_live_data(scenario_dir, live_data, scenario_key)
+                    else:
+                        # Scenario dir doesn't exist in any expected location
+                        logger.info(f"Scenario directory not found for: {scenario_key}")
             else:
                 # For single jobs, look for sweep directories or direct artifacts
                 sweep_dirs = sorted(results_dir.glob('**/sweep-*'), key=lambda p: p.name)
@@ -1352,6 +1375,21 @@ def get_live_status(job_id: str):
                 else:
                     # Check if artifacts are in the root results directory
                     _collect_live_data(results_dir, live_data, None)
+            
+            # Add debug info about what was found
+            live_data['debug_info'] = {
+                'results_dir': str(results_dir),
+                'results_dir_exists': results_dir.exists(),
+                'is_batch_job': bool(job.get('scenarios')),
+                'scenarios_count': len(job.get('scenarios', [])),
+                'files_found': len(live_data.get('test_runs', [])) + len(live_data.get('benchmark_logs', []))
+            }
+        else:
+            live_data['debug_info'] = {
+                'results_dir': str(results_dir),
+                'results_dir_exists': False,
+                'error': 'Results directory does not exist'
+            }
         
         response['live_data'] = live_data
     
