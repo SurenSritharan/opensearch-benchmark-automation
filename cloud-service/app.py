@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cloud-native OpenSearch Benchmark REST API Service"""
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, abort
 from flask_cors import CORS
 from collections import deque
 import threading
@@ -448,10 +448,55 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
     logger.info(f"Batch job {job_id} finished: {batch_results['scenarios_completed']} completed, {batch_results['scenarios_failed']} failed")
 
 
+RESULTS_DIR = Path("/results").resolve()
+
+
+def _resolve_results_path(relative_path: str = "") -> Path:
+    candidate = (RESULTS_DIR / relative_path).resolve()
+    if candidate != RESULTS_DIR and RESULTS_DIR not in candidate.parents:
+        abort(403, description="Access outside /results is not allowed")
+    return candidate
+
+
 @app.route('/')
 def index():
     """Serve the web UI"""
     return send_from_directory('web', 'index.html')
+
+
+@app.route('/results', defaults={'requested_path': ''})
+@app.route('/results/<path:requested_path>')
+def browse_results(requested_path: str):
+    """Browse or download files from /results over HTTP."""
+    target_path = _resolve_results_path(requested_path)
+
+    if not target_path.exists():
+        return jsonify({
+            'status': 'error',
+            'error': 'Path not found',
+            'path': requested_path
+        }), 404
+
+    if target_path.is_dir():
+        entries = []
+        for child in sorted(target_path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            rel_path = child.relative_to(RESULTS_DIR).as_posix()
+            entries.append({
+                'name': child.name,
+                'path': rel_path,
+                'type': 'directory' if child.is_dir() else 'file',
+                'size': child.stat().st_size if child.is_file() else None
+            })
+
+        return jsonify({
+            'status': 'success',
+            'base_path': '/results',
+            'path': requested_path,
+            'entries': entries
+        })
+
+    parent_dir = target_path.parent
+    return send_from_directory(parent_dir, target_path.name, as_attachment=False)
 
 
 @app.route('/health')
