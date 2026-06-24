@@ -313,9 +313,6 @@ class ConfigLoader:
                 logger.info(f"Resolved {len(resolved_files)} data files")
         
         data_files = dataset_config.get('data_files', [])
-        if not data_files:
-            logger.info("No data files to download")
-            return True
         
         data_dir = dataset_config.get('data_dir', '/datasets')
         data_dir_path = Path(data_dir)
@@ -326,6 +323,9 @@ class ConfigLoader:
         corpus_size = dataset_config.get('corpus_size', '1m')
         dimension = dataset_config.get('dimension', 1024)
         num_vectors = get_num_vectors(corpus_size)
+
+        if not data_files:
+            logger.info("No static data files to download")
         
         for file_info in data_files:
             file_name = file_info.get('name')
@@ -415,6 +415,40 @@ class ConfigLoader:
                 logger.error(f"Failed to download {target_file_name}: {e}")
                 return False
         
+        # Download the ground truth file if specified in params and not already present.
+        # The path is already fully resolved (e.g. /datasets/msmarco/cohere_msmarco_indices_d1024_k10_5m.ivec).
+        # Derive the download URL from base_url + filename.
+        if params and params.get('ground_truth_file'):
+            gt_path = Path(params['ground_truth_file'])
+            if not gt_path.exists():
+                base_url = dataset_config.get('base_url', '')
+                if not base_url:
+                    logger.error(f"ground_truth_file '{gt_path}' not found and no base_url configured to download it")
+                    return False
+                gt_url = f"{base_url}/{gt_path.name}"
+                logger.info(f"📥 Downloading ground truth file: {gt_path.name}")
+                logger.info(f"  URL: {gt_url}")
+                gt_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    result = subprocess.run(
+                        ['wget', '-q', '--show-progress', '-O', str(gt_path), gt_url],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=3600
+                    )
+                    if result.returncode != 0:
+                        logger.error(f"Failed to download ground truth file: {gt_path.name}")
+                        return False
+                    logger.info(f"✓ Downloaded: {gt_path.name} ({gt_path.stat().st_size / (1024**2):.1f} MB)")
+                except subprocess.TimeoutExpired:
+                    logger.error(f"Download timed out for ground truth file: {gt_path.name}")
+                    return False
+                except Exception as e:
+                    logger.error(f"Failed to download ground truth file {gt_path.name}: {e}")
+                    return False
+            else:
+                logger.info(f"✓ Ground truth file already exists: {gt_path.name}")
+
         logger.info("✓ All dataset files are ready")
         return True
     
