@@ -10,7 +10,7 @@ datasets:
     
     # Common parameters shared across all scenarios
     common_params:
-      target_index_name: "cohere-768"
+      target_index_name: "cohere-768-{{corpus_size}}"
       target_field_name: "target_field"
       id_field_name: "_id"
       corpus_size: "{{corpus_size}}"  # Pass to workload for dynamic resolution
@@ -102,7 +102,7 @@ datasets:
     
     # Common parameters shared across all scenarios
     common_params:
-      target_index_name: "cohere-msmarco-1024"
+      target_index_name: "cohere-msmarco-1024-{{corpus_size}}"
     
     # Engine-specific parameters (used across scenarios)
     engine_params:
