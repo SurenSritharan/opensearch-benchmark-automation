@@ -1230,9 +1230,21 @@ def get_job_results(job_id: str):
             
             for sweep in s_data.get('sweep_results', []):
                 sweep_name = sweep.get('sweep_name')
-                if sweep_name:
+                if not sweep_name and sweep.get('results_dir'):
+                    tail = Path(sweep['results_dir']).name
+                    # If the tail is the scenario subdir itself, artifacts live directly
+                    # in the scenario dir (no sweep-N subfolder was created)
+                    if tail == subdir or not tail.startswith('sweep-'):
+                        sweep_name = f"sweep-{sweep.get('sweep_index', 1)}"
+                        sweep_path = results_dir / subdir
+                    else:
+                        sweep_name = tail
+                        sweep_path = results_dir / subdir / sweep_name
+                elif sweep_name:
                     sweep_path = results_dir / subdir / sweep_name
-                    sweeps.append(_parse_sweep_directory(sweep_path, sweep_name, label, dataset))
+                else:
+                    continue
+                sweeps.append(_parse_sweep_directory(sweep_path, sweep_name, label, dataset))
     elif job.get('scenarios'):
         # --- Batch Job Path (legacy/existing jobs without scenario_results) ---
         # Reconstruct from job.scenarios and file system
