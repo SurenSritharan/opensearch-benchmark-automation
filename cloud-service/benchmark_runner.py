@@ -79,9 +79,6 @@ class BenchmarkRunner:
                 base_params.update(engine_params_config[engine])
                 logger.info(f"Loaded engine params for {engine}: {list(engine_params_config[engine].keys())}")
             
-            # Extract ground_truth_files mapping before removing it
-            ground_truth_files_map = base_params.pop('ground_truth_files', None)
-            
             # Get the specific procedure configuration
             procedures = self.config.get_test_procedures(dataset)
             procedure_config = None
@@ -160,37 +157,6 @@ class BenchmarkRunner:
                             'status': 'failed',
                             'error': f'Failed to download dataset files for sweep {sweep_idx}. Check logs for details.'
                         }
-                
-                # Resolve ground_truth_file based on query_k value
-                if ground_truth_files_map:
-                    # Check if it's a dict (mapping k values to files) or a string (single file for all k)
-                    if isinstance(ground_truth_files_map, dict):
-                        # Dict mapping: look up based on query_k
-                        if 'query_k' in final_params:
-                            query_k = final_params.get('query_k')
-                            # Convert to int if it's a string
-                            if isinstance(query_k, str):
-                                query_k = int(query_k)
-                            
-                            # Look up the ground truth file for this k value
-                            if query_k in ground_truth_files_map:
-                                ground_truth_file = ground_truth_files_map[query_k]
-                                final_params['ground_truth_file'] = ground_truth_file
-                                logger.info(f"Resolved ground_truth_file for k={query_k}: {ground_truth_file}")
-                            else:
-                                logger.warning(f"No ground truth file found for k={query_k}, available: {list(ground_truth_files_map.keys())}")
-                                # Set empty string as fallback (benchmark will skip recall calculation)
-                                final_params['ground_truth_file'] = ''
-                        else:
-                            logger.warning("ground_truth_files is a dict but query_k not found in params")
-                            final_params['ground_truth_file'] = ''
-                    elif isinstance(ground_truth_files_map, str):
-                        # Single file for all k values
-                        final_params['ground_truth_file'] = ground_truth_files_map
-                        logger.info(f"Using default ground_truth_file for all k values: {ground_truth_files_map}")
-                    else:
-                        logger.warning(f"ground_truth_files has unexpected type: {type(ground_truth_files_map)}")
-                        final_params['ground_truth_file'] = ''
             
                 # Check cluster health before starting
                 logger.info(f"Checking cluster health for {engine}...")

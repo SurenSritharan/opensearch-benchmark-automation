@@ -1236,16 +1236,34 @@ def get_job_results(job_id: str):
     elif job.get('scenarios'):
         # --- Batch Job Path (legacy/existing jobs without scenario_results) ---
         # Reconstruct from job.scenarios and file system
+        engine = job.get('engine', '')
         for scenario in job.get('scenarios', []):
             dataset = scenario.get('dataset', '')
             label = scenario.get('label', '')
             scenario_key = f"{dataset}-{label}"
             
             # Look for sweep directories in the scenario subdirectory
-            scenario_dir = results_dir / scenario_key
-            if scenario_dir.exists():
-                for sweep_dir in sorted(scenario_dir.glob('sweep-*')):
-                    sweeps.append(_parse_sweep_directory(sweep_dir, sweep_dir.name, label, dataset))
+            # Try engine-specific directory first, then fallback to direct path
+            possible_dirs = [
+                results_dir / engine / scenario_key if engine else None,
+                results_dir / scenario_key
+            ]
+            
+            scenario_dir = None
+            for dir_path in possible_dirs:
+                if dir_path and dir_path.exists():
+                    scenario_dir = dir_path
+                    break
+            
+            if scenario_dir:
+                # Check for sweep directories
+                sweep_dirs = sorted(scenario_dir.glob('sweep-*'))
+                if sweep_dirs:
+                    for sweep_dir in sweep_dirs:
+                        sweeps.append(_parse_sweep_directory(sweep_dir, sweep_dir.name, label, dataset))
+                else:
+                    # No sweep dirs, check for files directly in scenario directory
+                    sweeps.append(_parse_sweep_directory(scenario_dir, 'sweep-1', label, dataset))
     else:
         # --- Single Job Path ---
         dataset = job.get('result', {}).get('dataset') or job.get('dataset')

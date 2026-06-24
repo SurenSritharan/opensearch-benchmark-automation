@@ -851,16 +851,40 @@
                 }
                 
                 content.innerHTML = html;
+                
+                // Restore previously open elements after refresh
+                restoreOpenElements();
             } catch (error) {
                 console.error('Error displaying live status:', error);
             }
         }
         
+        // Track which elements are open
+        const openElements = new Set();
+        
         function toggleJson(elementId) {
             const element = document.getElementById(elementId);
             if (element) {
-                element.style.display = element.style.display === 'none' ? 'block' : 'none';
+                const isVisible = element.style.display !== 'none';
+                element.style.display = isVisible ? 'none' : 'block';
+                
+                // Track state
+                if (isVisible) {
+                    openElements.delete(elementId);
+                } else {
+                    openElements.add(elementId);
+                }
             }
+        }
+        
+        function restoreOpenElements() {
+            // Restore previously open elements after refresh
+            openElements.forEach(elementId => {
+                const element = document.getElementById(elementId);
+                if (element) {
+                    element.style.display = 'block';
+                }
+            });
         }
         
         function showError(message) {

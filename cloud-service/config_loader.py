@@ -270,19 +270,6 @@ class ConfigLoader:
             merged_params.update(runtime_params)
 
         resolved_params = self._resolve_template_vars(merged_params, dataset_config)
-
-        needs_ground_truth = 'queries_file' in resolved_params and ('query_k' in resolved_params or 'k' in resolved_params)
-        ground_truth_template = resolved_params.get('ground_truth_file_template')
-        if needs_ground_truth and ground_truth_template and 'ground_truth_file' not in resolved_params:
-            # Resolve the template with current params (query_k, corpus_size, etc.)
-            ground_truth_file = ground_truth_template
-            for key, value in resolved_params.items():
-                placeholder = f"{{{{{key}}}}}"
-                if placeholder in ground_truth_file:
-                    ground_truth_file = ground_truth_file.replace(placeholder, str(value))
-            resolved_params['ground_truth_file'] = ground_truth_file
-            logger.info(f"Resolved ground_truth_file from template '{ground_truth_template}' to: {ground_truth_file}")
-
         return resolved_params
 
     def download_dataset_files(self, dataset_name: str, params: Optional[Dict[str, Any]] = None) -> bool:
@@ -520,11 +507,6 @@ class ConfigLoader:
             logger.debug(f"Added num_vectors={template_vars['num_vectors']} based on corpus_size={corpus_size}")
         
         # Clean up internal/template parameters that should not be passed to OpenSearch Benchmark
-                
-        # Remove ground_truth_file_template after it's been resolved to ground_truth_file
-        if 'ground_truth_file_template' in resolved_params:
-            resolved_params.pop('ground_truth_file_template')
-            logger.debug("Removed 'ground_truth_file_template' (already resolved to 'ground_truth_file')")
         
         # Remove corpus_size and corpus_name (internal template helpers)
         if 'corpus_size' in resolved_params:
