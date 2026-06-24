@@ -297,14 +297,14 @@ class BenchmarkRunner:
                 # Start metrics collection in background thread if enabled
                 if self.metrics_collector:
                     logger.info("📊 Starting metrics collection in background...")
+                    metrics_collector = self.metrics_collector
                     
                     def collect_metrics():
                         try:
-                            # Collect metrics continuously during benchmark
-                            self.metrics_collector.start_collection(
+                            metrics_collector.start_collection(
                                 scenario_name=f"{dataset}-{scenario}-sweep{sweep_idx}",
-                                interval=10,  # Collect every 10 seconds
-                                duration=None  # Run until benchmark completes
+                                interval=10,
+                                duration=None
                             )
                         except Exception as e:
                             logger.error(f"Error in metrics collection thread: {e}")
@@ -313,28 +313,33 @@ class BenchmarkRunner:
                     self.metrics_thread.start()
                     logger.info("✓ Metrics collection started")
                 
-                # Execute benchmark in its own process group for proper signal handling
-                # This allows us to kill the entire process tree when cancelling
                 start_time = datetime.utcnow()
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=21600,  # 6 hour timeout
-                    env=env,
-                    start_new_session=True  # Create new process group
-                )
-                end_time = datetime.utcnow()
-                
-                # Stop metrics collection
-                if self.metrics_collector and self.metrics_thread:
-                    logger.info("📊 Stopping metrics collection...")
-                    # The collector will stop when we save metrics
-                    try:
-                        self.metrics_collector.save_metrics(f"{dataset}-{scenario}-sweep{sweep_idx}")
-                        logger.info("✓ Metrics saved")
-                    except Exception as e:
-                        logger.error(f"Error saving metrics: {e}")
+                result = None
+                try:
+                    # Execute benchmark in its own process group for proper signal handling
+                    # This allows us to kill the entire process tree when cancelling
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=21600,  # 6 hour timeout
+                        env=env,
+                        start_new_session=True  # Create new process group
+                    )
+                finally:
+                    end_time = datetime.utcnow()
+                    if self.metrics_collector and self.metrics_thread:
+                        logger.info("📊 Stopping metrics collection...")
+                        metrics_collector = self.metrics_collector
+                        try:
+                            metrics_collector.stop_collection()
+                            self.metrics_thread.join(timeout=30)
+                            metrics_collector.save_metrics(f"{dataset}-{scenario}-sweep{sweep_idx}")
+                            logger.info("✓ Metrics saved")
+                        except Exception as e:
+                            logger.error(f"Error saving metrics: {e}")
+                        finally:
+                            self.metrics_thread = None
                 
                 duration = (end_time - start_time).total_seconds()
                 

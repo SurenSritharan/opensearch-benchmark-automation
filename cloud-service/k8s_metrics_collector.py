@@ -9,6 +9,7 @@ import time
 import json
 import logging
 import re
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Any, List
@@ -46,6 +47,8 @@ class K8sMetricsCollector:
         self.start_iso = ""
         self.end_iso = ""
         self.total_samples = 0
+        self.final_payload = None
+        self._stop_event = threading.Event()
         
         # Aggregation buckets for the specified summary structure
         self.node_cpu_raw = defaultdict(list)
@@ -161,6 +164,8 @@ class K8sMetricsCollector:
             return
         
         self.scenario_name = scenario_name
+        self.final_payload = None
+        self._stop_event.clear()
         self._cache_node_pools()
         
         # Python 3.11+ preferred over utcnow()
@@ -169,7 +174,7 @@ class K8sMetricsCollector:
         end_epoch = start_time + duration if duration else float('inf')
         
         logger.info(f"Starting metrics capture loop for scenario: {scenario_name}")
-        while time.time() < end_epoch:
+        while not self._stop_event.is_set() and time.time() < end_epoch:
             loop_start = time.time()
             self.collect_sample()
             
@@ -177,7 +182,7 @@ class K8sMetricsCollector:
             sleep_time = max(0.0, interval - elapsed)
             if duration and (time.time() + sleep_time) >= end_epoch:
                 break
-            time.sleep(sleep_time)
+            self._stop_event.wait(sleep_time)
         
         self.end_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "")
         duration_seconds = time.time() - start_time
@@ -225,19 +230,26 @@ class K8sMetricsCollector:
             
         return summary
 
-    def save_metrics(self, scenario_name: str):
-        if not self.enabled or not self.total_samples:
+    def stop_collection(self):
+        if not self.enabled:
             return
-        output_dir = self.results_dir / scenario_name
-        output_dir.mkdir(parents=True, exist_ok=True)
+        self._stop_event.set()
+
+    def save_metrics(self, scenario_name: str):
+        if not self.enabled or not self.total_samples or not self.final_payload:
+            return
+
+        self.final_payload["scenario"] = scenario_name
+        self.results_dir.mkdir(parents=True, exist_ok=True)
         
-        # Clean naming format matching expectations
-        with open(output_dir / "k8s_metrics.json", 'w') as f:
+        with open(self.results_dir / "k8s_metrics.json", 'w') as f:
             json.dump(self.final_payload, f, indent=2)
-        logger.info(f"✓ Target JSON format payload saved to: {output_dir}")
+        logger.info(f"✓ Target JSON format payload saved to: {self.results_dir}")
 
     def reset(self):
         self.total_samples = 0
+        self.final_payload = None
+        self._stop_event.clear()
         self.node_cpu_raw.clear()
         self.node_mem_raw.clear()
         self.node_pools.clear()
