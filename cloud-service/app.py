@@ -7,14 +7,18 @@ import threading
 import uuid
 import logging
 import os
+import shutil
 import sqlite3
 import json
+import subprocess
+import time
 from datetime import datetime
 from typing import Dict, Any, Optional
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from filelock import FileLock
-from queue import Queue
+import requests
+from requests.auth import HTTPBasicAuth
 from config_loader import ConfigLoader
 from benchmark_runner import BenchmarkRunner
 
@@ -35,6 +39,9 @@ db_lock = threading.RLock()
 # Track which engine processors are running (in-memory per worker)
 running_processors = set()
 processor_lock = threading.Lock()
+
+# Statuses that mean a job is no longer active
+TERMINAL_STATUSES = {'completed', 'error', 'cancelled', 'failed', 'partial', 'partial_failure'}
 
 def init_db():
     """Initialize SQLite database for job storage and queue"""
@@ -78,6 +85,19 @@ def ensure_processor_running(engine: str):
             logger.info(f"Started queue processor for engine: {engine}")
         else:
             logger.debug(f"Queue processor already running for engine: {engine}")
+
+def _restore_batch_fields(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Unpack batch-job metadata that was serialised into the options blob."""
+    if '_batch_scenarios' in job.get('options', {}):
+        job['scenarios'] = job['options'].pop('_batch_scenarios')
+        batch_meta = job['options'].pop('_batch_metadata', {})
+        job['results_base'] = batch_meta.get('results_base')
+        job['scenario_status'] = batch_meta.get('scenario_status', {})
+        job['scenario_results'] = batch_meta.get('scenario_results', {})
+        job['current_scenario'] = batch_meta.get('current_scenario')
+        job['current_scenario_index'] = batch_meta.get('current_scenario_index', 0)
+    return job
+
 
 def save_job(job_id: str, job_data: Dict[str, Any]):
     """Save or update a job in the database"""
@@ -134,21 +154,9 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
                 return None
             
             job = dict(row)
-            # Deserialize JSON fields
             job['options'] = json.loads(job['options']) if job['options'] else {}
             job['result'] = json.loads(job['result']) if job['result'] else {}
-            
-            # Restore batch job fields from options if present
-            if '_batch_scenarios' in job['options']:
-                job['scenarios'] = job['options'].pop('_batch_scenarios')
-                batch_meta = job['options'].pop('_batch_metadata', {})
-                job['results_base'] = batch_meta.get('results_base')
-                job['scenario_status'] = batch_meta.get('scenario_status', {})
-                job['scenario_results'] = batch_meta.get('scenario_results', {})
-                job['current_scenario'] = batch_meta.get('current_scenario')
-                job['current_scenario_index'] = batch_meta.get('current_scenario_index', 0)
-            
-            return job
+            return _restore_batch_fields(job)
 
 def get_all_jobs(limit: int = 50) -> list:
     """Get all jobs from the database"""
@@ -164,11 +172,9 @@ def get_all_jobs(limit: int = 50) -> list:
             jobs = []
             for row in rows:
                 job = dict(row)
-                # Deserialize JSON fields
                 job['options'] = json.loads(job['options']) if job['options'] else {}
                 job['result'] = json.loads(job['result']) if job['result'] else {}
                 jobs.append(job)
-            
             return jobs
 
 def update_job_status(job_id: str, status: str, **kwargs):
@@ -198,18 +204,7 @@ def get_next_queued_job(engine: str) -> Optional[Dict[str, Any]]:
             job = dict(row)
             job['options'] = json.loads(job['options']) if job['options'] else {}
             job['result'] = json.loads(job['result']) if job['result'] else {}
-            
-            # Restore batch job fields from options if present
-            if '_batch_scenarios' in job['options']:
-                job['scenarios'] = job['options'].pop('_batch_scenarios')
-                batch_meta = job['options'].pop('_batch_metadata', {})
-                job['results_base'] = batch_meta.get('results_base')
-                job['scenario_status'] = batch_meta.get('scenario_status', {})
-                job['scenario_results'] = batch_meta.get('scenario_results', {})
-                job['current_scenario'] = batch_meta.get('current_scenario')
-                job['current_scenario_index'] = batch_meta.get('current_scenario_index', 0)
-            
-            return job
+            return _restore_batch_fields(job)
 
 def get_engine_lock(engine: str, timeout: int = -1):
     """Creates a lock file on the disk.
@@ -568,45 +563,22 @@ def discover():
     try:
         datasets = config_loader.get_datasets()
         
-        # Add test procedures to each dataset with metadata mapping
+        # Attach procedure metadata to each dataset
         for dataset in datasets:
             dataset_name = dataset['name']
             procedures = config_loader.get_test_procedures(dataset_name)
-            
-            # Validate: check for duplicate procedure names without aliases
-            name_counts = {}
+
+            procedures_metadata = []
             for proc in procedures:
                 name = proc.get('name') if isinstance(proc, dict) else proc
-                name_counts[name] = name_counts.get(name, 0) + 1
-            
-            # Build procedure metadata with UI labels and actual procedure names
-            procedures_metadata = []
-            
-            for idx, proc in enumerate(procedures):
-                name = proc.get('name') if isinstance(proc, dict) else proc
-                alias = proc.get('alias') if isinstance(proc, dict) else None
-                
-                # Validate: if multiple procedures with same name, alias is required
-                if name_counts[name] > 1 and not alias:
-                    error_msg = f"Dataset '{dataset_name}': Multiple procedures with name '{name}' found but no alias defined. Please add 'alias' field to distinguish them."
-                    logger.error(error_msg)
-                    return jsonify({'error': error_msg}), 500
-                
-                # Use alias if available, otherwise use name directly
-                ui_label = alias if alias else name
-                
-                # Check for parameter sweeps
                 has_sweeps = isinstance(proc, dict) and 'parameter_sweeps' in proc
-                sweep_count = len(proc.get('parameter_sweeps', [])) if has_sweeps else 0
-                
                 procedures_metadata.append({
-                    'ui_label': ui_label,
-                    'procedure_name': name,
+                    'name': name,
                     'has_parameter_sweeps': has_sweeps,
-                    'sweep_count': sweep_count
+                    'sweep_count': len(proc.get('parameter_sweeps', [])) if has_sweeps else 0
                 })
-            
-            dataset['test_procedures'] = [p['ui_label'] for p in procedures_metadata]
+
+            dataset['test_procedures'] = [p['name'] for p in procedures_metadata]
             dataset['procedures_metadata'] = procedures_metadata
         
         return jsonify({
@@ -890,8 +862,6 @@ def get_job_status(job_id: str):
 @app.route('/api/v1/benchmark/<job_id>/cancel', methods=['POST'])
 def cancel_job(job_id: str):
     """Cancel a queued or running job"""
-    import subprocess as sp
-    
     job = get_job(job_id)
     
     if not job:
@@ -917,58 +887,46 @@ def cancel_job(job_id: str):
     elif status == 'running':
         # Gracefully terminate opensearch-benchmark process
         try:
-            import time
-            
             # Step 1: Send SIGINT (Ctrl+C) for graceful shutdown
             logger.info(f"Job {job_id}: Sending SIGINT to opensearch-benchmark process...")
-            result = sp.run(
+            result = subprocess.run(
                 ['pkill', '-SIGINT', '-f', 'opensearch-benchmark'],
-                capture_output=True,
-                text=True
+                capture_output=True, text=True
             )
-            
             if result.returncode != 0:
                 logger.warning(f"Job {job_id}: No opensearch-benchmark process found (pkill returned {result.returncode})")
-            
+
             # Step 2: Wait up to 60 seconds for graceful shutdown
             logger.info(f"Job {job_id}: Waiting up to 60 seconds for graceful shutdown...")
             for i in range(60):
                 time.sleep(1)
-                # Check if process still exists
-                check = sp.run(
+                check = subprocess.run(
                     ['pgrep', '-f', 'opensearch-benchmark'],
-                    capture_output=True,
-                    text=True
+                    capture_output=True, text=True
                 )
                 if check.returncode != 0:
-                    # Process has terminated
                     logger.info(f"Job {job_id}: Process terminated gracefully after {i+1} seconds")
                     break
             else:
                 # Step 3: If still running after 60s, send SIGTERM
                 logger.warning(f"Job {job_id}: Process still running after 60s, sending SIGTERM...")
-                sp.run(
+                subprocess.run(
                     ['pkill', '-SIGTERM', '-f', 'opensearch-benchmark'],
-                    capture_output=True,
-                    text=True
+                    capture_output=True, text=True
                 )
-                
-                # Wait another 10 seconds for SIGTERM
                 time.sleep(10)
-                check = sp.run(
+                check = subprocess.run(
                     ['pgrep', '-f', 'opensearch-benchmark'],
-                    capture_output=True,
-                    text=True
+                    capture_output=True, text=True
                 )
                 if check.returncode != 0:
                     logger.info(f"Job {job_id}: Process terminated after SIGTERM")
                 else:
                     # Step 4: Last resort - SIGKILL
                     logger.error(f"Job {job_id}: Process still running, sending SIGKILL...")
-                    sp.run(
+                    subprocess.run(
                         ['pkill', '-SIGKILL', '-f', 'opensearch-benchmark'],
-                        capture_output=True,
-                        text=True
+                        capture_output=True, text=True
                     )
             
             # Update job status
@@ -1000,7 +958,7 @@ def cancel_job(job_id: str):
                 'error': str(e)
             }), 500
     
-    elif status in ['completed', 'error', 'cancelled']:
+    elif status in TERMINAL_STATUSES:
         return jsonify({
             'error': f'Job already {status}',
             'job_id': job_id,
@@ -1040,20 +998,15 @@ def delete_job(job_id: str):
         # Check if we should clean up results
         cleanup_results = request.args.get('cleanup_results', 'false').lower() == 'true'
         results_deleted = False
-        
+
         if cleanup_results:
-            # Determine results directory
             results_dir = None
-            if job.get('options', {}).get('_batch_metadata', {}).get('results_base'):
-                # Batch job
-                results_dir = Path(job['options']['_batch_metadata']['results_base'])
+            if job.get('results_base'):
+                results_dir = Path('/results') / job['results_base']
             elif job.get('result', {}).get('results_dir'):
-                # Single job
                 results_dir = Path(job['result']['results_dir'])
-            
-            # Delete results directory if it exists
+
             if results_dir and results_dir.exists():
-                import shutil
                 try:
                     shutil.rmtree(results_dir)
                     results_deleted = True
@@ -1153,8 +1106,7 @@ def get_job_results(job_id: str):
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     
-    #  FIXED: Safe .get() to prevent KeyError if status is missing
-    if job.get('status') not in ['completed', 'error']:
+    if job.get('status') not in ['completed', 'error', 'partial']:
         return jsonify({'error': f'Job is {job.get("status", "unknown")}, no results available yet'}), 400
     
     # Use results_base if available (batch jobs), otherwise use job_id (single jobs)
@@ -1289,7 +1241,13 @@ def get_live_status(job_id: str):
         'started_at': job.get('started_at'),
         'completed_at': job.get('completed_at'),
         'current_scenario': job.get('current_scenario'),
+        'current_scenario_index': job.get('current_scenario_index', 0),
         'scenario_status': job.get('scenario_status', {}),
+        # Ordered list of scenarios so the frontend can render them in sequence
+        'scenarios': [
+            {'label': s.get('label', ''), 'dataset': s.get('dataset', ''), 'procedure_name': s.get('procedure_name', '')}
+            for s in job.get('scenarios', [])
+        ],
         'live_data': {}
     }
     
@@ -1431,13 +1389,10 @@ def get_benchmark_logs():
         if not log_file.exists():
             return jsonify({'error': 'Log file not found'}), 404
         
-        # Get last N lines (default 100)
-        lines = int(request.args.get('lines', 100))
-        
-        with open(log_file, 'r') as f:
-            all_lines = f.readlines()
-            tail_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
-        
+        # Get last N lines (default 100) — stream with deque to avoid loading the whole file
+        n = int(request.args.get('lines', 100))
+        with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
+            tail_lines = deque(f, maxlen=n)
         return jsonify({
             'log_file': str(log_file),
             'lines': len(tail_lines),
@@ -1452,9 +1407,6 @@ def get_benchmark_logs():
 def get_cluster_health(engine: str):
     """Check OpenSearch cluster health for a specific engine"""
     try:
-        import requests
-        from requests.auth import HTTPBasicAuth
-        
         target_host = config_loader.get_target_host(engine)
         url = f"https://{target_host}/_cluster/health"
         

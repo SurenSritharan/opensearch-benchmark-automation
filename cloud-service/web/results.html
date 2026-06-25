@@ -582,10 +582,10 @@
                 if (statusResponse.ok) {
                     const statusData = await statusResponse.json();
                     
-                    // If job is running, queued, failed, or partial - show live status with available data
+                    // If job is running or queued, show live status; for terminal non-result states too
                     if (statusData.status === 'running' || statusData.status === 'queued' ||
                         statusData.status === 'error' || statusData.status === 'failed' ||
-                        statusData.status === 'partial_failure') {
+                        statusData.status === 'partial_failure' || statusData.status === 'cancelled') {
                         await displayLiveStatus(jobId, statusData.status);
                         
                         // Only set up auto-refresh for running/queued jobs
@@ -738,32 +738,54 @@
                     `;
                 }
                 
-                // Display scenario status for batch jobs (for running, error, failed, and partial_failure)
-                if ((data.status === 'running' || data.status === 'error' || data.status === 'failed' ||
-                     data.status === 'partial_failure') && data.scenario_status && Object.keys(data.scenario_status).length > 0) {
-                    html += '<div style="margin-bottom: 20px;"><h3 style="margin-bottom: 10px;">Scenario Progress:</h3><div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px;">';
-                    Object.entries(data.scenario_status).forEach(([scenario, status]) => {
-                        let statusColor, statusIcon;
-                        if (status === 'completed') {
-                            statusColor = '#10b981';
-                            statusIcon = '✓';
-                        } else if (status === 'running') {
-                            statusColor = '#f59e0b';
-                            statusIcon = '▶';
-                        } else if (status === 'error' || status === 'failed') {
-                            statusColor = '#ef4444';
-                            statusIcon = '✗';
-                        } else {
-                            statusColor = '#6b7280';
-                            statusIcon = '○';
-                        }
+                // Display ordered scenario queue for batch jobs
+                const scenarios = data.scenarios || [];
+                const scenarioStatus = data.scenario_status || {};
+                if (scenarios.length > 0) {
+                    const completedCount = scenarios.filter(s => {
+                        const key = `${s.dataset}-${s.label}`;
+                        return scenarioStatus[key] === 'completed';
+                    }).length;
+                    const runningIdx = data.current_scenario_index ?? null;
+
+                    html += `
+                        <div style="margin-bottom: 20px;">
+                            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px;">
+                                <h3 style="margin: 0;">Test Queue</h3>
+                                <span style="font-size: 0.9em; color: #6b7280;">${completedCount} / ${scenarios.length} completed</span>
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 8px;">
+                    `;
+
+                    scenarios.forEach((s, idx) => {
+                        const key = `${s.dataset}-${s.label}`;
+                        const st = scenarioStatus[key] || 'queued';
+                        const isRunning = st === 'running';
+                        const isCurrent = data.status === 'running' && idx === runningIdx;
+
+                        let borderColor, bg, icon, statusText;
+                        if (st === 'completed')      { borderColor = '#10b981'; bg = '#f0fdf4'; icon = '✓'; statusText = 'Completed'; }
+                        else if (isRunning)           { borderColor = '#f59e0b'; bg = '#fffbeb'; icon = '▶'; statusText = 'Running…'; }
+                        else if (st === 'error' || st === 'failed') { borderColor = '#ef4444'; bg = '#fef2f2'; icon = '✗'; statusText = 'Failed'; }
+                        else                          { borderColor = '#d1d5db'; bg = '#f9fafb'; icon = `${idx + 1}`; statusText = 'Queued'; }
+
                         html += `
-                            <div style="padding: 12px; background: white; border-left: 4px solid ${statusColor}; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                                <div style="font-weight: 600; color: ${statusColor};">${statusIcon} ${scenario}</div>
-                                <div style="font-size: 0.85em; color: #666; text-transform: capitalize;">${status}</div>
+                            <div style="display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+                                        background: ${bg}; border-left: 4px solid ${borderColor};
+                                        border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+                                        ${isCurrent ? 'outline: 2px solid ' + borderColor + '; outline-offset: 1px;' : ''}">
+                                <div style="width: 28px; height: 28px; border-radius: 50%; background: ${borderColor};
+                                            color: white; display: flex; align-items: center; justify-content: center;
+                                            font-size: 0.85em; font-weight: 700; flex-shrink: 0;">${icon}</div>
+                                <div style="flex: 1; min-width: 0;">
+                                    <div style="font-weight: 600; color: #111;">${s.label}</div>
+                                    <div style="font-size: 0.82em; color: #6b7280;">${s.dataset} · ${s.procedure_name}</div>
+                                </div>
+                                <div style="font-size: 0.85em; font-weight: 500; color: ${borderColor}; white-space: nowrap;">${statusText}</div>
                             </div>
                         `;
                     });
+
                     html += '</div></div>';
                 }
                 
