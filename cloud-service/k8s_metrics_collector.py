@@ -22,11 +22,13 @@ logger = logging.getLogger(__name__)
 class K8sMetricsCollector:
     """Collects GKE/Kubernetes metrics using raw HTTP requests to the cluster control plane."""
     
-    def __init__(self, namespace: str, results_dir: Path, enabled: bool = True):
+    def __init__(self, namespace: str, results_dir: Path, enabled: bool = True,
+                 opensearch_host: Optional[str] = None):
         self.namespace = namespace
         self.results_dir = results_dir
         self.enabled = enabled
-        
+        self.opensearch_host = opensearch_host  # e.g. "opensearch-cluster.os-jvector.svc.cluster.local:9200"
+
         if not enabled:
             logger.info("Metrics collection is disabled")
             return
@@ -55,6 +57,10 @@ class K8sMetricsCollector:
         self.node_mem_raw = defaultdict(list)
         self.node_pools = {}
         self.pod_metrics_history = defaultdict(lambda: {"cpu_samples": [], "memory_samples": []})
+
+        # GC timeline samples: list of {ts, node, heap_pct, young_count, young_ms, old_count, old_ms}
+        self.gc_samples: List[Dict[str, Any]] = []
+        self._gc_last: Dict[str, Dict] = {}  # last raw snapshot per node for delta calculation
 
     def _get_api_headers(self) -> Dict[str, str]:
         headers = {"Accept": "application/json"}
@@ -110,12 +116,70 @@ class K8sMetricsCollector:
                 node_pool = labels.get('cloud.google.com/gke-nodepool', 'unknown')
                 self.node_pools[node_name] = node_pool
 
+    def _fetch_jvm_stats(self) -> Optional[Dict]:
+        """Fetch /_nodes/stats/jvm from the OpenSearch cluster."""
+        if not self.opensearch_host:
+            return None
+        try:
+            url = f"https://{self.opensearch_host}/_nodes/stats/jvm"
+            resp = requests.get(
+                url,
+                auth=("admin", "admin"),
+                verify=False,
+                timeout=5,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.debug(f"JVM stats fetch skipped: {e}")
+            return None
+
+    def _collect_gc_sample(self, ts: str):
+        """Record one GC data point per node, storing deltas from the previous sample."""
+        jvm_data = self._fetch_jvm_stats()
+        if not jvm_data:
+            return
+
+        for node_id, node in jvm_data.get('nodes', {}).items():
+            name = node.get('name', node_id)
+            mem = node.get('jvm', {}).get('mem', {})
+            gc = node.get('jvm', {}).get('gc', {}).get('collectors', {})
+
+            young = gc.get('young', {})
+            old   = gc.get('old',   {})
+
+            curr = {
+                'young_count': young.get('collection_count', 0),
+                'young_ms':    young.get('collection_time_in_millis', 0),
+                'old_count':   old.get('collection_count', 0),
+                'old_ms':      old.get('collection_time_in_millis', 0),
+            }
+
+            prev = self._gc_last.get(name, curr)  # first sample → zero delta
+
+            self.gc_samples.append({
+                'ts':             ts,
+                'node':           name,
+                'heap_used_pct':  mem.get('heap_used_percent'),
+                'heap_used_mb':   round(mem.get('heap_used_in_bytes', 0) / 1048576, 1),
+                'young_count_delta': curr['young_count'] - prev['young_count'],
+                'young_ms_delta':    curr['young_ms']    - prev['young_ms'],
+                'old_count_delta':   curr['old_count']   - prev['old_count'],
+                'old_ms_delta':      curr['old_ms']      - prev['old_ms'],
+            })
+
+            self._gc_last[name] = curr
+
     def collect_sample(self):
         """Polls endpoints and stores sample values in correct formats."""
         if not self.enabled:
             return
-        
+
+        ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         self.total_samples += 1
+
+        # GC / JVM timeline (OpenSearch REST — negligible overhead)
+        self._collect_gc_sample(ts)
 
         # 1. Fetch and store Node Metric points
         metrics_data = self._make_request("/apis/metrics.k8s.io/v1beta1/nodes")
@@ -201,7 +265,8 @@ class K8sMetricsCollector:
         summary = {
             "nodes": {},
             "pods": dict(self.pod_metrics_history),
-            "total_samples": self.total_samples
+            "total_samples": self.total_samples,
+            "gc_timeline": self.gc_samples,
         }
         
         all_nodes = set(self.node_cpu_raw.keys()).union(self.node_pools.keys())
@@ -254,3 +319,5 @@ class K8sMetricsCollector:
         self.node_mem_raw.clear()
         self.node_pools.clear()
         self.pod_metrics_history.clear()
+        self.gc_samples.clear()
+        self._gc_last.clear()

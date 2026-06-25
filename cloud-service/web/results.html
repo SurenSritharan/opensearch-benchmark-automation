@@ -573,6 +573,11 @@
                     <div id="gkeMetricsChartContent"></div>
                 </div>
 
+                <div id="gcMetricsChart" class="section" style="display: none;">
+                    <div class="section-title">♻️ GC Metrics</div>
+                    <div id="gcMetricsChartContent"></div>
+                </div>
+
                 <!-- Scenario Timeline -->
                 <div id="scenarioTimeline" class="section" style="display: none;">
                     <div class="section-title">⏱️ Scenario Timeline</div>
@@ -1301,6 +1306,7 @@
             displayMetricsSummary(sweeps);
             displayMetricsCharts(sweeps);
             displayGkeMetricsCharts(sweeps, 'gkeMetricsChartContent', 'gkeMetricsChart');
+            displayGcMetricsCharts(sweeps, 'gcMetricsChartContent', 'gcMetricsChart');
             displayDetailedMetrics(sweeps);
         }
         
@@ -1417,6 +1423,10 @@
                     <div class="section-title">☁️ GKE Infrastructure Metrics</div>
                     <div id="scenario-gkeMetricsContent-${scenarioName}"></div>
                 </div>
+                <div id="scenario-gcMetrics-${scenarioName}" class="section" style="display: none;">
+                    <div class="section-title">♻️ GC Metrics</div>
+                    <div id="scenario-gcMetricsContent-${scenarioName}"></div>
+                </div>
                 <div id="scenario-detailedMetrics-${scenarioName}" class="section" style="display: none;">
                     <div class="section-title">Detailed Metrics</div>
                     <div id="scenario-detailedMetricsContent-${scenarioName}"></div>
@@ -1433,6 +1443,7 @@
             displayMetricsSummaryInContainer(sweeps, `scenario-metricsSummaryContent-${scenarioName}`, `scenario-metricsSummary-${scenarioName}`);
             displayMetricsChartsInContainer(sweeps, scenarioName);
             displayGkeMetricsCharts(sweeps, `scenario-gkeMetricsContent-${scenarioName}`, `scenario-gkeMetrics-${scenarioName}`);
+            displayGcMetricsCharts(sweeps, `scenario-gcMetricsContent-${scenarioName}`, `scenario-gcMetrics-${scenarioName}`);
             displayDetailedMetricsInContainer(sweeps, `scenario-detailedMetricsContent-${scenarioName}`, `scenario-detailedMetrics-${scenarioName}`);
             displayLogsInContainer(sweeps, `scenario-logsContent-${scenarioName}`, `scenario-logs-${scenarioName}`);
         }
@@ -2060,6 +2071,124 @@
                         ).renderSync();
                     }, 0);
                 }
+            });
+
+            container.innerHTML = html;
+        }
+
+        function displayGcMetricsCharts(sweeps, contentId, sectionId) {
+            // Only render if at least one sweep has a non-empty gc_timeline
+            const sweepsWithGc = sweeps.filter(s =>
+                Array.isArray(s.k8s_metrics?.summary?.gc_timeline) &&
+                s.k8s_metrics.summary.gc_timeline.length > 0
+            );
+            if (sweepsWithGc.length === 0) return;
+
+            const section = document.getElementById(sectionId);
+            const container = document.getElementById(contentId);
+            if (!section || !container) return;
+            section.style.display = 'block';
+
+            let html = '';
+
+            sweepsWithGc.forEach((sweep, idx) => {
+                const gc = sweep.k8s_metrics.summary.gc_timeline;
+                const sweepLabel = sweep.sweep_name || `Sweep ${idx + 1}`;
+
+                // Collect all node names present in this sweep's gc_timeline
+                const nodeNames = [...new Set(gc.map(d => d.node))];
+
+                // One chart group per sweep
+                const chartId = `gc-chart-${sectionId}-${idx}`;
+                html += `
+                    <div style="margin-bottom: 32px;">
+                        <div class="section-subtitle" style="margin-bottom: 10px;">
+                            ♻️ ${sweepLabel} — Heap Usage &amp; GC Pause Time
+                        </div>
+                        <div id="${chartId}-heap" class="chart-wrapper"></div>
+                        <div class="section-subtitle" style="margin-bottom: 10px; margin-top: 16px;">
+                            ♻️ ${sweepLabel} — GC Events Per Interval
+                        </div>
+                        <div id="${chartId}-count" class="chart-wrapper"></div>
+                    </div>
+                `;
+
+                setTimeout(() => {
+                    // Build a time label per unique timestamp in arrival order
+                    const timestamps = [...new Set(gc.map(d => d.ts))];
+                    const tLabel = ts => {
+                        const i = timestamps.indexOf(ts);
+                        return `+${i * 10}s`;
+                    };
+
+                    const heapValues = [], pauseValues = [], countValues = [];
+
+                    gc.forEach(d => {
+                        const t = tLabel(d.ts);
+                        // Heap % line per node
+                        if (d.heap_used_pct != null) {
+                            heapValues.push({ time: t, node: d.node, value: d.heap_used_pct });
+                        }
+                        // GC pause ms (young + old) per node — stacked bar
+                        if ((d.young_ms_delta || 0) + (d.old_ms_delta || 0) > 0) {
+                            pauseValues.push({ time: t, node: d.node + ' young', value: d.young_ms_delta || 0 });
+                            pauseValues.push({ time: t, node: d.node + ' old',   value: d.old_ms_delta   || 0 });
+                        }
+                        // GC event count
+                        const totalCount = (d.young_count_delta || 0) + (d.old_count_delta || 0);
+                        if (totalCount > 0) {
+                            countValues.push({ time: t, node: d.node, value: totalCount });
+                        }
+                    });
+
+                    const defaultEnd = `+${Math.min(460, (timestamps.length - 1) * 10)}s`;
+
+                    // --- Heap % line chart ---
+                    if (heapValues.length > 0) {
+                        new VChart.default({
+                            type: 'line',
+                            data: [{ id: 'heap', values: heapValues }],
+                            xField: 'time',
+                            yField: 'value',
+                            seriesField: 'node',
+                            point: { visible: false },
+                            legends: { visible: true, orient: 'top', position: 'end' },
+                            axes: [
+                                { orient: 'bottom', type: 'band', sampling: 'greedy',
+                                  label: { style: { fontSize: 10 } },
+                                  title: { visible: true, text: 'Time (offset from sweep start)', style: { fontSize: 11 } } },
+                                { orient: 'left', type: 'linear', min: 0, max: 100,
+                                  label: { formatMethod: v => v + '%', style: { fontSize: 11 } },
+                                  title: { visible: true, text: 'Heap Used (%)', style: { fontSize: 12, fontWeight: 'bold' } } }
+                            ],
+                            dataZoom: [{ orient: 'bottom', startValue: '+0s', endValue: defaultEnd, filterMode: 'filter' }],
+                            tooltip: { mark: { content: [{ key: d => d.node, value: d => d.value.toFixed(1) + '%' }] } }
+                        }, { dom: `${chartId}-heap` }).renderSync();
+                    }
+
+                    // --- GC events count bar chart ---
+                    if (countValues.length > 0) {
+                        new VChart.default({
+                            type: 'bar',
+                            data: [{ id: 'gccount', values: countValues }],
+                            xField: 'time',
+                            yField: 'value',
+                            seriesField: 'node',
+                            stack: true,
+                            legends: { visible: true, orient: 'top', position: 'end' },
+                            axes: [
+                                { orient: 'bottom', type: 'band', sampling: 'greedy',
+                                  label: { style: { fontSize: 10 } },
+                                  title: { visible: true, text: 'Time (offset from sweep start)', style: { fontSize: 11 } } },
+                                { orient: 'left', type: 'linear', min: 0,
+                                  label: { style: { fontSize: 11 } },
+                                  title: { visible: true, text: 'GC Events / Interval', style: { fontSize: 12, fontWeight: 'bold' } } }
+                            ],
+                            dataZoom: [{ orient: 'bottom', startValue: '+0s', endValue: defaultEnd, filterMode: 'filter' }],
+                            tooltip: { mark: { content: [{ key: d => d.node, value: d => d.value + ' events' }] } }
+                        }, { dom: `${chartId}-count` }).renderSync();
+                    }
+                }, 0);
             });
 
             container.innerHTML = html;

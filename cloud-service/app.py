@@ -608,8 +608,8 @@ def trigger_batch_benchmark():
     {
         "engine": "jvector",
         "tests": [
-            {"dataset": "msmarco", "scenario": "vector-search-k100-ef100"},
-            {"dataset": "cohere-1m", "scenario": "search-only-k10"}
+            {"dataset": "cohere-msmarco-1024", "scenario": "vector-search-k100-ef100"},
+            {"dataset": "cohere-wiki-en-768", "scenario": "search-only-k10"}
         ]
     }
     """

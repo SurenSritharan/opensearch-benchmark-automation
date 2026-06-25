@@ -67,7 +67,7 @@ datasets:
         params:
           target_index_max_num_segments: 1
       
-      - name: "search-only"
+      - name: "vector-search"
         params:
           # reads queries and ground truth from HDF5 corpus file (instead of generating from blobs)
           query_data_set_format: "hdf5"

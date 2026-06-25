@@ -13,6 +13,65 @@ from typing import Dict, Any, Optional
 from config_loader import ConfigLoader
 from k8s_metrics_collector import K8sMetricsCollector
 
+
+def _fetch_node_stats(target_host: str) -> Optional[Dict]:
+    """Snapshot _nodes/stats from the OpenSearch cluster via REST API."""
+    try:
+        url = f"https://{target_host}/_nodes/stats/jvm,os,process,fs,thread_pool,indices"
+        resp = requests.get(url, auth=HTTPBasicAuth('admin', 'admin'),
+                            verify=False, timeout=15)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Could not fetch _nodes/stats: {e}")
+        return None
+
+
+def _diff_node_stats(before: Dict, after: Dict) -> Dict:
+    """Diff two _nodes/stats snapshots, returning deltas for counter fields."""
+    result = {}
+    for node_id, after_node in after.get('nodes', {}).items():
+        before_node = before.get('nodes', {}).get(node_id, {})
+        name = after_node.get('name', node_id)
+
+        def delta(path: list):
+            """Walk a dotted path and return after - before for numeric values."""
+            a, b = after_node, before_node
+            for key in path:
+                a = a.get(key, {}) if isinstance(a, dict) else {}
+                b = b.get(key, {}) if isinstance(b, dict) else {}
+            return (a - b) if isinstance(a, (int, float)) and isinstance(b, (int, float)) else a
+
+        result[name] = {
+            'jvm': {
+                'heap_used_percent':      after_node.get('jvm', {}).get('mem', {}).get('heap_used_percent'),
+                'heap_used_mb':           round(after_node.get('jvm', {}).get('mem', {}).get('heap_used_in_bytes', 0) / 1048576, 1),
+                'gc_young_count_delta':   delta(['jvm', 'gc', 'collectors', 'young', 'collection_count']),
+                'gc_young_time_ms_delta': delta(['jvm', 'gc', 'collectors', 'young', 'collection_time_in_millis']),
+                'gc_old_count_delta':     delta(['jvm', 'gc', 'collectors', 'old', 'collection_count']),
+                'gc_old_time_ms_delta':   delta(['jvm', 'gc', 'collectors', 'old', 'collection_time_in_millis']),
+            },
+            'os': {
+                'cpu_percent':     after_node.get('os', {}).get('cpu', {}).get('percent'),
+                'load_1m':         after_node.get('os', {}).get('cpu', {}).get('load_average', {}).get('1m'),
+                'mem_used_percent': after_node.get('os', {}).get('mem', {}).get('used_percent'),
+            },
+            'indices': {
+                'search_query_count_delta':   delta(['indices', 'search', 'query_total']),
+                'search_query_time_ms_delta': delta(['indices', 'search', 'query_time_in_millis']),
+                'search_fetch_count_delta':   delta(['indices', 'search', 'fetch_total']),
+                'indexing_count_delta':       delta(['indices', 'indexing', 'index_total']),
+                'indexing_time_ms_delta':     delta(['indices', 'indexing', 'index_time_in_millis']),
+            },
+            'thread_pool': {
+                'search_queue':    after_node.get('thread_pool', {}).get('search', {}).get('queue'),
+                'search_rejected': delta(['thread_pool', 'search', 'rejected']),
+                'write_queue':     after_node.get('thread_pool', {}).get('write', {}).get('queue'),
+                'write_rejected':  delta(['thread_pool', 'write', 'rejected']),
+            },
+        }
+    return result
+
 logger = logging.getLogger(__name__)
 
 
@@ -199,7 +258,8 @@ class BenchmarkRunner:
                         self.metrics_collector = K8sMetricsCollector(
                             namespace=namespace,
                             results_dir=sweep_results_dir,
-                            enabled=True
+                            enabled=True,
+                            opensearch_host=target_host,
                         )
                         logger.info("✓ Metrics collector initialized")
                     except Exception as e:
@@ -285,6 +345,7 @@ class BenchmarkRunner:
                     logger.info("✓ Metrics collection started")
                 
                 start_time = datetime.utcnow()
+                stats_before = _fetch_node_stats(target_host)
                 result = None
                 try:
                     # Execute benchmark in its own process group for proper signal handling
@@ -299,6 +360,24 @@ class BenchmarkRunner:
                     )
                 finally:
                     end_time = datetime.utcnow()
+                    stats_after = _fetch_node_stats(target_host)
+                    if stats_before and stats_after:
+                        try:
+                            server_stats = {
+                                'captured_at_start': start_time.isoformat(),
+                                'captured_at_end': end_time.isoformat(),
+                                'node_deltas': _diff_node_stats(stats_before, stats_after),
+                                'snapshots': {
+                                    'before': stats_before,
+                                    'after': stats_after
+                                }
+                            }
+                            with open(sweep_results_dir / 'server_stats.json', 'w') as f:
+                                json.dump(server_stats, f, indent=2)
+                            logger.info("✓ Server stats captured to server_stats.json")
+                        except Exception as e:
+                            logger.warning(f"Failed to save server_stats: {e}")
+
                     if self.metrics_collector and self.metrics_thread:
                         logger.info("📊 Stopping metrics collection...")
                         metrics_collector = self.metrics_collector
@@ -310,9 +389,9 @@ class BenchmarkRunner:
                             logger.error(f"Error saving metrics: {e}")
                         finally:
                             self.metrics_thread = None
-                
+
                 duration = (end_time - start_time).total_seconds()
-                
+
                 # Download artifacts (test_run.json and benchmark.log) to results directory
                 self._download_artifacts(result.stdout, sweep_results_dir)
                 
