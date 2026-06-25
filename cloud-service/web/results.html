@@ -872,12 +872,27 @@
             const st = scenarioStatus[key] || 'queued';
             const isRunning = st === 'running';
             const isCurrent = data.status === 'running' && idx === (data.current_scenario_index ?? null);
+            const sweepCount = s.sweep_count || 0;
 
             let borderColor, bg, icon, statusText;
-            if (st === 'completed')                    { borderColor = '#10b981'; bg = '#f0fdf4'; icon = '✓'; statusText = 'Completed'; }
-            else if (isRunning)                        { borderColor = '#f59e0b'; bg = '#fffbeb'; icon = '▶'; statusText = 'Running…'; }
+            if (st === 'completed')                     { borderColor = '#10b981'; bg = '#f0fdf4'; icon = '✓'; statusText = 'Completed'; }
+            else if (isRunning)                         { borderColor = '#f59e0b'; bg = '#fffbeb'; icon = '▶'; statusText = 'Running…'; }
             else if (st === 'error' || st === 'failed') { borderColor = '#ef4444'; bg = '#fef2f2'; icon = '✗'; statusText = 'Failed'; }
-            else                                       { borderColor = '#d1d5db'; bg = '#f9fafb'; icon = `${idx + 1}`; statusText = 'Queued'; }
+            else                                        { borderColor = '#d1d5db'; bg = '#f9fafb'; icon = `${idx + 1}`; statusText = 'Queued'; }
+
+            // Count completed sweeps for this scenario from live_data.test_runs
+            let sweepSubtext = '';
+            if (sweepCount > 0) {
+                const completedSweeps = (data.live_data?.test_runs || [])
+                    .filter(r => r.scenario_label === s.label).length;
+                if (isRunning) {
+                    sweepSubtext = `<div style="font-size: 0.78em; color: ${borderColor}; margin-top: 2px;">${completedSweeps} / ${sweepCount} sweeps done</div>`;
+                } else if (st === 'completed') {
+                    sweepSubtext = `<div style="font-size: 0.78em; color: #6b7280; margin-top: 2px;">${sweepCount} sweep${sweepCount > 1 ? 's' : ''}</div>`;
+                } else {
+                    sweepSubtext = `<div style="font-size: 0.78em; color: #9ca3af; margin-top: 2px;">${sweepCount} sweep${sweepCount > 1 ? 's' : ''}</div>`;
+                }
+            }
 
             return `
                 <div id="live-queue-row-${idx}" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px;
@@ -890,6 +905,7 @@
                     <div style="flex: 1; min-width: 0;">
                         <div style="font-weight: 600; color: #111;">${s.label}</div>
                         <div style="font-size: 0.82em; color: #6b7280;">${s.dataset} · ${s.procedure_name}</div>
+                        ${sweepSubtext}
                     </div>
                     <div style="font-size: 0.85em; font-weight: 500; color: ${borderColor}; white-space: nowrap;">${statusText}</div>
                 </div>`;

@@ -1245,7 +1245,12 @@ def get_live_status(job_id: str):
         'scenario_status': job.get('scenario_status', {}),
         # Ordered list of scenarios so the frontend can render them in sequence
         'scenarios': [
-            {'label': s.get('label', ''), 'dataset': s.get('dataset', ''), 'procedure_name': s.get('procedure_name', '')}
+            {
+                'label': s.get('label', ''),
+                'dataset': s.get('dataset', ''),
+                'procedure_name': s.get('procedure_name', ''),
+                'sweep_count': len(s.get('params', {}).get('parameter_sweeps', [])) if s.get('params', {}).get('parameter_sweeps') else 0
+            }
             for s in job.get('scenarios', [])
         ],
         'live_data': {}
