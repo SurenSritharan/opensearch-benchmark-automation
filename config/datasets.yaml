@@ -53,14 +53,20 @@ datasets:
             method_name: "disk_ann"
             mode: "in_memory"
       
-        # uses bulk-vector-data-set which internally loads HDF5 corpus file
+        # uses bulk-vector-data-set which internally loads HDF5 corpus file — capped at corpus size (max 10m)
       - name: "bulk-ingest-only"
         params:
           target_index_bulk_size: 500
           target_index_bulk_index_data_set_format: "hdf5"
           target_index_bulk_index_data_set_corpus: "{{corpus_name}}"
           target_index_bulk_indexing_clients: 8
-          # target_index_num_vectors will be calculated dynamically based on corpus_size
+
+        # uses make_blobs synthetic generation — no corpus file, supports any num_vectors
+      - name: "bulk-ingest-random"
+        params:
+          target_index_bulk_size: 500
+          target_index_bulk_indexing_clients: 8
+          # num_vectors and target_index_dimension must be passed at runtime
 
       - name: "refresh"
         params: {}
@@ -71,7 +77,7 @@ datasets:
       
       - name: "vector-search"
         params:
-          # reads queries and ground truth from HDF5 corpus file (instead of generating from blobs)
+          # reads queries and ground truth from HDF5 corpus file — capped at corpus size (max 10m)
           query_data_set_format: "hdf5"
           query_data_set_corpus: "{{corpus_name}}"
           neighbors_data_set_format: "hdf5"
@@ -84,6 +90,24 @@ datasets:
           warmup_time_period: 60
           time_period: 300
           hnsw_ef_search: 128
+        parameter_sweeps:
+          - params: { search_clients: 4 }
+          - params: { search_clients: 8 }
+          - params: { search_clients: 10 }
+          - params: { search_clients: 12 }
+          - params: { search_clients: 16 }
+
+        # synthetic make_blobs queries — no corpus file or ground truth, supports any scale
+      - name: "vector-search-random"
+        params:
+          query_body:
+            docvalue_fields: ["_id"]
+            stored_fields: "_none_"
+            _source: false
+          warmup_time_period: 60
+          time_period: 300
+          hnsw_ef_search: 128
+          # query_k and target_index_dimension should be passed at runtime
         parameter_sweeps:
           - params: { search_clients: 4 }
           - params: { search_clients: 8 }
