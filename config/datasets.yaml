@@ -15,6 +15,7 @@ datasets:
       target_index_name: "cohere-wiki-en-768-{{corpus_size}}"
       target_field_name: "target_field"
       id_field_name: "_id"
+      corpus_size: "{{corpus_size}}"
       corpus_name: "cohere-{{corpus_size}}"
     
     # Engine-specific parameters (override or extend common_params)
