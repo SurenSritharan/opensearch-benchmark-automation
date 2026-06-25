@@ -501,10 +501,10 @@ class ConfigLoader:
         # For cohere datasets, determine the appropriate source file
         # Use the smallest file that contains enough vectors
         source_file = self._select_source_file_for_count(num_vectors)
-        
-        # Corpus name for dynamic corpus definitions
-        corpus_name = f"cohere-{corpus_size}" if 'cohere' in dataset_config.get('workload', '') else corpus_size
-        
+
+        # Resolve corpus_name from datasets.yaml common_params, e.g. "cohere-{{corpus_size}}" → "cohere-10m"
+        corpus_name = dataset_config.get('common_params', {}).get('corpus_name', corpus_size).replace('{{corpus_size}}', corpus_size)
+
         # Get query_k value from params (for ground truth files)
         # Validate against supported_k_values
         query_k_value = params.get('query_k', params.get('k', 100))
@@ -563,34 +563,37 @@ class ConfigLoader:
         return resolved_params
     
     def _select_corpus_size_from_num_vectors(self, num_vectors: int, dataset_config: Dict[str, Any]) -> str:
-        """Auto-select the closest corpus_size from supported_corpus_sizes based on num_vectors
-        
+        """Select the smallest supported_corpus_size that is >= num_vectors.
+
+        The corpus file must contain at least as many vectors as requested,
+        so we always round up. For example, 5M vectors requires the 10m corpus
+        when 5m does not exist.
+
         Args:
             num_vectors: Number of vectors requested
             dataset_config: Dataset configuration
-            
+
         Returns:
-            Closest corpus_size string (e.g., "10m", "50m")
+            Smallest corpus_size string whose file is large enough (e.g., "10m")
         """
         supported_sizes = dataset_config.get('supported_corpus_sizes', [])
-        
+
         if not supported_sizes:
-            # Fallback: convert num_vectors to corpus_size format
-            if num_vectors >= 1_000_000_000:
-                return get_corpus_size(num_vectors)
-        
-        # Find the closest supported corpus size
-        closest_size = None
-        min_diff = float('inf')
-        
-        for size_str in supported_sizes:
-            size_num = get_num_vectors(size_str)
-            diff = abs(size_num - num_vectors)
-            if diff < min_diff:
-                min_diff = diff
-                closest_size = size_str
-        
-        return closest_size if closest_size else "1m"
+            return get_corpus_size(num_vectors)
+
+        # Sort sizes ascending by their numeric value
+        sized = sorted(
+            ((get_num_vectors(s), s) for s in supported_sizes),
+            key=lambda x: x[0]
+        )
+
+        # Pick the smallest corpus that is >= num_vectors
+        for size_num, size_str in sized:
+            if size_num >= num_vectors:
+                return size_str
+
+        # num_vectors exceeds all supported sizes — return the largest available
+        return sized[-1][1]
     
     def _select_source_file_for_count(self, requested_count: int) -> str:
         """Select the appropriate source file for a given document count
