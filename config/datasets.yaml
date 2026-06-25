@@ -1,7 +1,7 @@
 # Dataset Configuration Registry
 
 datasets:
-  cohere:
+  cohere-wiki-en-768:
     dimension: 768
     format: hdf5
     space_type: "innerproduct"
@@ -81,7 +81,7 @@ datasets:
           - params: { search_clients: 10 }
           - params: { search_clients: 12 }
           - params: { search_clients: 16 }
-  msmarco:
+  cohere-msmarco-1024:
     dimension: 1024
     format: fvec
     space_type: "cosinesimil"
