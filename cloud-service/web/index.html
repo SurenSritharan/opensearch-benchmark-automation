@@ -305,7 +305,7 @@
                                     <a href="/api/v1/benchmark/${job.job_id}/live-status" target="_blank" style="display: inline-block; padding: 6px 12px; background: #10b981; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em; margin-left: 8px;">📊 Live JSON</a>
                                     <button onclick="cancelJob('${job.job_id}')" style="padding: 6px 12px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; margin-left: 8px;">❌ Cancel Job</button>
                                 </div>` : ''}
-                            ${job.status === 'error' || job.status === 'failed' || job.status === 'partial_failure' ?
+                            ${job.status === 'error' || job.status === 'failed' || job.status === 'partial_failure' || job.status === 'partial' ?
                                 `<div style="margin-top: 8px;">
                                     <a href="/results/${job.job_id}?job_id=${job.job_id}" style="display: inline-block; padding: 6px 12px; background: #f59e0b; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;">⚠️ View Partial Results</a>
                                     <a href="/api/v1/benchmark/${job.job_id}/live-status" target="_blank" style="display: inline-block; padding: 6px 12px; background: #10b981; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em; margin-left: 8px;">📋 View Logs</a>
