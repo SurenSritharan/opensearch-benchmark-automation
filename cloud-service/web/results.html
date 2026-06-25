@@ -575,6 +575,8 @@
             loadResults(jobId);
         }
         
+        let liveRefreshInterval = null;
+
         async function loadResults(jobId) {
             try {
                 // First check job status
@@ -590,7 +592,7 @@
                         
                         // Only set up auto-refresh for running/queued jobs
                         if (statusData.status === 'running' || statusData.status === 'queued') {
-                            setInterval(() => refreshLiveStatus(), 5000);
+                            liveRefreshInterval = setInterval(() => refreshLiveStatus(), 5000);
                         }
                         return;
                     }
@@ -614,19 +616,21 @@
         async function refreshLiveStatus() {
             if (!jobId) return;
             
-            // Check if job completed successfully, if so reload full results
+            // Check if job completed successfully, if so load full results without a page reload
             const statusResponse = await fetch(`/api/v1/benchmark/${jobId}`);
             if (statusResponse.ok) {
                 const statusData = await statusResponse.json();
                 if (statusData.status === 'completed') {
-                    // Job finished successfully, reload page to show full results
-                    window.location.reload();
+                    clearInterval(liveRefreshInterval);
+                    liveStatusInitialized = false;
+                    document.getElementById('liveStatusSection').style.display = 'none';
+                    await loadResults(jobId);
                     return;
                 }
                 // For error/failed/partial_failure, stop auto-refresh but keep showing live status
                 if (statusData.status === 'error' || statusData.status === 'failed' ||
                     statusData.status === 'partial_failure') {
-                    // Stop auto-refresh by not calling displayLiveStatus again
+                    clearInterval(liveRefreshInterval);
                     return;
                 }
             }
@@ -634,6 +638,9 @@
             await displayLiveStatus(jobId);
         }
         
+        // Tracks whether the live status DOM structure has been built for the first time
+        let liveStatusInitialized = false;
+
         async function displayLiveStatus(jobId, initialStatus = null) {
             try {
                 const response = await fetch(`/api/v1/benchmark/${jobId}/live-status`);
@@ -641,16 +648,21 @@
                     console.error('Failed to fetch live status');
                     return;
                 }
-                
+
                 const data = await response.json();
-                
-                // Show the results container and live status section
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('results').style.display = 'block';
+
+                // Show the results container and live status section (only on first call)
+                const loadingEl = document.getElementById('loading');
+                if (loadingEl.style.display !== 'none') {
+                    loadingEl.style.display = 'none';
+                    document.getElementById('results').style.display = 'block';
+                }
                 const section = document.getElementById('liveStatusSection');
                 const content = document.getElementById('liveStatusContent');
-                section.style.display = 'block';
-                
+                if (section.style.display !== 'block') {
+                    section.style.display = 'block';
+                }
+
                 // Populate Test Environment from live job data
                 displayTestEnvironment(data);
 
@@ -658,243 +670,289 @@
                 document.getElementById('metricsSummary').style.display = 'none';
                 document.getElementById('commonParamsSection').style.display = 'none';
                 document.getElementById('sweepParamsSection').style.display = 'none';
-                
-                let html = '';
-                
-                if (data.status === 'queued') {
-                    html = `
-                        <div style="background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); padding: 20px; border-radius: 8px; border-left: 4px solid #3b82f6; margin-bottom: 20px;">
-                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                                <div style="width: 12px; height: 12px; background: #3b82f6; border-radius: 50%; animation: pulse 2s infinite;"></div>
-                                <strong style="font-size: 1.1em;">Test is queued and waiting to start...</strong>
-                            </div>
-                            <div style="color: #1e40af; font-size: 0.95em;">
-                                <div>Created: ${new Date(data.created_at).toLocaleString()}</div>
-                                <div>Dataset: <strong>${data.dataset}</strong></div>
-                                <div>Engine: <strong>${data.engine}</strong></div>
-                                <div>Scenario: <strong>${data.scenario}</strong></div>
-                            </div>
-                        </div>
-                    `;
-                } else if (data.status === 'running') {
-                    html = `
-                        <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); padding: 20px; border-radius: 8px; border-left: 4px solid #f59e0b; margin-bottom: 20px;">
-                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                                <div style="width: 12px; height: 12px; background: #ef4444; border-radius: 50%; animation: pulse 2s infinite;"></div>
-                                <strong style="font-size: 1.1em;">Test is currently running...</strong>
-                            </div>
-                            <div style="color: #78350f; font-size: 0.95em;">
-                                <div>Started: ${new Date(data.started_at).toLocaleString()}</div>
-                                <div>Dataset: <strong>${data.dataset}</strong></div>
-                                <div>Engine: <strong>${data.engine}</strong></div>
-                                <div>Scenario: <strong>${data.scenario}</strong></div>
-                                ${data.current_scenario ? `<div>Current Scenario: <strong>${data.current_scenario}</strong></div>` : ''}
-                            </div>
-                        </div>
-                        <style>
-                            @keyframes pulse {
-                                0%, 100% { opacity: 1; }
-                                50% { opacity: 0.5; }
-                            }
-                        </style>
-                    `;
-                } else if (data.status === 'error' || data.status === 'failed') {
-                    html = `
-                        <div style="background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); padding: 20px; border-radius: 8px; border-left: 4px solid #ef4444; margin-bottom: 20px;">
-                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                                <div style="width: 12px; height: 12px; background: #ef4444; border-radius: 50%;"></div>
-                                <strong style="font-size: 1.1em; color: #991b1b;">❌ Test Failed</strong>
-                            </div>
-                            <div style="color: #991b1b; font-size: 0.95em;">
-                                <div>Started: ${data.started_at ? new Date(data.started_at).toLocaleString() : 'N/A'}</div>
-                                ${data.completed_at ? `<div>Failed at: ${new Date(data.completed_at).toLocaleString()}</div>` : ''}
-                                <div>Dataset: <strong>${data.dataset}</strong></div>
-                                <div>Engine: <strong>${data.engine}</strong></div>
-                                <div>Scenario: <strong>${data.scenario}</strong></div>
-                                <div style="margin-top: 10px; padding: 10px; background: rgba(255,255,255,0.5); border-radius: 4px;">
-                                    <strong>Showing partial results and logs below (if available)</strong>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                } else if (data.status === 'partial_failure') {
-                    html = `
-                        <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); padding: 20px; border-radius: 8px; border-left: 4px solid #f59e0b; margin-bottom: 20px;">
-                            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                                <div style="width: 12px; height: 12px; background: #f59e0b; border-radius: 50%;"></div>
-                                <strong style="font-size: 1.1em; color: #78350f;">⚠️ Test Partially Completed</strong>
-                            </div>
-                            <div style="color: #78350f; font-size: 0.95em;">
-                                <div>Started: ${new Date(data.started_at).toLocaleString()}</div>
-                                ${data.completed_at ? `<div>Ended at: ${new Date(data.completed_at).toLocaleString()}</div>` : ''}
-                                <div>Dataset: <strong>${data.dataset}</strong></div>
-                                <div>Engine: <strong>${data.engine}</strong></div>
-                                <div>Scenario: <strong>${data.scenario}</strong></div>
-                                <div style="margin-top: 10px; padding: 10px; background: rgba(255,255,255,0.5); border-radius: 4px;">
-                                    <strong>Some scenarios completed successfully. Showing available results below.</strong>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                }
-                
-                // Display ordered scenario queue for batch jobs
-                const scenarios = data.scenarios || [];
-                const scenarioStatus = data.scenario_status || {};
-                if (scenarios.length > 0) {
-                    const completedCount = scenarios.filter(s => {
-                        const key = `${s.dataset}-${s.label}`;
-                        return scenarioStatus[key] === 'completed';
-                    }).length;
-                    const runningIdx = data.current_scenario_index ?? null;
 
-                    html += `
-                        <div style="margin-bottom: 20px;">
-                            <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px;">
-                                <h3 style="margin: 0;">Test Queue</h3>
-                                <span style="font-size: 0.9em; color: #6b7280;">${completedCount} / ${scenarios.length} completed</span>
-                            </div>
-                            <div style="display: flex; flex-direction: column; gap: 8px;">
-                    `;
-
-                    scenarios.forEach((s, idx) => {
-                        const key = `${s.dataset}-${s.label}`;
-                        const st = scenarioStatus[key] || 'queued';
-                        const isRunning = st === 'running';
-                        const isCurrent = data.status === 'running' && idx === runningIdx;
-
-                        let borderColor, bg, icon, statusText;
-                        if (st === 'completed')      { borderColor = '#10b981'; bg = '#f0fdf4'; icon = '✓'; statusText = 'Completed'; }
-                        else if (isRunning)           { borderColor = '#f59e0b'; bg = '#fffbeb'; icon = '▶'; statusText = 'Running…'; }
-                        else if (st === 'error' || st === 'failed') { borderColor = '#ef4444'; bg = '#fef2f2'; icon = '✗'; statusText = 'Failed'; }
-                        else                          { borderColor = '#d1d5db'; bg = '#f9fafb'; icon = `${idx + 1}`; statusText = 'Queued'; }
-
-                        html += `
-                            <div style="display: flex; align-items: center; gap: 12px; padding: 12px 16px;
-                                        background: ${bg}; border-left: 4px solid ${borderColor};
-                                        border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.07);
-                                        ${isCurrent ? 'outline: 2px solid ' + borderColor + '; outline-offset: 1px;' : ''}">
-                                <div style="width: 28px; height: 28px; border-radius: 50%; background: ${borderColor};
-                                            color: white; display: flex; align-items: center; justify-content: center;
-                                            font-size: 0.85em; font-weight: 700; flex-shrink: 0;">${icon}</div>
-                                <div style="flex: 1; min-width: 0;">
-                                    <div style="font-weight: 600; color: #111;">${s.label}</div>
-                                    <div style="font-size: 0.82em; color: #6b7280;">${s.dataset} · ${s.procedure_name}</div>
-                                </div>
-                                <div style="font-size: 0.85em; font-weight: 500; color: ${borderColor}; white-space: nowrap;">${statusText}</div>
-                            </div>
-                        `;
-                    });
-
-                    html += '</div></div>';
-                }
-                
-                // Display live data if available (for running, error, failed, and partial_failure)
-                const liveData = data.live_data;
-                if (liveData) {
-                    // Show test_run.json data
-                    if (liveData.test_runs && liveData.test_runs.length > 0) {
-                            html += '<div style="margin-top: 20px;"><h3 style="margin-bottom: 10px;">📊 Live Test Data:</h3>';
-                            liveData.test_runs.forEach((run, idx) => {
-                                // Build label showing both scenario and sweep name for clarity
-                                let label = run.scenario_label || 'Run';
-                                if (run.sweep_name && run.sweep_name !== run.scenario_label) {
-                                    label += ` - ${run.sweep_name}`;
-                                }
-                                if (!run.scenario_label && !run.sweep_name) {
-                                    label = `Run ${idx + 1}`;
-                                }
-                                
-                                html += `
-                                    <div style="margin-bottom: 15px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
-                                        <div style="background: #f3f4f6; padding: 12px; font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
-                                            <span>${label}</span>
-                                            <button onclick="toggleJson('testrun-${idx}')" style="padding: 6px 12px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">View JSON</button>
-                                        </div>
-                                        <div id="testrun-${idx}" style="display: none; padding: 15px; background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 12px; max-height: 400px; overflow: auto;">
-                                            <pre style="margin: 0; white-space: pre-wrap; word-wrap: break-word;">${JSON.stringify(run.test_run, null, 2)}</pre>
-                                        </div>
-                                    </div>
-                                `;
-                            });
-                            html += '</div>';
-                        }
-                        
-                        // Show benchmark logs
-                        if (liveData.benchmark_logs && liveData.benchmark_logs.length > 0) {
-                            html += '<div style="margin-top: 20px;"><h3 style="margin-bottom: 10px;">📋 Live Logs (last 200 lines):</h3>';
-                            liveData.benchmark_logs.forEach((log, idx) => {
-                                // Build label showing both scenario and sweep name for clarity
-                                let label = log.scenario_label || 'Log';
-                                if (log.sweep_name && log.sweep_name !== log.scenario_label) {
-                                    label += ` - ${log.sweep_name}`;
-                                }
-                                if (!log.scenario_label && !log.sweep_name) {
-                                    label = `Log ${idx + 1}`;
-                                }
-                                
-                                html += `
-                                    <div style="margin-bottom: 15px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
-                                        <div style="background: #f3f4f6; padding: 12px; font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
-                                            <span>${label}</span>
-                                            <button onclick="toggleJson('log-${idx}')" style="padding: 6px 12px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">Toggle Log</button>
-                                        </div>
-                                        <div id="log-${idx}" style="display: none; padding: 15px; background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 12px; max-height: 400px; overflow: auto;">
-                                            <pre style="margin: 0; white-space: pre-wrap; word-wrap: break-word;">${log.benchmark_log}</pre>
-                                        </div>
-                                    </div>
-                                `;
-                            });
-                            html += '</div>';
-                        }
-                    
-                    // Show message if no data available
-                    if ((!liveData.test_runs || liveData.test_runs.length === 0) &&
-                        (!liveData.benchmark_logs || liveData.benchmark_logs.length === 0)) {
-                        html += `
-                            <div style="margin-top: 20px; padding: 20px; background: #f3f4f6; border-radius: 8px; border-left: 4px solid #6b7280;">
-                                <p style="margin: 0; color: #4b5563;">
-                                    <strong>ℹ️ No partial results or logs found.</strong><br>
-                                    The test may have failed before generating any output files, or the results directory may not be accessible.
-                                </p>
-                                <p style="margin: 10px 0 0 0; color: #6b7280; font-size: 0.9em;">
-                                    Expected results location: <code>/results/${data.job_id}/</code>
-                                </p>
-                                ${liveData.debug_info ? `
-                                    <details style="margin-top: 10px;">
-                                        <summary style="cursor: pointer; color: #6b7280; font-size: 0.9em;">🔍 Debug Info</summary>
-                                        <pre style="margin-top: 10px; padding: 10px; background: #1e1e1e; color: #d4d4d4; border-radius: 4px; font-size: 0.85em; overflow-x: auto;">${JSON.stringify(liveData.debug_info, null, 2)}</pre>
-                                    </details>
-                                ` : ''}
-                            </div>
-                        `;
-                    }
+                if (!liveStatusInitialized) {
+                    // First call: build the full DOM structure
+                    buildLiveStatusDOM(content, data);
+                    liveStatusInitialized = true;
                 } else {
-                    // No live_data object at all
-                    html += `
-                        <div style="margin-top: 20px; padding: 20px; background: #f3f4f6; border-radius: 8px; border-left: 4px solid #6b7280;">
-                            <p style="margin: 0; color: #4b5563;">
-                                <strong>ℹ️ No data available for this job.</strong><br>
-                                The job may have failed during initialization, or results were not generated.
-                            </p>
-                        </div>
-                    `;
+                    // Subsequent calls: patch only what changed
+                    patchLiveStatusDOM(data);
                 }
-                
-                // Save scroll positions of open log panels before replacing DOM
-                const savedScrollPositions = {};
-                openElements.forEach(elementId => {
-                    const el = document.getElementById(elementId);
-                    if (el) savedScrollPositions[elementId] = el.scrollTop;
-                });
-                
-                content.innerHTML = html;
-                
-                // Restore previously open elements and their scroll positions after refresh
-                restoreOpenElements(savedScrollPositions);
             } catch (error) {
                 console.error('Error displaying live status:', error);
             }
+        }
+
+        function buildLiveStatusDOM(content, data) {
+            const scenarios = data.scenarios || [];
+            const scenarioStatus = data.scenario_status || {};
+            const liveData = data.live_data;
+
+            let html = '';
+
+            // Status banner
+            html += `<div id="live-status-banner">${renderStatusBanner(data)}</div>`;
+
+            // Scenario queue
+            if (scenarios.length > 0) {
+                const completedCount = scenarios.filter(s => scenarioStatus[`${s.dataset}-${s.label}`] === 'completed').length;
+                html += `
+                    <div id="live-queue-section" style="margin-bottom: 20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px;">
+                            <h3 style="margin: 0;">Test Queue</h3>
+                            <span id="live-queue-count" style="font-size: 0.9em; color: #6b7280;">${completedCount} / ${scenarios.length} completed</span>
+                        </div>
+                        <div id="live-queue-rows" style="display: flex; flex-direction: column; gap: 8px;">
+                            ${scenarios.map((s, idx) => renderScenarioRow(s, idx, scenarioStatus, data)).join('')}
+                        </div>
+                    </div>`;
+            }
+
+            // Live test data panels
+            if (liveData && liveData.test_runs && liveData.test_runs.length > 0) {
+                html += '<div id="live-testruns-section" style="margin-top: 20px;"><h3 style="margin-bottom: 10px;">📊 Live Test Data:</h3>';
+                liveData.test_runs.forEach((run, idx) => {
+                    html += renderTestRunPanel(run, idx);
+                });
+                html += '</div>';
+            }
+
+            // Live log panels
+            if (liveData && liveData.benchmark_logs && liveData.benchmark_logs.length > 0) {
+                html += '<div id="live-logs-section" style="margin-top: 20px;"><h3 style="margin-bottom: 10px;">📋 Live Logs (last 200 lines):</h3>';
+                liveData.benchmark_logs.forEach((log, idx) => {
+                    html += renderLogPanel(log, idx);
+                });
+                html += '</div>';
+            }
+
+            // No data message
+            if (!liveData || ((!liveData.test_runs || liveData.test_runs.length === 0) &&
+                               (!liveData.benchmark_logs || liveData.benchmark_logs.length === 0))) {
+                html += renderNoDataMessage(data, liveData);
+            }
+
+            content.innerHTML = html;
+        }
+
+        function patchLiveStatusDOM(data) {
+            const scenarios = data.scenarios || [];
+            const scenarioStatus = data.scenario_status || {};
+            const liveData = data.live_data;
+
+            // Patch status banner only if status changed
+            const banner = document.getElementById('live-status-banner');
+            if (banner) {
+                const newBanner = renderStatusBanner(data);
+                if (banner.innerHTML !== newBanner) {
+                    banner.innerHTML = newBanner;
+                }
+            }
+
+            // Patch scenario queue rows in-place
+            if (scenarios.length > 0) {
+                const countEl = document.getElementById('live-queue-count');
+                const completedCount = scenarios.filter(s => scenarioStatus[`${s.dataset}-${s.label}`] === 'completed').length;
+                if (countEl) countEl.textContent = `${completedCount} / ${scenarios.length} completed`;
+
+                scenarios.forEach((s, idx) => {
+                    const rowEl = document.getElementById(`live-queue-row-${idx}`);
+                    if (rowEl) {
+                        const newHtml = renderScenarioRow(s, idx, scenarioStatus, data);
+                        // Only replace if content changed to avoid unnecessary reflows
+                        const tmp = document.createElement('div');
+                        tmp.innerHTML = newHtml;
+                        const newRow = tmp.firstElementChild;
+                        if (rowEl.outerHTML !== newRow.outerHTML) {
+                            rowEl.replaceWith(newRow);
+                        }
+                    }
+                });
+            }
+
+            // Patch log text content in-place (preserve open/scroll state)
+            if (liveData && liveData.benchmark_logs) {
+                liveData.benchmark_logs.forEach((log, idx) => {
+                    const pre = document.getElementById(`log-pre-${idx}`);
+                    if (pre) {
+                        if (pre.textContent !== log.benchmark_log) {
+                            pre.textContent = log.benchmark_log;
+                        }
+                    }
+                });
+            }
+
+            // Patch test run JSON in-place
+            if (liveData && liveData.test_runs) {
+                liveData.test_runs.forEach((run, idx) => {
+                    const pre = document.getElementById(`testrun-pre-${idx}`);
+                    if (pre) {
+                        const newJson = JSON.stringify(run.test_run, null, 2);
+                        if (pre.textContent !== newJson) {
+                            pre.textContent = newJson;
+                        }
+                    }
+                });
+            }
+        }
+
+        function renderStatusBanner(data) {
+            if (data.status === 'queued') {
+                return `
+                    <div style="background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); padding: 20px; border-radius: 8px; border-left: 4px solid #3b82f6; margin-bottom: 20px;">
+                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                            <div style="width: 12px; height: 12px; background: #3b82f6; border-radius: 50%; animation: pulse 2s infinite;"></div>
+                            <strong style="font-size: 1.1em;">Test is queued and waiting to start...</strong>
+                        </div>
+                        <div style="color: #1e40af; font-size: 0.95em;">
+                            <div>Created: ${new Date(data.created_at).toLocaleString()}</div>
+                            <div>Dataset: <strong>${data.dataset}</strong></div>
+                            <div>Engine: <strong>${data.engine}</strong></div>
+                            <div>Scenario: <strong>${data.scenario}</strong></div>
+                        </div>
+                    </div>`;
+            } else if (data.status === 'running') {
+                return `
+                    <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); padding: 20px; border-radius: 8px; border-left: 4px solid #f59e0b; margin-bottom: 20px;">
+                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                            <div style="width: 12px; height: 12px; background: #ef4444; border-radius: 50%; animation: pulse 2s infinite;"></div>
+                            <strong style="font-size: 1.1em;">Test is currently running...</strong>
+                        </div>
+                        <div style="color: #78350f; font-size: 0.95em;">
+                            <div>Started: ${new Date(data.started_at).toLocaleString()}</div>
+                            <div>Dataset: <strong>${data.dataset}</strong></div>
+                            <div>Engine: <strong>${data.engine}</strong></div>
+                            <div>Scenario: <strong>${data.scenario}</strong></div>
+                            ${data.current_scenario ? `<div>Current Scenario: <strong>${data.current_scenario}</strong></div>` : ''}
+                        </div>
+                    </div>`;
+            } else if (data.status === 'error' || data.status === 'failed') {
+                return `
+                    <div style="background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); padding: 20px; border-radius: 8px; border-left: 4px solid #ef4444; margin-bottom: 20px;">
+                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                            <div style="width: 12px; height: 12px; background: #ef4444; border-radius: 50%;"></div>
+                            <strong style="font-size: 1.1em; color: #991b1b;">❌ Test Failed</strong>
+                        </div>
+                        <div style="color: #991b1b; font-size: 0.95em;">
+                            <div>Started: ${data.started_at ? new Date(data.started_at).toLocaleString() : 'N/A'}</div>
+                            ${data.completed_at ? `<div>Failed at: ${new Date(data.completed_at).toLocaleString()}</div>` : ''}
+                            <div>Dataset: <strong>${data.dataset}</strong></div>
+                            <div>Engine: <strong>${data.engine}</strong></div>
+                            <div>Scenario: <strong>${data.scenario}</strong></div>
+                            <div style="margin-top: 10px; padding: 10px; background: rgba(255,255,255,0.5); border-radius: 4px;">
+                                <strong>Showing partial results and logs below (if available)</strong>
+                            </div>
+                        </div>
+                    </div>`;
+            } else if (data.status === 'partial_failure') {
+                return `
+                    <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); padding: 20px; border-radius: 8px; border-left: 4px solid #f59e0b; margin-bottom: 20px;">
+                        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
+                            <div style="width: 12px; height: 12px; background: #f59e0b; border-radius: 50%;"></div>
+                            <strong style="font-size: 1.1em; color: #78350f;">⚠️ Test Partially Completed</strong>
+                        </div>
+                        <div style="color: #78350f; font-size: 0.95em;">
+                            <div>Started: ${new Date(data.started_at).toLocaleString()}</div>
+                            ${data.completed_at ? `<div>Ended at: ${new Date(data.completed_at).toLocaleString()}</div>` : ''}
+                            <div>Dataset: <strong>${data.dataset}</strong></div>
+                            <div>Engine: <strong>${data.engine}</strong></div>
+                            <div>Scenario: <strong>${data.scenario}</strong></div>
+                            <div style="margin-top: 10px; padding: 10px; background: rgba(255,255,255,0.5); border-radius: 4px;">
+                                <strong>Some scenarios completed successfully. Showing available results below.</strong>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+            return '';
+        }
+
+        function renderScenarioRow(s, idx, scenarioStatus, data) {
+            const key = `${s.dataset}-${s.label}`;
+            const st = scenarioStatus[key] || 'queued';
+            const isRunning = st === 'running';
+            const isCurrent = data.status === 'running' && idx === (data.current_scenario_index ?? null);
+
+            let borderColor, bg, icon, statusText;
+            if (st === 'completed')                    { borderColor = '#10b981'; bg = '#f0fdf4'; icon = '✓'; statusText = 'Completed'; }
+            else if (isRunning)                        { borderColor = '#f59e0b'; bg = '#fffbeb'; icon = '▶'; statusText = 'Running…'; }
+            else if (st === 'error' || st === 'failed') { borderColor = '#ef4444'; bg = '#fef2f2'; icon = '✗'; statusText = 'Failed'; }
+            else                                       { borderColor = '#d1d5db'; bg = '#f9fafb'; icon = `${idx + 1}`; statusText = 'Queued'; }
+
+            return `
+                <div id="live-queue-row-${idx}" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+                            background: ${bg}; border-left: 4px solid ${borderColor};
+                            border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+                            ${isCurrent ? 'outline: 2px solid ' + borderColor + '; outline-offset: 1px;' : ''}">
+                    <div style="width: 28px; height: 28px; border-radius: 50%; background: ${borderColor};
+                                color: white; display: flex; align-items: center; justify-content: center;
+                                font-size: 0.85em; font-weight: 700; flex-shrink: 0;">${icon}</div>
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-weight: 600; color: #111;">${s.label}</div>
+                        <div style="font-size: 0.82em; color: #6b7280;">${s.dataset} · ${s.procedure_name}</div>
+                    </div>
+                    <div style="font-size: 0.85em; font-weight: 500; color: ${borderColor}; white-space: nowrap;">${statusText}</div>
+                </div>`;
+        }
+
+        function renderTestRunPanel(run, idx) {
+            let label = run.scenario_label || 'Run';
+            if (run.sweep_name && run.sweep_name !== run.scenario_label) label += ` - ${run.sweep_name}`;
+            if (!run.scenario_label && !run.sweep_name) label = `Run ${idx + 1}`;
+            return `
+                <div style="margin-bottom: 15px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+                    <div style="background: #f3f4f6; padding: 12px; font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+                        <span>${label}</span>
+                        <button onclick="toggleJson('testrun-${idx}')" style="padding: 6px 12px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">View JSON</button>
+                    </div>
+                    <div id="testrun-${idx}" style="display: none; padding: 15px; background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 12px; max-height: 400px; overflow: auto;">
+                        <pre id="testrun-pre-${idx}" style="margin: 0; white-space: pre-wrap; word-wrap: break-word;">${JSON.stringify(run.test_run, null, 2)}</pre>
+                    </div>
+                </div>`;
+        }
+
+        function renderLogPanel(log, idx) {
+            let label = log.scenario_label || 'Log';
+            if (log.sweep_name && log.sweep_name !== log.scenario_label) label += ` - ${log.sweep_name}`;
+            if (!log.scenario_label && !log.sweep_name) label = `Log ${idx + 1}`;
+            return `
+                <div style="margin-bottom: 15px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+                    <div style="background: #f3f4f6; padding: 12px; font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+                        <span>${label}</span>
+                        <button onclick="toggleJson('log-${idx}')" style="padding: 6px 12px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em;">Toggle Log</button>
+                    </div>
+                    <div id="log-${idx}" style="display: none; padding: 15px; background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 12px; max-height: 400px; overflow: auto;">
+                        <pre id="log-pre-${idx}" style="margin: 0; white-space: pre-wrap; word-wrap: break-word;">${log.benchmark_log}</pre>
+                    </div>
+                </div>`;
+        }
+
+        function renderNoDataMessage(data, liveData) {
+            if (!liveData) {
+                return `
+                    <div style="margin-top: 20px; padding: 20px; background: #f3f4f6; border-radius: 8px; border-left: 4px solid #6b7280;">
+                        <p style="margin: 0; color: #4b5563;">
+                            <strong>ℹ️ No data available for this job.</strong><br>
+                            The job may have failed during initialization, or results were not generated.
+                        </p>
+                    </div>`;
+            }
+            return `
+                <div style="margin-top: 20px; padding: 20px; background: #f3f4f6; border-radius: 8px; border-left: 4px solid #6b7280;">
+                    <p style="margin: 0; color: #4b5563;">
+                        <strong>ℹ️ No partial results or logs found.</strong><br>
+                        The test may have failed before generating any output files, or the results directory may not be accessible.
+                    </p>
+                    <p style="margin: 10px 0 0 0; color: #6b7280; font-size: 0.9em;">
+                        Expected results location: <code>/results/${data.job_id}/</code>
+                    </p>
+                    ${liveData.debug_info ? `
+                        <details style="margin-top: 10px;">
+                            <summary style="cursor: pointer; color: #6b7280; font-size: 0.9em;">🔍 Debug Info</summary>
+                            <pre style="margin-top: 10px; padding: 10px; background: #1e1e1e; color: #d4d4d4; border-radius: 4px; font-size: 0.85em; overflow-x: auto;">${JSON.stringify(liveData.debug_info, null, 2)}</pre>
+                        </details>
+                    ` : ''}
+                </div>`;
         }
         
         // Track which elements are open
