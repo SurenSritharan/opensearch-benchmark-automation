@@ -59,6 +59,13 @@ datasets:
           target_index_bulk_index_data_set_corpus: "{{corpus_name}}"
           target_index_bulk_indexing_clients: 8
           # target_index_num_vectors will be calculated dynamically based on corpus_size
+
+      - name: "refresh"
+        params: {}
+      
+      - name: "force-merge"
+        params:
+          target_index_max_num_segments: 1
       
       - name: "search-only"
         params:
