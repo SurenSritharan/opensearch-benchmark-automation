@@ -116,6 +116,11 @@ class BenchmarkRunner:
                 import uuid
                 job_id = str(uuid.uuid4())
             
+            # Ensure the workload repo is up to date before every run so
+            # workload.json changes (e.g. new corpus entries) are picked up.
+            workloads_dir = self.config.workloads_dir
+            self.config._git_pull_repo(workloads_dir, 'opensearch-benchmark-workloads')
+
             # Get configuration
             target_host = self.config.get_target_host(engine)
             workload_path = self.config.get_workload_path(dataset)

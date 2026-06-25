@@ -551,10 +551,8 @@ class ConfigLoader:
         
         # Clean up internal/template parameters that should not be passed to OpenSearch Benchmark
         
-        # Remove corpus_size and corpus_name (internal template helpers)
-        if 'corpus_size' in resolved_params:
-            resolved_params.pop('corpus_size')
-            logger.debug("Removed internal 'corpus_size' from resolved workload params")
+        # corpus_name is an internal helper used only for template resolution — not a workload param
+        # corpus_size is intentionally kept: workloads like vectorsearch use {{ corpus_size }} directly
         if 'corpus_name' in resolved_params:
             resolved_params.pop('corpus_name')
             logger.debug("Removed internal 'corpus_name' from resolved workload params")
