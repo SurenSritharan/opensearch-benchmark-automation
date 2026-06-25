@@ -133,29 +133,94 @@
         <div class="card">
             <h2>Start New Benchmark</h2>
             <div id="errorMsg" class="error-msg" style="display: none;"></div>
-            <form id="benchmarkForm">
-                <div class="form-group">
-                    <label>Dataset</label>
-                    <select id="dataset" required>
-                        <option value="">Loading...</option>
-                    </select>
-                    <div class="info-text" id="datasetInfo"></div>
+
+            <!-- Tab bar -->
+            <div style="display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid #e1e4e8;">
+                <button id="tabCustomBtn" onclick="switchTab('custom')"
+                        style="padding: 10px 20px; background: none; border: none; border-bottom: 3px solid #3b82f6;
+                               margin-bottom: -2px; font-weight: 700; color: #3b82f6; cursor: pointer; font-size: 14px; box-shadow: none; transform: none;">
+                    Custom
+                </button>
+                <button id="tabScenariosBtn" onclick="switchTab('scenarios')"
+                        style="padding: 10px 20px; background: none; border: none; border-bottom: 3px solid transparent;
+                               margin-bottom: -2px; font-weight: 600; color: #6b7280; cursor: pointer; font-size: 14px; box-shadow: none; transform: none;">
+                    🗂️ Saved Scenarios
+                </button>
+            </div>
+
+            <!-- Custom tab -->
+            <div id="tabCustom">
+                <form id="benchmarkForm">
+                    <div class="form-group">
+                        <label>Dataset</label>
+                        <select id="dataset" required>
+                            <option value="">Loading...</option>
+                        </select>
+                        <div class="info-text" id="datasetInfo"></div>
+                    </div>
+                    <div class="form-group">
+                        <label>Engine</label>
+                        <select id="engine" required>
+                            <option value="">Select dataset first</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Test Procedure</label>
+                        <select id="scenario" required>
+                            <option value="">Select dataset first</option>
+                        </select>
+                        <div class="info-text" id="scenarioInfo"></div>
+                    </div>
+                    <button type="submit">Start Benchmark</button>
+                </form>
+            </div>
+
+            <!-- Saved Scenarios tab -->
+            <div id="tabScenarios" style="display: none;">
+                <div id="scenarioList">Loading scenarios...</div>
+
+                <!-- Inline schedule editor -->
+                <div id="scheduleEditor" style="display: none; margin-top: 16px; background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 8px; padding: 16px;">
+                    <h3 id="scheduleEditorTitle" style="margin: 0 0 12px 0; font-size: 14px;"></h3>
+
+                    <!-- Step selector (populated dynamically) -->
+                    <div style="margin-bottom: 14px;">
+                        <label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 6px;">
+                            Steps to run <span style="font-weight: 400; color: #9ca3af;">(uncheck to skip)</span>
+                            <button type="button" onclick="toggleAllSteps(true)"
+                                    style="margin-left: 8px; padding: 2px 8px; font-size: 11px; background: #e5e7eb; color: #374151; box-shadow: none; transform: none;">all</button>
+                            <button type="button" onclick="toggleAllSteps(false)"
+                                    style="padding: 2px 8px; font-size: 11px; background: #e5e7eb; color: #374151; box-shadow: none; transform: none;">none</button>
+                        </label>
+                        <div id="schedSteps" style="display: flex; flex-direction: column; gap: 6px;"></div>
+                    </div>
+
+                    <!-- Cron row — hidden in run mode -->
+                    <div id="schedCronRow" style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 10px;">
+                        <div style="flex: 1; min-width: 200px;">
+                            <label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 4px;">
+                                Cron expression <span style="font-weight: 400; color: #9ca3af;">(UTC, 5-field)</span>
+                            </label>
+                            <input id="schedCron" type="text" placeholder="0 2 * * *  (daily at 02:00 UTC)"
+                                   style="width: 100%; padding: 8px; font-family: monospace;" />
+                        </div>
+                    </div>
+
+                    <!-- Action buttons — content swapped by mode -->
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <!-- Schedule mode buttons -->
+                        <button id="schedSaveBtn" onclick="saveSchedule()" style="padding: 8px 16px; background: #3b82f6; white-space: nowrap;">💾 Save Schedule</button>
+                        <button id="schedRemoveBtn" onclick="removeSchedule()" style="padding: 8px 16px; background: #ef4444; white-space: nowrap;">🗑 Remove</button>
+                        <!-- Run mode button -->
+                        <button id="schedRunNowBtn" onclick="confirmRunNow()" style="display: none; padding: 8px 16px; background: #3b82f6; white-space: nowrap;">▶ Run Now</button>
+                        <button onclick="closeScheduleEditor()" style="padding: 8px 16px; background: #6b7280;">Cancel</button>
+                    </div>
+                    <div id="schedCronHint" style="margin-top: 10px; font-size: 12px; color: #6b7280;">
+                        Examples: <code>0 2 * * *</code> daily at 02:00 · <code>0 */6 * * *</code> every 6 h · <code>0 9 * * 1</code> Mondays at 09:00
+                    </div>
+                    <div id="schedError" class="error-msg" style="display: none; margin-top: 8px;"></div>
                 </div>
-                <div class="form-group">
-                    <label>Engine</label>
-                    <select id="engine" required>
-                        <option value="">Select dataset first</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>Test Procedure</label>
-                    <select id="scenario" required>
-                        <option value="">Select dataset first</option>
-                    </select>
-                    <div class="info-text" id="scenarioInfo"></div>
-                </div>
-                <button type="submit">Start Benchmark</button>
-            </form>
+            </div>
         </div>
 
         <div class="card">
@@ -502,10 +567,262 @@
             }
         }
 
+        // ---------------------------------------------------------------
+        // Saved Scenarios
+        // ---------------------------------------------------------------
+
+        let _editingScheduleName = null;
+        // Keyed by scenario name — used by openScheduleEditor to avoid serialising into onclick attrs
+        const _scenarioCache = {};
+
+        async function loadScenarios() {
+            try {
+                const res = await fetch('/api/v1/scenarios');
+                const scenarios = await res.json();
+                const list = document.getElementById('scenarioList');
+
+                if (!scenarios.length) {
+                    list.innerHTML = '<p style="color: #666;">No scenarios found. Add JSON files to <code>cloud-service/scenarios/</code> and sync.</p>';
+                    return;
+                }
+
+                // Cache the full scenario objects so onclick only needs the name
+                scenarios.forEach(s => { _scenarioCache[s.name] = s; });
+
+                list.innerHTML = scenarios.map(s => {
+                    const sched = s.schedule;
+                    const tests = s.payload?.tests || [];
+                    const totalSteps = tests.length;
+                    const activeSteps = sched?.steps != null ? sched.steps.length : totalSteps;
+                    const stepsNote = (sched?.enabled && sched?.steps != null && sched.steps.length < totalSteps)
+                        ? `<span style="font-size: 11px; color: #f59e0b; margin-left: 6px;">${activeSteps}/${totalSteps} steps</span>`
+                        : '';
+                    const schedHtml = sched?.enabled
+                        ? `<span style="font-size: 12px; color: #10b981; font-weight: 600;">⏰ ${sched.cron}</span>${stepsNote}
+                           <span style="font-size: 11px; color: #6b7280; margin-left: 6px;">next: ${sched.next_run ? new Date(sched.next_run + 'Z').toLocaleString() : '—'}</span>
+                           ${sched.last_run ? `<span style="font-size: 11px; color: #9ca3af; margin-left: 6px;">last: ${new Date(sched.last_run + 'Z').toLocaleString()}</span>` : ''}`
+                        : `<span style="font-size: 12px; color: #9ca3af;">No schedule</span>`;
+                    // Escape the name for safe use in onclick (names come from filenames — no quotes expected,
+                    // but guard against edge cases)
+                    const safeName = s.name.replace(/'/g, "\\'");
+
+                    return `
+                    <div style="display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+                                background: #f6f8fa; border-radius: 8px; margin-bottom: 10px;
+                                border: 1px solid #e1e4e8;">
+                        <div style="flex: 1; min-width: 0;">
+                            <div style="font-weight: 700; color: #111; margin-bottom: 2px;">${s.name}</div>
+                            <div style="font-size: 13px; color: #6b7280; margin-bottom: 4px;">${s.description || '—'}</div>
+                            <div style="font-size: 12px; color: #9ca3af;">
+                                engine: <strong>${s.payload?.engine || '?'}</strong>
+                                · ${totalSteps} test${totalSteps !== 1 ? 's' : ''}
+                            </div>
+                            <div style="margin-top: 5px;">${schedHtml}</div>
+                        </div>
+                        <div style="display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end;">
+                            <button onclick="openRunEditor('${safeName}')"
+                                    style="padding: 7px 14px; font-size: 13px; background: #3b82f6;">
+                                ▶ Run
+                            </button>
+                            <button onclick="openScheduleEditor('${safeName}')"
+                                    style="padding: 7px 14px; font-size: 13px; background: #f59e0b;">
+                                ⏰ Schedule
+                            </button>
+                        </div>
+                    </div>`;
+                }).join('');
+            } catch (err) {
+                document.getElementById('scenarioList').innerHTML =
+                    `<p style="color: #d32f2f;">Failed to load scenarios: ${err.message}</p>`;
+            }
+        }
+
+        let _editingScenario = null;  // full scenario object while editor is open
+        let _editorMode = 'schedule'; // 'schedule' | 'run'
+
+        function _openEditor(name, mode, preChecked) {
+            const scenarioObj = _scenarioCache[name];
+            if (!scenarioObj) return;
+            _editingScenario = scenarioObj;
+            _editingScheduleName = scenarioObj.name;
+            _editorMode = mode;
+
+            // Title
+            const isRun = mode === 'run';
+            document.getElementById('scheduleEditorTitle').textContent =
+                isRun ? `Run: ${scenarioObj.name}` : `Schedule: ${scenarioObj.name}`;
+
+            // Show/hide cron row and action buttons
+            document.getElementById('schedCronRow').style.display = isRun ? 'none' : '';
+            document.getElementById('schedCronHint').style.display = isRun ? 'none' : '';
+            document.getElementById('schedSaveBtn').style.display = isRun ? 'none' : '';
+            document.getElementById('schedRemoveBtn').style.display = isRun ? 'none' : '';
+            document.getElementById('schedRunNowBtn').style.display = isRun ? '' : 'none';
+
+            // Cron value (schedule mode only)
+            if (!isRun) {
+                const sched = scenarioObj.schedule;
+                document.getElementById('schedCron').value = sched?.cron || '';
+            }
+            document.getElementById('schedError').style.display = 'none';
+
+            // Build step checkboxes
+            const tests = scenarioObj.payload?.tests || [];
+            const stepsEl = document.getElementById('schedSteps');
+            stepsEl.innerHTML = tests.map((t, i) => {
+                const label = t.label || t.scenario;
+                const checked = (preChecked === null || preChecked.has(i)) ? 'checked' : '';
+                return `<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">
+                    <input type="checkbox" data-step-index="${i}" ${checked}
+                           style="width: auto; margin: 0; cursor: pointer;" />
+                    <span><strong>${i + 1}.</strong> ${label}
+                        <span style="color: #9ca3af; font-size: 11px; margin-left: 4px;">${t.dataset}</span>
+                    </span>
+                </label>`;
+            }).join('');
+
+            const editor = document.getElementById('scheduleEditor');
+            editor.style.display = 'block';
+            editor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function openRunEditor(name) {
+            // Default: all steps checked
+            _openEditor(name, 'run', null);
+        }
+
+        function openScheduleEditor(name) {
+            const scenarioObj = _scenarioCache[name];
+            if (!scenarioObj) return;
+            // Pre-check the steps saved in the existing schedule (null = all)
+            const sched = scenarioObj.schedule;
+            const preChecked = sched?.steps != null ? new Set(sched.steps) : null;
+            _openEditor(name, 'schedule', preChecked);
+        }
+
+        async function confirmRunNow() {
+            const errEl = document.getElementById('schedError');
+            errEl.style.display = 'none';
+
+            const allCheckboxes = [...document.querySelectorAll('#schedSteps input[type=checkbox]')];
+            const checkedIndices = allCheckboxes
+                .filter(cb => cb.checked)
+                .map(cb => parseInt(cb.dataset.stepIndex, 10));
+
+            if (checkedIndices.length === 0) {
+                errEl.textContent = 'Select at least one step to run.';
+                errEl.style.display = 'block';
+                return;
+            }
+
+            const steps = checkedIndices.length < allCheckboxes.length ? checkedIndices : null;
+            const name = _editingScheduleName;
+            const btn = document.getElementById('schedRunNowBtn');
+            const orig = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '⏳';
+
+            try {
+                const res = await fetch(`/api/v1/scenarios/${encodeURIComponent(name)}/run`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ steps })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    closeScheduleEditor();
+                    const url = `/results/${data.job_id}?job_id=${data.job_id}`;
+                    if (confirm(`Job started! Job ID: ${data.job_id}\n\nOpen results page?`)) {
+                        window.location.href = url;
+                    } else {
+                        loadJobs();
+                    }
+                } else {
+                    errEl.textContent = data.error || 'Failed to run scenario';
+                    errEl.style.display = 'block';
+                }
+            } catch (err) {
+                errEl.textContent = `Error: ${err.message}`;
+                errEl.style.display = 'block';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = orig;
+            }
+        }
+
+        function toggleAllSteps(checked) {
+            document.querySelectorAll('#schedSteps input[type=checkbox]').forEach(cb => cb.checked = checked);
+        }
+
+        function closeScheduleEditor() {
+            _editingScheduleName = null;
+            _editingScenario = null;
+            document.getElementById('scheduleEditor').style.display = 'none';
+        }
+
+        async function saveSchedule() {
+            const cron = document.getElementById('schedCron').value.trim();
+            const errEl = document.getElementById('schedError');
+            errEl.style.display = 'none';
+            if (!cron) {
+                errEl.textContent = 'Enter a cron expression, e.g. 0 2 * * *';
+                errEl.style.display = 'block';
+                return;
+            }
+
+            // Collect selected step indices; send null if all are checked (run whole scenario)
+            const allCheckboxes = [...document.querySelectorAll('#schedSteps input[type=checkbox]')];
+            const checkedIndices = allCheckboxes
+                .filter(cb => cb.checked)
+                .map(cb => parseInt(cb.dataset.stepIndex, 10));
+            const steps = (allCheckboxes.length > 0 && checkedIndices.length < allCheckboxes.length)
+                ? checkedIndices
+                : null;  // null = run all steps
+
+            if (allCheckboxes.length > 0 && checkedIndices.length === 0) {
+                errEl.textContent = 'Select at least one step to run.';
+                errEl.style.display = 'block';
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/v1/scenarios/${encodeURIComponent(_editingScheduleName)}/schedule`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cron, enabled: true, steps })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    errEl.textContent = data.error || 'Failed to save schedule';
+                    errEl.style.display = 'block';
+                    return;
+                }
+                closeScheduleEditor();
+                loadScenarios();
+            } catch (err) {
+                errEl.textContent = `Error: ${err.message}`;
+                errEl.style.display = 'block';
+            }
+        }
+
+        async function removeSchedule() {
+            if (!confirm(`Remove schedule for "${_editingScheduleName}"?`)) return;
+            try {
+                await fetch(`/api/v1/scenarios/${encodeURIComponent(_editingScheduleName)}/schedule`, {
+                    method: 'DELETE'
+                });
+                closeScheduleEditor();
+                loadScenarios();
+            } catch (err) {
+                alert(`Error: ${err.message}`);
+            }
+        }
+
         loadDatasets();
         loadJobs();
+        loadScenarios();
         loadLogs();
-        
+
         // Auto-refresh jobs every 5 seconds
         setInterval(loadJobs, 5000);
         

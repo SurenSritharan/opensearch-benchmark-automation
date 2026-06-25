@@ -1,0 +1,81 @@
+{
+  "name": "batch-1m-complete",
+  "description": "Complete end-to-end batch: create-index → bulk-ingest 1M → refresh → force-merge → search (k=100 & k=10)",
+  "payload": {
+    "engine": "jvector",
+    "tests": [
+      {
+        "dataset": "msmarco",
+        "scenario": "create-index-only",
+        "params": {
+          "target_index_name": "cohere-msmarco-1024-1m",
+          "target_index_body": "indices/index.json",
+          "target_field_name": "vector",
+          "target_index_dimension": 1024,
+          "target_index_space_type": "cosinesimil",
+          "engine": "jvector",
+          "method_name": "disk_ann",
+          "mode": "on_disk",
+          "compression_level": "16x",
+          "target_index_primary_shards": 3,
+          "target_index_replica_shards": 0,
+          "refresh_interval": "-1",
+          "translog_flush_threshold_size": "15gb",
+          "segments_per_tier": 5,
+          "hnsw_ef_construction": 128,
+          "hnsw_m": 16,
+          "floor_segment": "1gb",
+          "max_merged_segment": "25gb"
+        }
+      },
+      {
+        "dataset": "msmarco",
+        "scenario": "bulk-ingest-only",
+        "params": {
+          "target_index_name": "cohere-msmarco-1024-1m",
+          "target_index_bulk_index_data_set_path": "/datasets/msmarco/cohere_msmarco_base_1m.fvec",
+          "target_index_bulk_size": 5000,
+          "target_index_bulk_indexing_clients": 8,
+          "num_vectors": 1000000
+        }
+      },
+      {
+        "dataset": "msmarco",
+        "scenario": "refresh",
+        "label": "refresh-index",
+        "params": {
+          "target_index_name": "cohere-msmarco-1024-1m"
+        }
+      },
+      {
+        "dataset": "msmarco",
+        "scenario": "force-merge",
+        "label": "force-merge-1seg",
+        "params": {
+          "target_index_name": "cohere-msmarco-1024-1m",
+          "target_index_max_num_segments": 1
+        }
+      },
+      {
+        "dataset": "msmarco",
+        "scenario": "vector-search",
+        "label": "vector-search-k100-ef100",
+        "params": {
+          "target_index_name": "cohere-msmarco-1024-1m",
+          "num_vectors": 1000000,
+          "query_k": 100
+        }
+      },
+      {
+        "dataset": "msmarco",
+        "scenario": "vector-search",
+        "label": "vector-search-k10-ef32",
+        "params": {
+          "target_index_name": "cohere-msmarco-1024-1m",
+          "num_vectors": 1000000,
+          "query_k": 10
+        }
+      }
+    ]
+  }
+}

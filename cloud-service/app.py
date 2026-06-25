@@ -1408,6 +1408,206 @@ def get_benchmark_logs():
         return jsonify({'error': str(e)}), 500
 
 
+# ---------------------------------------------------------------------------
+# Scenarios (saved batch job definitions)
+# ---------------------------------------------------------------------------
+
+# Scenarios live in cloud-service/scenarios/ and are read fresh from disk on every request.
+# Add new scenarios by dropping a JSON file there and running Sync from Git.
+SCENARIOS_DIR = Path(__file__).parent / "scenarios"
+SCENARIOS_DIR.mkdir(parents=True, exist_ok=True)
+
+# In-memory schedule store: { name -> {'cron': str, 'next_run': datetime | None} }
+# Persisted across requests but reset on pod restart (schedules are lightweight config).
+_schedules: Dict[str, Any] = {}
+_scheduler_lock = threading.Lock()
+
+
+def _read_scenario_file(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Could not load scenario {path.name}: {e}")
+        return None
+
+
+def _parse_cron_next(cron_expr: str) -> Optional[datetime]:
+    """Return the next UTC datetime for a cron expression (5-field).
+    Supports: minute hour dom month dow  (e.g. '0 2 * * *' = daily at 02:00 UTC)
+    Returns None if the expression is invalid.
+    """
+    try:
+        parts = cron_expr.strip().split()
+        if len(parts) != 5:
+            return None
+        minute, hour, dom, month, dow = parts
+
+        now = datetime.utcnow().replace(second=0, microsecond=0)
+        candidate = now.replace(minute=0) + __import__('datetime').timedelta(minutes=1)
+
+        def _matches(val, field):
+            if field == '*':
+                return True
+            try:
+                return int(field) == val
+            except ValueError:
+                return False
+
+        for _ in range(525600):  # scan up to 1 year ahead
+            if (_matches(candidate.minute, minute) and
+                    _matches(candidate.hour, hour) and
+                    _matches(candidate.day, dom) and
+                    _matches(candidate.month, month) and
+                    _matches(candidate.weekday(), dow)):
+                return candidate
+            candidate += __import__('datetime').timedelta(minutes=1)
+        return None
+    except Exception:
+        return None
+
+
+def _scheduler_loop():
+    """Background thread that fires scheduled scenarios."""
+    while True:
+        time.sleep(30)
+        now = datetime.utcnow()
+        with _scheduler_lock:
+            due = [(name, sched) for name, sched in _schedules.items()
+                   if sched.get('enabled') and sched.get('next_run') and
+                   datetime.fromisoformat(sched['next_run']) <= now]
+
+        for name, sched in due:
+            path = SCENARIOS_DIR / f"{name}.json"
+            s = _read_scenario_file(path)
+            if s:
+                try:
+                    payload = dict(s['payload'])
+                    # If the schedule has a steps filter, run only those test indices
+                    step_indices = sched.get('steps')
+                    if step_indices is not None:
+                        all_tests = payload.get('tests', [])
+                        payload['tests'] = [all_tests[i] for i in step_indices if i < len(all_tests)]
+                    with app.test_client() as client:
+                        client.post('/api/v1/benchmark/batch',
+                                    json=payload,
+                                    content_type='application/json')
+                    logger.info(f"Scheduler fired scenario: {name} (steps={step_indices})")
+                except Exception as e:
+                    logger.error(f"Scheduler failed to run scenario {name}: {e}")
+            # Advance to next run
+            with _scheduler_lock:
+                if name in _schedules:
+                    next_run = _parse_cron_next(_schedules[name]['cron'])
+                    _schedules[name]['next_run'] = next_run.isoformat() if next_run else None
+                    _schedules[name]['last_run'] = now.isoformat()
+
+
+# Start scheduler background thread
+threading.Thread(target=_scheduler_loop, daemon=True, name='scenario-scheduler').start()
+
+
+@app.route('/api/v1/scenarios', methods=['GET'])
+def list_scenarios():
+    """List all saved scenarios from cloud-service/scenarios/, with schedule info attached."""
+    scenarios = []
+    for path in sorted(SCENARIOS_DIR.glob("*.json")):
+        s = _read_scenario_file(path)
+        if s:
+            with _scheduler_lock:
+                s['schedule'] = _schedules.get(s['name'])
+            scenarios.append(s)
+    return jsonify(scenarios)
+
+
+@app.route('/api/v1/scenarios/<name>/run', methods=['POST'])
+def run_scenario(name: str):
+    """Dispatch a saved scenario as a batch benchmark job immediately.
+
+    Optional body: { "steps": [0, 2, 4] }
+    Omit or pass null for steps to run all tests in the scenario.
+    """
+    path = SCENARIOS_DIR / f"{name}.json"
+    if not path.exists():
+        return jsonify({'error': f'Scenario "{name}" not found'}), 404
+
+    s = _read_scenario_file(path)
+    if not s:
+        return jsonify({'error': f'Could not read scenario "{name}"'}), 500
+
+    data = request.get_json(silent=True) or {}
+    steps = data.get('steps', None)
+    if steps is not None:
+        if not isinstance(steps, list) or not all(isinstance(i, int) for i in steps):
+            return jsonify({'error': '"steps" must be a list of integer indices'}), 400
+
+    payload = dict(s['payload'])
+    if steps is not None:
+        all_tests = payload.get('tests', [])
+        payload['tests'] = [all_tests[i] for i in steps if i < len(all_tests)]
+        if not payload['tests']:
+            return jsonify({'error': 'No valid steps selected'}), 400
+
+    with app.test_client() as client:
+        resp = client.post('/api/v1/benchmark/batch',
+                           json=payload,
+                           content_type='application/json')
+        return resp.data, resp.status_code, {'Content-Type': 'application/json'}
+
+
+@app.route('/api/v1/scenarios/<name>/schedule', methods=['POST'])
+def set_scenario_schedule(name: str):
+    """Set or update the cron schedule for a scenario.
+
+    Body: { "cron": "0 2 * * *", "enabled": true }
+    Send enabled=false or omit cron to disable.
+    """
+    path = SCENARIOS_DIR / f"{name}.json"
+    if not path.exists():
+        return jsonify({'error': f'Scenario "{name}" not found'}), 404
+
+    data = request.get_json() or {}
+    cron = data.get('cron', '').strip()
+    enabled = bool(data.get('enabled', True))
+    # Optional list of step indices (0-based) to run; None means run all steps
+    steps = data.get('steps', None)
+    if steps is not None:
+        if not isinstance(steps, list) or not all(isinstance(i, int) for i in steps):
+            return jsonify({'error': '"steps" must be a list of integer indices'}), 400
+
+    if cron and enabled:
+        next_run = _parse_cron_next(cron)
+        if next_run is None:
+            return jsonify({'error': f'Invalid cron expression: "{cron}". Use 5-field format: minute hour dom month dow'}), 400
+        with _scheduler_lock:
+            _schedules[name] = {
+                'cron': cron,
+                'enabled': True,
+                'next_run': next_run.isoformat(),
+                'last_run': _schedules.get(name, {}).get('last_run'),
+                'steps': steps,  # None = all steps; list of ints = subset
+            }
+        logger.info(f"Scheduled scenario {name}: {cron} (next: {next_run.isoformat()}, steps={steps})")
+    else:
+        with _scheduler_lock:
+            if name in _schedules:
+                _schedules[name]['enabled'] = False
+                _schedules[name]['next_run'] = None
+        logger.info(f"Disabled schedule for scenario: {name}")
+
+    with _scheduler_lock:
+        return jsonify({'name': name, 'schedule': _schedules.get(name)})
+
+
+@app.route('/api/v1/scenarios/<name>/schedule', methods=['DELETE'])
+def delete_scenario_schedule(name: str):
+    """Remove the schedule for a scenario."""
+    with _scheduler_lock:
+        _schedules.pop(name, None)
+    logger.info(f"Removed schedule for scenario: {name}")
+    return jsonify({'name': name, 'schedule': None})
+
+
 @app.route('/api/v1/cluster/<engine>/health')
 def get_cluster_health(engine: str):
     """Check OpenSearch cluster health for a specific engine"""
