@@ -3,6 +3,7 @@
 import yaml
 import subprocess
 import copy
+import shutil
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import logging
@@ -121,7 +122,15 @@ class ConfigLoader:
             automation_result = self._git_pull_repo(self.workspace_dir, "opensearch-benchmark-automation")
             result['git_pull_success'] = automation_result['success']
             result['git_output'] = automation_result['output']
-            
+
+            # Copy updated web assets to /app/web so Flask serves the latest HTML/JS/CSS
+            if automation_result['success']:
+                src_web = self.workspace_dir / 'cloud-service' / 'web'
+                dst_web = Path('/app/web')
+                if src_web.exists():
+                    shutil.copytree(src_web, dst_web, dirs_exist_ok=True)
+                    logger.info(f"Copied web assets from {src_web} to {dst_web}")
+
             # Pull opensearch-benchmark-workloads
             workloads_result = self._git_pull_repo(self.workloads_dir, "opensearch-benchmark-workloads")
             result['workloads_git_pull_success'] = workloads_result['success']

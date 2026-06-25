@@ -94,6 +94,7 @@ def _restore_batch_fields(job: Dict[str, Any]) -> Dict[str, Any]:
         job['results_base'] = batch_meta.get('results_base')
         job['scenario_status'] = batch_meta.get('scenario_status', {})
         job['scenario_results'] = batch_meta.get('scenario_results', {})
+        job['scenario_times'] = batch_meta.get('scenario_times', {})
         job['current_scenario'] = batch_meta.get('current_scenario')
         job['current_scenario_index'] = batch_meta.get('current_scenario_index', 0)
     return job
@@ -115,6 +116,7 @@ def save_job(job_id: str, job_data: Dict[str, Any]):
                     'results_base': job_data.get('results_base'),
                     'scenario_status': job_data.get('scenario_status', {}),
                     'scenario_results': job_data.get('scenario_results', {}),
+                    'scenario_times': job_data.get('scenario_times', {}),
                     'current_scenario': job_data.get('current_scenario'),
                     'current_scenario_index': job_data.get('current_scenario_index', 0)
                 }
@@ -359,6 +361,7 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
             scenario_job_id = f"{results_base}/{scenario_key}"
             
             # Update current scenario in job
+            scenario_started_at = datetime.utcnow().isoformat()
             job_data = get_job(job_id)
             if job_data:
                 job_data['current_scenario'] = scenario_key
@@ -366,6 +369,9 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
                 if 'scenario_status' not in job_data:
                     job_data['scenario_status'] = {}
                 job_data['scenario_status'][scenario_key] = 'running'
+                if 'scenario_times' not in job_data:
+                    job_data['scenario_times'] = {}
+                job_data['scenario_times'][scenario_key] = {'started_at': scenario_started_at}
                 save_job(job_id, job_data)
             
             logger.info(f"Batch job {job_id}: Running test {idx+1}/{len(scenarios)}: dataset={dataset}, scenario={label} (procedure: {procedure_name})")
@@ -396,31 +402,35 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
             result['results_subdir'] = scenario_key
             batch_results['scenario_results'][scenario_key] = result
             
+            scenario_completed_at = datetime.utcnow().isoformat()
             if result.get('status') == 'completed':
                 batch_results['scenarios_completed'] += 1
-                # Update scenario status
+                # Update scenario status and times
                 job_data = get_job(job_id)
                 if job_data and 'scenario_status' in job_data:
                     job_data['scenario_status'][scenario_key] = 'completed'
+                    job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = scenario_completed_at
                     save_job(job_id, job_data)
                 logger.info(f"Batch job {job_id}: Scenario {scenario_key} completed successfully")
             else:
                 batch_results['scenarios_failed'] += 1
-                # Update scenario status
+                # Update scenario status and times
                 job_data = get_job(job_id)
                 if job_data and 'scenario_status' in job_data:
                     job_data['scenario_status'][scenario_key] = 'failed'
+                    job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = scenario_completed_at
                     save_job(job_id, job_data)
                 logger.error(f"Batch job {job_id}: Scenario {scenario_key} failed")
-                
+
         except Exception as e:
             scenario_key = f"{dataset}-{label}"
             logger.error(f"Batch job {job_id}: Error running scenario {scenario_key}: {e}", exc_info=True)
             batch_results['scenarios_failed'] += 1
-            # Update scenario status
+            # Update scenario status and times
             job_data = get_job(job_id)
             if job_data and 'scenario_status' in job_data:
                 job_data['scenario_status'][scenario_key] = 'error'
+                job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = datetime.utcnow().isoformat()
                 save_job(job_id, job_data)
     
     # Update final batch job status
@@ -1210,6 +1220,24 @@ def get_job_results(job_id: str):
                     sweeps.append(_parse_sweep_directory(candidate_dir, sweep_name, label, dataset))
                     break
 
+    # Enrich job.scenarios with sweep_results timing so the frontend
+    # drill-through panels work on completed jobs the same as on live jobs.
+    scenario_results_map = job.get('result', {}).get('scenario_results', {})
+    for s in job.get('scenarios', []):
+        key = f"{s.get('dataset', '')}-{s.get('label', '')}"
+        sr = scenario_results_map.get(key, {})
+        s['sweep_results'] = [
+            {
+                'sweep_index': sw.get('sweep_index'),
+                'status': sw.get('status'),
+                'started_at': sw.get('started_at'),
+                'completed_at': sw.get('completed_at'),
+                'duration_seconds': sw.get('duration_seconds'),
+                'sweep_params': sw.get('sweep_params', {}),
+            }
+            for sw in sr.get('sweep_results', [])
+        ]
+
     return jsonify({
         'job_id': job_id,
         'job': job,
@@ -1243,13 +1271,30 @@ def get_live_status(job_id: str):
         'current_scenario': job.get('current_scenario'),
         'current_scenario_index': job.get('current_scenario_index', 0),
         'scenario_status': job.get('scenario_status', {}),
+        'scenario_times': job.get('scenario_times', {}),
         # Ordered list of scenarios so the frontend can render them in sequence
         'scenarios': [
             {
                 'label': s.get('label', ''),
                 'dataset': s.get('dataset', ''),
                 'procedure_name': s.get('procedure_name', ''),
-                'sweep_count': len(s.get('params', {}).get('parameter_sweeps', [])) if s.get('params', {}).get('parameter_sweeps') else 0
+                'sweep_count': len(s.get('params', {}).get('parameter_sweeps', [])) if s.get('params', {}).get('parameter_sweeps') else 0,
+                # Per-sweep timing from scenario_results (available once scenario completes)
+                'sweep_results': [
+                    {
+                        'sweep_index': sw.get('sweep_index'),
+                        'status': sw.get('status'),
+                        'started_at': sw.get('started_at'),
+                        'completed_at': sw.get('completed_at'),
+                        'duration_seconds': sw.get('duration_seconds'),
+                        'sweep_params': sw.get('sweep_params', {}),
+                    }
+                    for sw in (
+                        job.get('result', {}).get('scenario_results', {})
+                           .get(f"{s.get('dataset', '')}-{s.get('label', '')}", {})
+                           .get('sweep_results', [])
+                    )
+                ]
             }
             for s in job.get('scenarios', [])
         ],

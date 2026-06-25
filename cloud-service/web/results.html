@@ -409,6 +409,34 @@
         .status-queued { background: #d1ecf1; color: #0c5460; }
         .status-error { background: #f8d7da; color: #721c24; }
         .status-cancelled { background: #e2e3e5; color: #383d41; }
+
+        /* Scenario drill-through rows */
+        .scenario-drill-row { border-radius: 6px; margin-bottom: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.07); overflow: hidden; }
+        .scenario-drill-header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; user-select: none; transition: filter 0.1s; }
+        .scenario-drill-header:hover { filter: brightness(0.97); }
+        .scenario-drill-header.no-expand { cursor: default; }
+        .scenario-drill-header.no-expand:hover { filter: none; }
+        .scenario-drill-icon { width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; color: white; display: flex; align-items: center; justify-content: center; font-size: 0.85em; font-weight: 700; }
+        .scenario-drill-info { flex: 1; min-width: 0; }
+        .scenario-drill-label { font-weight: 600; color: #111; }
+        .scenario-drill-sub { font-size: 0.82em; color: #6b7280; margin-top: 2px; }
+        .scenario-drill-dur { font-size: 0.78em; margin-top: 3px; }
+        .scenario-drill-status { font-size: 0.85em; font-weight: 500; white-space: nowrap; margin-right: 8px; }
+        .scenario-drill-chevron { font-size: 0.75em; color: #9ca3af; transition: transform 0.2s; flex-shrink: 0; }
+        .scenario-drill-chevron.open { transform: rotate(90deg); }
+        .sweep-detail-panel { display: none; padding: 0 16px 14px 56px; border-top: 1px solid rgba(0,0,0,0.06); animation: sweepFadeIn 0.15s ease; }
+        .sweep-detail-panel.open { display: block; }
+        @keyframes sweepFadeIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:translateY(0); } }
+        .sweep-detail-title { font-size: 0.75em; font-weight: 600; color: #6b7280; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px; padding-top: 12px; }
+        .sweep-detail-row { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+        .sweep-detail-name { width: 68px; font-size: 0.79em; color: #374151; flex-shrink: 0; white-space: nowrap; }
+        .sweep-detail-track { flex: 1; position: relative; height: 22px; background: #f3f4f6; border-radius: 4px; }
+        .sweep-detail-bar { position: absolute; height: 100%; border-radius: 4px; display: flex; align-items: center; padding: 0 7px; box-sizing: border-box; min-width: 4px; opacity: 0.88; }
+        .sweep-detail-bar span { font-size: 0.72em; color: white; font-weight: 600; white-space: nowrap; overflow: hidden; }
+        .sweep-detail-dur { width: 52px; font-size: 0.75em; color: #6b7280; text-align: right; flex-shrink: 0; }
+        .sweep-detail-tag { font-size: 0.69em; padding: 2px 6px; border-radius: 10px; background: #f3f4f6; color: #6b7280; white-space: nowrap; flex-shrink: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+        .sweep-detail-footer { font-size: 0.76em; color: #9ca3af; margin-top: 10px; padding-top: 8px; border-top: 1px dashed #e5e7eb; display: flex; gap: 16px; flex-wrap: wrap; }
+        @keyframes sweepPulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
         
         /* Metrics Summary Cards */
         .metrics-summary {
@@ -545,6 +573,12 @@
                     <div id="gkeMetricsChartContent"></div>
                 </div>
 
+                <!-- Scenario Timeline -->
+                <div id="scenarioTimeline" class="section" style="display: none;">
+                    <div class="section-title">⏱️ Scenario Timeline</div>
+                    <div id="scenarioTimelineContent"></div>
+                </div>
+
                 <!-- Detailed Metrics Table -->
                 <div id="detailedMetrics" class="section" style="display: none;">
                     <div class="section-title">Detailed Metrics</div>
@@ -679,6 +713,7 @@
                     // Subsequent calls: patch only what changed
                     patchLiveStatusDOM(data);
                 }
+                displayScenarioTimeline(data);
             } catch (error) {
                 console.error('Error displaying live status:', error);
             }
@@ -867,12 +902,139 @@
             return '';
         }
 
+        function formatDuration(ms) {
+            if (ms < 60000) return `${Math.round(ms / 1000)}s`;
+            const m = Math.floor(ms / 60000);
+            const s = Math.round((ms % 60000) / 1000);
+            return s > 0 ? `${m}m ${s}s` : `${m}m`;
+        }
+
+        // Key identifying param names to show as sweep tags (first match wins)
+        const SWEEP_TAG_KEYS = ['hnsw_ef_search', 'ef_search', 'num_vectors', 'query_k', 'search_clients', 'corpus_size'];
+
+        function sweepTag(sweepParams) {
+            if (!sweepParams) return '';
+            for (const k of SWEEP_TAG_KEYS) {
+                if (sweepParams[k] !== undefined) return `${k}=${sweepParams[k]}`;
+            }
+            const entries = Object.entries(sweepParams);
+            return entries.length ? `${entries[0][0]}=${entries[0][1]}` : '';
+        }
+
+        function renderSweepPanel(s, scenarioStatus, data, panelBg) {
+            const key = `${s.dataset}-${s.label}`;
+            const st = scenarioStatus[key] || 'queued';
+            const sweepResults = s.sweep_results || [];
+            const sweepCount = s.sweep_count || sweepResults.length;
+            const completedFromLive = (data.live_data?.test_runs || []).filter(r => r.scenario_label === s.label).length;
+
+            if (sweepCount === 0 && sweepResults.length === 0) return '';
+
+            // Build sweep rows — use sweep_results if available, otherwise placeholders
+            const totalMs = sweepResults.reduce((sum, sw) => sum + (sw.duration_seconds || 0) * 1000, 0) || 1;
+
+            let elapsed = 0;
+            const rows = [];
+
+            if (sweepResults.length > 0) {
+                sweepResults.forEach((sw, i) => {
+                    const swMs = (sw.duration_seconds || 0) * 1000;
+                    const swSt = sw.status || 'completed';
+                    let swColor;
+                    if (swSt === 'completed')                          swColor = '#059669';
+                    else if (swSt === 'failed' || swSt === 'error')   swColor = '#dc2626';
+                    else                                                swColor = '#f59e0b';
+
+                    const offsetPct = (elapsed / totalMs * 100).toFixed(1);
+                    const widthPct  = Math.max(swMs / totalMs * 100, 1).toFixed(1);
+                    elapsed += swMs;
+
+                    const dur = formatDuration(swMs);
+                    const tag = sweepTag(sw.sweep_params);
+                    const tagStyle = (swSt === 'failed' || swSt === 'error')
+                        ? 'background:#fef2f2;color:#dc2626;'
+                        : '';
+                    const failLabel = (swSt === 'failed' || swSt === 'error') ? ' · failed' : '';
+
+                    rows.push(`
+                        <div class="sweep-detail-row">
+                            <div class="sweep-detail-name">sweep-${sw.sweep_index ?? i + 1}</div>
+                            <div class="sweep-detail-track">
+                                <div class="sweep-detail-bar" style="left:${offsetPct}%;width:${widthPct}%;background:${swColor};"
+                                     title="sweep-${sw.sweep_index ?? i + 1}${tag ? ' · ' + tag : ''}: ${dur}">
+                                    <span>${dur}</span>
+                                </div>
+                            </div>
+                            <div class="sweep-detail-dur" style="${(swSt==='failed'||swSt==='error')?'color:#dc2626;':''}">${dur}</div>
+                            ${tag ? `<div class="sweep-detail-tag" style="${tagStyle}" title="${tag}${failLabel}">${tag}${failLabel}</div>` : ''}
+                        </div>`);
+                });
+            } else {
+                // Sweeps not yet complete — show placeholders based on live test_runs + queued
+                for (let i = 0; i < sweepCount; i++) {
+                    const done = i < completedFromLive;
+                    const running = !done && st === 'running' && i === completedFromLive;
+                    const swColor = done ? '#059669' : running ? '#f59e0b' : '#d1d5db';
+                    const swLabel = done ? '—' : running ? 'running…' : 'queued';
+                    const anim = running ? 'animation:sweepPulse 1.5s infinite;' : '';
+                    rows.push(`
+                        <div class="sweep-detail-row">
+                            <div class="sweep-detail-name" style="${!done&&!running?'color:#d1d5db;':''}">sweep-${i + 1}</div>
+                            <div class="sweep-detail-track">
+                                ${done
+                                    ? `<div class="sweep-detail-bar" style="left:${(i/sweepCount*100).toFixed(1)}%;width:${(1/sweepCount*100).toFixed(1)}%;background:#059669;"><span>✓</span></div>`
+                                    : running
+                                        ? `<div class="sweep-detail-bar" style="left:${(i/sweepCount*100).toFixed(1)}%;width:${(1/sweepCount*100).toFixed(1)}%;background:#f59e0b;${anim}"><span>…</span></div>`
+                                        : `<div style="height:100%;display:flex;align-items:center;padding:0 8px;font-size:0.72em;color:#9ca3af;">queued</div>`
+                                }
+                            </div>
+                            <div class="sweep-detail-dur" style="color:#d1d5db;">${swLabel}</div>
+                        </div>`);
+                }
+            }
+
+            // Footer stats
+            const doneCount = sweepResults.length > 0
+                ? sweepResults.filter(sw => sw.status === 'completed').length
+                : completedFromLive;
+            const failCount = sweepResults.filter(sw => sw.status === 'failed' || sw.status === 'error').length;
+            const totalDur = sweepResults.length > 0 ? formatDuration(totalMs) : '';
+            const avgMs = sweepResults.length > 0 ? totalMs / sweepResults.length : 0;
+            const footerParts = [
+                `${doneCount} / ${sweepCount} completed`,
+                failCount > 0 ? `${failCount} failed` : null,
+                totalDur ? `Total: ${totalDur}` : null,
+                avgMs > 0 ? `Avg: ${formatDuration(avgMs)} / sweep` : null,
+            ].filter(Boolean);
+
+            return `
+                <div class="sweep-detail-title">Parameter Sweeps</div>
+                ${rows.join('')}
+                <div class="sweep-detail-footer">${footerParts.map(p => `<span>${p}</span>`).join('')}</div>`;
+        }
+
+        // Expand/collapse state keyed by scenario index — persistent across patches
+        const _expandedScenarios = new Set();
+
+        function toggleScenarioDrill(idx) {
+            const panel = document.getElementById(`sdrill-panel-${idx}`);
+            const chevron = document.getElementById(`sdrill-chevron-${idx}`);
+            if (!panel) return;
+            const opening = !panel.classList.contains('open');
+            panel.classList.toggle('open', opening);
+            if (chevron) chevron.classList.toggle('open', opening);
+            if (opening) _expandedScenarios.add(idx);
+            else _expandedScenarios.delete(idx);
+        }
+
         function renderScenarioRow(s, idx, scenarioStatus, data) {
             const key = `${s.dataset}-${s.label}`;
             const st = scenarioStatus[key] || 'queued';
             const isRunning = st === 'running';
             const isCurrent = data.status === 'running' && idx === (data.current_scenario_index ?? null);
-            const sweepCount = s.sweep_count || 0;
+            const times = (data.scenario_times || {})[key] || {};
+            const sweepCount = s.sweep_count || (s.sweep_results || []).length;
+            const canExpand = sweepCount > 0;
 
             let borderColor, bg, icon, statusText;
             if (st === 'completed')                     { borderColor = '#10b981'; bg = '#f0fdf4'; icon = '✓'; statusText = 'Completed'; }
@@ -880,35 +1042,78 @@
             else if (st === 'error' || st === 'failed') { borderColor = '#ef4444'; bg = '#fef2f2'; icon = '✗'; statusText = 'Failed'; }
             else                                        { borderColor = '#d1d5db'; bg = '#f9fafb'; icon = `${idx + 1}`; statusText = 'Queued'; }
 
-            // Count completed sweeps for this scenario from live_data.test_runs
+            let durationBadge = '';
+            if (times.started_at) {
+                const start = new Date(times.started_at + 'Z');
+                const end = times.completed_at ? new Date(times.completed_at + 'Z') : new Date();
+                const dur = formatDuration(end - start);
+                durationBadge = isRunning
+                    ? `<div class="scenario-drill-dur" style="color:${borderColor};">⏱ ${dur} elapsed</div>`
+                    : `<div class="scenario-drill-dur" style="color:#6b7280;">⏱ ${dur}</div>`;
+            } else if (isRunning) {
+                durationBadge = `<div class="scenario-drill-dur" style="color:${borderColor};">⏱ running…</div>`;
+            }
+
             let sweepSubtext = '';
             if (sweepCount > 0) {
-                const completedSweeps = (data.live_data?.test_runs || [])
-                    .filter(r => r.scenario_label === s.label).length;
+                const completedSweeps = (s.sweep_results || []).filter(sw => sw.status === 'completed').length
+                    || (data.live_data?.test_runs || []).filter(r => r.scenario_label === s.label).length;
                 if (isRunning) {
-                    sweepSubtext = `<div style="font-size: 0.78em; color: ${borderColor}; margin-top: 2px;">${completedSweeps} / ${sweepCount} sweeps done</div>`;
-                } else if (st === 'completed') {
-                    sweepSubtext = `<div style="font-size: 0.78em; color: #6b7280; margin-top: 2px;">${sweepCount} sweep${sweepCount > 1 ? 's' : ''}</div>`;
+                    sweepSubtext = `<div class="scenario-drill-sub" style="color:${borderColor};">${completedSweeps} / ${sweepCount} sweeps done</div>`;
                 } else {
-                    sweepSubtext = `<div style="font-size: 0.78em; color: #9ca3af; margin-top: 2px;">${sweepCount} sweep${sweepCount > 1 ? 's' : ''}</div>`;
+                    const failedSweeps = (s.sweep_results || []).filter(sw => sw.status === 'failed' || sw.status === 'error').length;
+                    const failNote = failedSweeps > 0 ? ` · <span style="color:#ef4444;">${failedSweeps} failed</span>` : '';
+                    sweepSubtext = `<div class="scenario-drill-sub">${sweepCount} sweep${sweepCount > 1 ? 's' : ''}${failNote}</div>`;
                 }
             }
 
+            const isExpanded = _expandedScenarios.has(idx);
+            const panelHtml = canExpand
+                ? `<div class="sweep-detail-panel${isExpanded ? ' open' : ''}" id="sdrill-panel-${idx}" style="background:${bg};">
+                       ${renderSweepPanel(s, scenarioStatus, data, bg)}
+                   </div>`
+                : '';
+            const chevronHtml = canExpand
+                ? `<div class="scenario-drill-chevron${isExpanded ? ' open' : ''}" id="sdrill-chevron-${idx}">▶</div>`
+                : '';
+            const clickAttr = canExpand ? `onclick="toggleScenarioDrill(${idx})"` : '';
+
             return `
-                <div id="live-queue-row-${idx}" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px;
-                            background: ${bg}; border-left: 4px solid ${borderColor};
-                            border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.07);
-                            ${isCurrent ? 'outline: 2px solid ' + borderColor + '; outline-offset: 1px;' : ''}">
-                    <div style="width: 28px; height: 28px; border-radius: 50%; background: ${borderColor};
-                                color: white; display: flex; align-items: center; justify-content: center;
-                                font-size: 0.85em; font-weight: 700; flex-shrink: 0;">${icon}</div>
-                    <div style="flex: 1; min-width: 0;">
-                        <div style="font-weight: 600; color: #111;">${s.label}</div>
-                        <div style="font-size: 0.82em; color: #6b7280;">${s.dataset} · ${s.procedure_name}</div>
-                        ${sweepSubtext}
+                <div id="live-queue-row-${idx}" class="scenario-drill-row">
+                    <div class="scenario-drill-header${canExpand ? '' : ' no-expand'}"
+                         style="background:${bg}; border-left:4px solid ${borderColor};${isCurrent ? 'outline:2px solid ' + borderColor + ';outline-offset:-2px;' : ''}"
+                         ${clickAttr}>
+                        <div class="scenario-drill-icon" style="background:${borderColor};">${icon}</div>
+                        <div class="scenario-drill-info">
+                            <div class="scenario-drill-label">${s.label}</div>
+                            <div class="scenario-drill-sub">${s.dataset} · ${s.procedure_name}</div>
+                            ${sweepSubtext}
+                            ${durationBadge}
+                        </div>
+                        <div class="scenario-drill-status" style="color:${borderColor};">${statusText}</div>
+                        ${chevronHtml}
                     </div>
-                    <div style="font-size: 0.85em; font-weight: 500; color: ${borderColor}; white-space: nowrap;">${statusText}</div>
+                    ${panelHtml}
                 </div>`;
+        }
+
+        function displayScenarioTimeline(data) {
+            // The drill-through is now embedded inside renderScenarioRow / the live queue.
+            // For completed jobs viewed via displayResults(), we render the same drill-through
+            // rows into the scenarioTimeline section so the pattern is consistent.
+            const section = document.getElementById('scenarioTimeline');
+            const content = document.getElementById('scenarioTimelineContent');
+            if (!section || !content) return;
+
+            const scenarios = data.scenarios || [];
+            const scenarioStatus = data.scenario_status || {};
+            const hasTimes = scenarios.some(s => (data.scenario_times || {})[`${s.dataset}-${s.label}`]?.started_at)
+                || scenarios.some(s => (s.sweep_results || []).length > 0);
+
+            if (scenarios.length === 0 || !hasTimes) { section.style.display = 'none'; return; }
+            section.style.display = '';
+
+            content.innerHTML = scenarios.map((s, idx) => renderScenarioRow(s, idx, scenarioStatus, data)).join('');
         }
 
         function renderTestRunPanel(run, idx) {
@@ -1063,7 +1268,10 @@
             if (sweeps.length > 0) {
                 // Display Test Environment
                 displayTestEnvironment(job, sweeps);
-                
+
+                // Scenario timeline (uses job-level timing data)
+                displayScenarioTimeline(job);
+
                 // Group sweeps by scenario
                 const scenarioGroups = groupSweepsByScenario(sweeps, job);
                 const scenarioNames = Object.keys(scenarioGroups);
