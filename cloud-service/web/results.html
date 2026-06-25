@@ -1009,6 +1009,7 @@
         }
         
         let currentScenarioGroups = {};
+        let currentResultsBase = '';
         
         function groupSweepsByScenario(sweeps, job) {
             console.log('Grouping sweeps by scenario:');
@@ -1056,6 +1057,7 @@
             document.getElementById('results').style.display = 'block';
             
             const job = data.job;
+            currentResultsBase = job.results_base || job.job_id || '';
             const sweeps = data.sweeps || [];
             
             if (sweeps.length > 0) {
@@ -1211,6 +1213,10 @@
                     <div class="section-title">Detailed Metrics</div>
                     <div id="scenario-detailedMetricsContent-${scenarioName}"></div>
                 </div>
+                <div id="scenario-logs-${scenarioName}" class="section" style="display: none;">
+                    <div class="section-title">📋 Benchmark Logs</div>
+                    <div id="scenario-logsContent-${scenarioName}"></div>
+                </div>
             `;
             
             container.innerHTML = html;
@@ -1220,6 +1226,7 @@
             displayMetricsChartsInContainer(sweeps, scenarioName);
             displayGkeMetricsCharts(sweeps, `scenario-gkeMetricsContent-${scenarioName}`, `scenario-gkeMetrics-${scenarioName}`);
             displayDetailedMetricsInContainer(sweeps, `scenario-detailedMetricsContent-${scenarioName}`, `scenario-detailedMetrics-${scenarioName}`);
+            displayLogsInContainer(sweeps, `scenario-logsContent-${scenarioName}`, `scenario-logs-${scenarioName}`);
         }
         
         // Scenario-specific metric display functions
@@ -1396,6 +1403,44 @@
             document.getElementById(sectionId).style.display = 'block';
         }
         
+        function displayLogsInContainer(sweeps, contentId, sectionId) {
+            const sweepsWithLogs = sweeps.filter(s => s.benchmark_log);
+            if (sweepsWithLogs.length === 0) return;
+
+            const html = sweepsWithLogs.map((sweep, idx) => {
+                const label = sweep.sweep_name || `Sweep ${idx + 1}`;
+                const escapedLog = sweep.benchmark_log
+                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+                // Build download URL: /results/<results_base>/<dataset>-<scenario_label>/<sweep_name>/benchmark.log
+                let downloadUrl = null;
+                if (currentResultsBase && sweep.dataset && sweep.scenario_label && sweep.sweep_name) {
+                    downloadUrl = `/results/${currentResultsBase}/${sweep.dataset}-${sweep.scenario_label}/${sweep.sweep_name}/benchmark.log`;
+                }
+
+                return `
+                    <div style="margin-bottom: 12px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+                        <div style="background: #f3f4f6; padding: 10px 14px; font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+                            <span>${label}</span>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                ${downloadUrl ? `<a href="${downloadUrl}" download="benchmark-${label}.log"
+                                    style="padding: 4px 10px; background: #6366f1; color: white; border-radius: 4px; font-size: 0.85em; text-decoration: none;">
+                                    ⬇ Download full log
+                                </a>` : ''}
+                                <button onclick="this.closest('div').parentElement.nextElementSibling.style.display = this.closest('div').parentElement.nextElementSibling.style.display === 'none' ? 'block' : 'none'"
+                                        style="padding: 4px 10px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">
+                                    Toggle tail
+                                </button>
+                            </div>
+                        </div>
+                        <pre style="display: none; margin: 0; padding: 14px; background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 12px; max-height: 400px; overflow: auto; white-space: pre-wrap; word-wrap: break-word;">${escapedLog}</pre>
+                    </div>`;
+            }).join('');
+
+            document.getElementById(contentId).innerHTML = html;
+            document.getElementById(sectionId).style.display = 'block';
+        }
+
         // Helper functions for charts in containers
         function displayLatencyChartInContainer(data, containerId) {
             displayLatencyChart(data, containerId);
@@ -1768,6 +1813,10 @@
                             });
                         });
 
+                        // Default window: show first 460 s.
+                        // endValue takes the exact label string; cap to the last label if shorter.
+                        const defaultEndLabel = `+${Math.min(460, (maxSamples - 1) * 10)}s`;
+
                         const makeSpec = (values, yTitle, formatFn) => ({
                             type: 'line',
                             data: [{ id: 'gke', values }],
@@ -1783,6 +1832,9 @@
                                 { orient: 'left', type: 'linear',
                                   label: { formatMethod: formatFn, style: { fontSize: 11 } },
                                   title: { visible: true, text: yTitle, style: { fontSize: 12, fontWeight: 'bold' } } }
+                            ],
+                            dataZoom: [
+                                { orient: 'bottom', startValue: '+0s', endValue: defaultEndLabel, filterMode: 'filter' }
                             ],
                             tooltip: {
                                 mark: { content: [{ key: d => d.pod, value: d => formatFn(d.value) }] }
