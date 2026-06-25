@@ -265,13 +265,18 @@ class BenchmarkRunner:
                     logger.info("📊 Starting metrics collection in background...")
                     metrics_collector = self.metrics_collector
                     
+                    scenario_name = f"{dataset}-{scenario}-sweep{sweep_idx}"
+
                     def collect_metrics():
                         try:
                             metrics_collector.start_collection(
-                                scenario_name=f"{dataset}-{scenario}-sweep{sweep_idx}",
+                                scenario_name=scenario_name,
                                 interval=10,
                                 duration=None
                             )
+                            # Save inside the thread so the file is written even if
+                            # the main thread's join() times out before we finish.
+                            metrics_collector.save_metrics(scenario_name)
                         except Exception as e:
                             logger.error(f"Error in metrics collection thread: {e}")
                     
@@ -299,8 +304,7 @@ class BenchmarkRunner:
                         metrics_collector = self.metrics_collector
                         try:
                             metrics_collector.stop_collection()
-                            self.metrics_thread.join(timeout=30)
-                            metrics_collector.save_metrics(f"{dataset}-{scenario}-sweep{sweep_idx}")
+                            self.metrics_thread.join(timeout=60)
                             logger.info("✓ Metrics saved")
                         except Exception as e:
                             logger.error(f"Error saving metrics: {e}")
