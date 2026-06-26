@@ -8,14 +8,13 @@ datasets:
     description: "Cohere embeddings dataset with 768-dimensional vectors - configurable corpus size"
     workload: "vectorsearch" # needs to match opensearch-benchmark-workloads folder
 
-    supported_corpus_sizes: ["1m", "10m"]
+    supported_corpus_sizes: ["1m", "5m", "10m"]
 
     # Common parameters shared across all scenarios
     common_params:
       target_index_name: "cohere-wiki-en-768-{{corpus_size}}"
       target_field_name: "target_field"
       id_field_name: "_id"
-      corpus_size: "{{corpus_size}}"
       corpus_name: "cohere-{{corpus_size}}"
     
     # Engine-specific parameters (override or extend common_params)
