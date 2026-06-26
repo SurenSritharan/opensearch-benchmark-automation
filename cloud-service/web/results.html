@@ -2470,7 +2470,7 @@
                         fontWeight: 'bold',
                         fill: '#000000'
                     },
-                    formatMethod: (value) => `${value.toFixed(3)}`
+                    formatMethod: (value) => `${(value ?? 0).toFixed(3)}`
                 },
                 axes: [
                     {
