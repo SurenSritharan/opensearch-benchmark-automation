@@ -10,8 +10,31 @@ from requests.auth import HTTPBasicAuth
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
+import signal
 from config_loader import ConfigLoader
 from k8s_metrics_collector import K8sMetricsCollector
+
+
+def _kill_proc_group(proc: subprocess.Popen) -> None:
+    """Send SIGINT → wait 10 s → SIGTERM → wait 5 s → SIGKILL to the process group."""
+    import os
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGINT)
+        try:
+            proc.wait(timeout=10)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        os.killpg(pgid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass  # Process already gone
 
 
 def _fetch_node_stats(target_host: str) -> Optional[Dict]:
@@ -84,7 +107,21 @@ class BenchmarkRunner:
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_collector = None
         self.metrics_thread = None
+        # Maps job_id -> (Popen process, cancel_event) for active benchmarks
+        self._active: Dict[str, tuple] = {}
+        self._active_lock = threading.Lock()
     
+    def cancel(self, job_id: str) -> None:
+        """Signal cancellation for job_id: set its event and kill its running process group."""
+        with self._active_lock:
+            entry = self._active.get(job_id)
+        if entry is None:
+            return
+        proc, event = entry
+        if event is not None:
+            event.set()
+        _kill_proc_group(proc)
+
     def run_benchmark(
         self,
         dataset: str,
@@ -93,7 +130,8 @@ class BenchmarkRunner:
         job_id: Optional[str] = None,
         enable_profiling: bool = True,
         enable_metrics: bool = True,
-        workload_params: Optional[Dict[str, Any]] = None
+        workload_params: Optional[Dict[str, Any]] = None,
+        cancel_event: Optional[threading.Event] = None
     ) -> Dict[str, Any]:
         """
         Execute a benchmark using opensearch-benchmark CLI
@@ -194,6 +232,10 @@ class BenchmarkRunner:
             # Run benchmark for each parameter sweep
             all_results = []
             for sweep_idx, sweep in enumerate(parameter_sweeps, 1):
+                # Check for cancellation before starting each sweep
+                if cancel_event and cancel_event.is_set():
+                    logger.info(f"Job {job_id}: cancellation requested, skipping sweep {sweep_idx}/{len(parameter_sweeps)}")
+                    break
                 logger.info(f"Running parameter sweep {sweep_idx}/{len(parameter_sweeps)}")
                 
                 # Merge in order: base_params + procedure_base_params + sweep params + runtime params
@@ -292,12 +334,13 @@ class BenchmarkRunner:
                 user_tags_str = ','.join([f"{k}:{v}" for k, v in user_tags.items()])
                 
                 # Build opensearch-benchmark command
+                client_timeout = final_params.pop('client_timeout', 300)
                 cmd = [
                     'opensearch-benchmark',
                     'run',
                     '--workload-path', workload_path,
                     '--target-hosts', target_host,
-                    '--client-options', 'timeout:300,use_ssl:true,verify_certs:false,basic_auth_user:admin,basic_auth_password:admin',
+                    '--client-options', f'timeout:{client_timeout},use_ssl:true,verify_certs:false,basic_auth_user:admin,basic_auth_password:admin',
                     '--test-procedure', scenario,
                     '--kill-running-processes',  # Clean up any stuck processes
                     f'--user-tag={user_tags_str}'  # Add metadata tags
@@ -351,19 +394,33 @@ class BenchmarkRunner:
                 
                 start_time = datetime.utcnow()
                 stats_before = _fetch_node_stats(target_host)
+                proc = None
                 result = None
+                # Use the top-level job_id (not scenario_job_id sub-path) as the key
+                # so that benchmark_runner.cancel(top_level_job_id) can find this process.
+                active_key = job_id.split('/')[0] if '/' in job_id else job_id
                 try:
-                    # Execute benchmark in its own process group for proper signal handling
-                    # This allows us to kill the entire process tree when cancelling
-                    result = subprocess.run(
+                    # Launch in its own process group so we can kill the whole tree
+                    proc = subprocess.Popen(
                         cmd,
-                        capture_output=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
                         text=True,
-                        timeout=21600,  # 6 hour timeout
                         env=env,
-                        start_new_session=True  # Create new process group
+                        start_new_session=True  # new PGID == proc.pid
                     )
+                    with self._active_lock:
+                        self._active[active_key] = (proc, cancel_event)
+                    try:
+                        stdout, stderr = proc.communicate(timeout=21600)  # 6 hour timeout
+                    except subprocess.TimeoutExpired:
+                        _kill_proc_group(proc)
+                        stdout, stderr = proc.communicate()
+                    # Build a lightweight result object that mirrors subprocess.run
+                    result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
                 finally:
+                    with self._active_lock:
+                        self._active.pop(active_key, None)
                     end_time = datetime.utcnow()
                     stats_after = _fetch_node_stats(target_host)
                     if stats_before and stats_after:
@@ -396,6 +453,16 @@ class BenchmarkRunner:
                             self.metrics_thread = None
 
                 duration = (end_time - start_time).total_seconds()
+
+                if result is None:
+                    # Popen itself failed (e.g. binary not found) — nothing to parse
+                    all_results.append({
+                        'status': 'failed',
+                        'error': 'Process failed to start',
+                        'sweep_index': sweep_idx,
+                        'sweep_params': sweep_params,
+                    })
+                    continue
 
                 # Download artifacts (test_run.json and benchmark.log) to results directory
                 self._download_artifacts(result.stdout, sweep_results_dir)

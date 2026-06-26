@@ -40,6 +40,10 @@ db_lock = threading.RLock()
 running_processors = set()
 processor_lock = threading.Lock()
 
+# Per-job cancel events, keyed by job_id (used by cancel_job to signal run_benchmark)
+_cancel_events: Dict[str, threading.Event] = {}
+_cancel_events_lock = threading.Lock()
+
 # Statuses that mean a job is no longer active
 TERMINAL_STATUSES = {'completed', 'error', 'cancelled', 'failed', 'partial', 'partial_failure'}
 
@@ -276,42 +280,50 @@ def process_engine_queue(engine: str):
                 # Update job status to running
                 update_job_status(job_id, 'running', started_at=datetime.utcnow().isoformat())
                 
-                # Check if this is a batch job (has 'scenarios' list) or single job (has 'scenario' string)
-                if 'scenarios' in job and isinstance(job['scenarios'], list):
-                    # Handle batch job - run multiple scenarios sequentially
-                    logger.info(f"Processing BATCH job {job_id} with {len(job['scenarios'])} scenarios")
-                    process_batch_job(job_id, job, options)
-                else:
-                    # Handle single scenario job
-                    logger.info(f"Processing SINGLE job {job_id}")
-                    scenario = job['scenario']
-                    logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
-                    
-                    # Extract workload params from options
-                    workload_params = options.get('workload_params', None)
-                    
-                    # Run the benchmark
-                    result = benchmark_runner.run_benchmark(
-                        dataset=dataset,
-                        engine=engine,
-                        scenario=scenario,
-                        job_id=job_id,
-                        enable_profiling=not options.get('no_profiling', False),
-                        enable_metrics=not options.get('no_metrics', False),
-                        workload_params=workload_params
-                    )
-                    
-                    # Update job with results
-                    job_result = get_job(job_id)
-                    if job_result:
-                        # Store the benchmark result in the 'result' field
-                        job_result['result'] = result
-                        # Update job status based on benchmark result
-                        job_result['status'] = result.get('status', 'completed')
-                        job_result['completed_at'] = datetime.utcnow().isoformat()
-                        save_job(job_id, job_result)
-                    
-                    logger.info(f"Job {job_id} completed with status: {result.get('status', 'completed')}")
+                # Create a cancel event for this job so cancel_job can interrupt it
+                cancel_event = threading.Event()
+                with _cancel_events_lock:
+                    _cancel_events[job_id] = cancel_event
+
+                try:
+                    # Check if this is a batch job (has 'scenarios' list) or single job (has 'scenario' string)
+                    if 'scenarios' in job and isinstance(job['scenarios'], list):
+                        # Handle batch job - run multiple scenarios sequentially
+                        logger.info(f"Processing BATCH job {job_id} with {len(job['scenarios'])} scenarios")
+                        process_batch_job(job_id, job, options, cancel_event)
+                    else:
+                        # Handle single scenario job
+                        logger.info(f"Processing SINGLE job {job_id}")
+                        scenario = job['scenario']
+                        logger.info(f"Starting job {job_id}: dataset={dataset}, engine={engine}, scenario={scenario}")
+                        
+                        # Extract workload params from options
+                        workload_params = options.get('workload_params', None)
+                        
+                        # Run the benchmark
+                        result = benchmark_runner.run_benchmark(
+                            dataset=dataset,
+                            engine=engine,
+                            scenario=scenario,
+                            job_id=job_id,
+                            enable_profiling=not options.get('no_profiling', False),
+                            enable_metrics=not options.get('no_metrics', False),
+                            workload_params=workload_params,
+                            cancel_event=cancel_event
+                        )
+                        
+                        # Only save result if the job wasn't cancelled while we were running
+                        job_result = get_job(job_id)
+                        if job_result and job_result['status'] not in TERMINAL_STATUSES:
+                            job_result['result'] = result
+                            job_result['status'] = result.get('status', 'completed')
+                            job_result['completed_at'] = datetime.utcnow().isoformat()
+                            save_job(job_id, job_result)
+                        
+                        logger.info(f"Job {job_id} completed with status: {result.get('status', 'completed')}")
+                finally:
+                    with _cancel_events_lock:
+                        _cancel_events.pop(job_id, None)
             
         except Exception as e:
             logger.error(f"Error processing queue for engine {engine}: {e}", exc_info=True)
@@ -330,7 +342,7 @@ def process_engine_queue(engine: str):
             time.sleep(5)
 
 
-def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any]):
+def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event = None):
     """Process a batch job by running multiple dataset+scenario combinations sequentially
     
     Uses scenarios list which contains {dataset, label, procedure_name, params} for each test.
@@ -351,9 +363,16 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
     # Run each test sequentially
     for idx, scenario in enumerate(scenarios):
         # Check for cancellation before starting each scenario
-        current_job = get_job(job_id)
-        if current_job and current_job.get('status') == 'cancelled':
-            logger.info(f"Batch job {job_id}: Cancelled — stopping after scenario {idx}/{len(scenarios)}")
+        if cancel_event and cancel_event.is_set():
+            logger.info(f"Batch job {job_id}: Cancelled — stopping before scenario {idx+1}/{len(scenarios)}")
+            # Mark all remaining scenarios as cancelled
+            job_data = get_job(job_id)
+            if job_data and 'scenario_status' in job_data:
+                for remaining in scenarios[idx:]:
+                    key = f"{remaining['dataset']}-{remaining['label']}"
+                    if job_data['scenario_status'].get(key) == 'queued':
+                        job_data['scenario_status'][key] = 'cancelled'
+                save_job(job_id, job_data)
             break
 
         dataset = scenario['dataset']
@@ -398,7 +417,8 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
                 job_id=scenario_job_id,
                 enable_profiling=not options.get('no_profiling', False),
                 enable_metrics=not options.get('no_metrics', False),
-                workload_params=workload_params if workload_params else None
+                workload_params=workload_params if workload_params else None,
+                cancel_event=cancel_event
             )
             
             # Store scenario result using dataset-label as key for better identification
@@ -439,9 +459,9 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
                 job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = datetime.utcnow().isoformat()
                 save_job(job_id, job_data)
     
-    # Update final batch job status
+    # Update final batch job status — but only if the job wasn't cancelled
     job_data = get_job(job_id)
-    if job_data:
+    if job_data and job_data.get('status') not in TERMINAL_STATUSES:
         job_data['result'] = batch_results
         job_data['current_scenario'] = None
         
@@ -901,58 +921,26 @@ def cancel_job(job_id: str):
         })
     
     elif status == 'running':
-        # Gracefully terminate opensearch-benchmark process
         try:
-            # Step 1: Send SIGINT (Ctrl+C) for graceful shutdown
-            logger.info(f"Job {job_id}: Sending SIGINT to opensearch-benchmark process...")
-            result = subprocess.run(
-                ['pkill', '-SIGINT', '-f', 'opensearch-benchmark'],
-                capture_output=True, text=True
-            )
-            if result.returncode != 0:
-                logger.warning(f"Job {job_id}: No opensearch-benchmark process found (pkill returned {result.returncode})")
-
-            # Step 2: Wait up to 60 seconds for graceful shutdown
-            logger.info(f"Job {job_id}: Waiting up to 60 seconds for graceful shutdown...")
-            for i in range(60):
-                time.sleep(1)
-                check = subprocess.run(
-                    ['pgrep', '-f', 'opensearch-benchmark'],
-                    capture_output=True, text=True
-                )
-                if check.returncode != 0:
-                    logger.info(f"Job {job_id}: Process terminated gracefully after {i+1} seconds")
-                    break
-            else:
-                # Step 3: If still running after 60s, send SIGTERM
-                logger.warning(f"Job {job_id}: Process still running after 60s, sending SIGTERM...")
-                subprocess.run(
-                    ['pkill', '-SIGTERM', '-f', 'opensearch-benchmark'],
-                    capture_output=True, text=True
-                )
-                time.sleep(10)
-                check = subprocess.run(
-                    ['pgrep', '-f', 'opensearch-benchmark'],
-                    capture_output=True, text=True
-                )
-                if check.returncode != 0:
-                    logger.info(f"Job {job_id}: Process terminated after SIGTERM")
-                else:
-                    # Step 4: Last resort - SIGKILL
-                    logger.error(f"Job {job_id}: Process still running, sending SIGKILL...")
-                    subprocess.run(
-                        ['pkill', '-SIGKILL', '-f', 'opensearch-benchmark'],
-                        capture_output=True, text=True
-                    )
-            
-            # Update job status
+            # Mark cancelled first so the batch/sweep loops see it immediately
             update_job_status(
                 job_id,
                 'cancelled',
                 completed_at=datetime.utcnow().isoformat(),
                 error='Job cancelled by user'
             )
-            
+
+            # Signal the cancel event and kill the running process group.
+            # cancel_event is set on _active inside benchmark_runner; _cancel_events
+            # is the app-level registry used here to reach the right job.
+            with _cancel_events_lock:
+                event = _cancel_events.get(job_id)
+            if event:
+                event.set()
+
+            # Delegate the actual process-kill to the runner (SIGINT → SIGTERM → SIGKILL)
+            benchmark_runner.cancel(job_id)
+
             logger.info(f"Job {job_id} cancelled successfully")
             return jsonify({
                 'message': 'Job cancelled successfully',
@@ -961,7 +949,6 @@ def cancel_job(job_id: str):
             })
         except Exception as e:
             logger.error(f"Error cancelling job {job_id}: {e}")
-            # Still mark as cancelled even if kill failed
             update_job_status(
                 job_id,
                 'cancelled',
