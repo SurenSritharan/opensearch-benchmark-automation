@@ -6,6 +6,7 @@ import os
 import json
 import requests
 import threading
+import time
 from requests.auth import HTTPBasicAuth
 from datetime import datetime
 from pathlib import Path
@@ -16,25 +17,45 @@ from k8s_metrics_collector import K8sMetricsCollector
 
 
 def _kill_proc_group(proc: subprocess.Popen) -> None:
-    """Send SIGINT → wait 10 s → SIGTERM → wait 5 s → SIGKILL to the process group."""
-    import os
+    """Escalate signals to the entire process tree: SIGINT → SIGTERM → SIGKILL.
+
+    opensearch-benchmark re-forks itself, so the grandchildren may end up in a
+    different process group than proc.pid.  We therefore kill by the *session*
+    (os.killpg on the session leader SID) as well as by the immediate PGID so
+    every descendent is reached regardless of how many times the binary forked.
+    """
     try:
         pgid = os.getpgid(proc.pid)
-        os.killpg(pgid, signal.SIGINT)
+        # Also try the session ID — equals proc.pid when start_new_session=True
+        sid = proc.pid
+
+        def _kill(sig: int) -> None:
+            for group in {pgid, sid}:
+                try:
+                    os.killpg(group, sig)
+                except ProcessLookupError:
+                    pass
+
+        _kill(signal.SIGINT)
         try:
             proc.wait(timeout=10)
             return
         except subprocess.TimeoutExpired:
             pass
-        os.killpg(pgid, signal.SIGTERM)
+
+        _kill(signal.SIGTERM)
         try:
             proc.wait(timeout=5)
             return
         except subprocess.TimeoutExpired:
             pass
-        os.killpg(pgid, signal.SIGKILL)
+
+        _kill(signal.SIGKILL)
+        # tini (PID 1) reaps zombie children, so no explicit wait is needed.
     except ProcessLookupError:
         pass  # Process already gone
+    except Exception:
+        pass
 
 
 def _fetch_node_stats(target_host: str) -> Optional[Dict]:
@@ -134,19 +155,7 @@ class BenchmarkRunner:
         cancel_event: Optional[threading.Event] = None
     ) -> Dict[str, Any]:
         """
-        Execute a benchmark using opensearch-benchmark CLI
-        
-        Args:
-            dataset: Dataset name from config/datasets.yaml
-            engine: Engine name (jvector, faiss, lucene)
-            scenario: Test procedure name
-            job_id: Unique job identifier
-            enable_profiling: Enable profiling (not implemented in cloud-native version)
-            enable_metrics: Enable metrics collection (not implemented in cloud-native version)
-            workload_params: Additional workload parameters for parameter sweeps
-        
-        Returns:
-            Dictionary with execution results
+        Execute a benchmark using opensearch-benchmark CLI with cross-worker tracking support
         """
         try:
             # Generate job_id if not provided
@@ -256,7 +265,6 @@ class BenchmarkRunner:
                 )
                 
                 # Download dataset files for THIS sweep's corpus_size and k value
-                # Files are checked for existence, so no re-downloading if already present
                 if dataset_config:
                     if not self.config.download_dataset_files(dataset, final_params):
                         return {
@@ -278,29 +286,21 @@ class BenchmarkRunner:
                     all_results.append(sweep_result)
                     continue
                 
-                # Create results directory for this sweep
-                # For batch jobs (job_id contains '/'), don't add scenario subdirectory
-                # For regular jobs, add scenario subdirectory
                 if '/' in job_id:
-                    # Batch job - job_id already includes full path structure
                     if has_sweeps:
                         sweep_results_dir = self.results_dir / job_id / f"sweep-{sweep_idx}"
                     else:
                         sweep_results_dir = self.results_dir / job_id
                 else:
-                    # Regular job - add scenario subdirectory
                     if has_sweeps:
                         sweep_results_dir = self.results_dir / job_id / scenario / f"sweep-{sweep_idx}"
                     else:
                         sweep_results_dir = self.results_dir / job_id / scenario
                 sweep_results_dir.mkdir(parents=True, exist_ok=True)
                 
-                # Initialize metrics collector if enabled
                 if enable_metrics:
-                    # Determine namespace from engine
                     namespace = f"os-{engine}"
                     logger.info(f"📊 Initializing metrics collection for namespace: {namespace}")
-                    
                     try:
                         self.metrics_collector = K8sMetricsCollector(
                             namespace=namespace,
@@ -311,13 +311,10 @@ class BenchmarkRunner:
                         logger.info("✓ Metrics collector initialized")
                     except Exception as e:
                         logger.warning(f"Failed to initialize metrics collector: {e}")
-                        logger.warning("Continuing without metrics collection")
                         self.metrics_collector = None
                 
-                # Clear benchmark logs before starting this sweep
                 self._clear_benchmark_logs()
                 
-                # Build user tags for metadata
                 user_tags = {
                     'dataset': dataset,
                     'engine': engine,
@@ -329,11 +326,9 @@ class BenchmarkRunner:
                     'search_clients': final_params.get('search_clients'),
                     'method_name': final_params.get('method_name')
                 }
-                # Remove None values
                 user_tags = {k: v for k, v in user_tags.items() if v is not None}
                 user_tags_str = ','.join([f"{k}:{v}" for k, v in user_tags.items()])
                 
-                # Build opensearch-benchmark command
                 client_timeout = final_params.pop('client_timeout', 300)
                 cmd = [
                     'opensearch-benchmark',
@@ -342,11 +337,10 @@ class BenchmarkRunner:
                     '--target-hosts', target_host,
                     '--client-options', f'timeout:{client_timeout},use_ssl:true,verify_certs:false,basic_auth_user:admin,basic_auth_password:admin',
                     '--test-procedure', scenario,
-                    '--kill-running-processes',  # Clean up any stuck processes
-                    f'--user-tag={user_tags_str}'  # Add metadata tags
+                    '--kill-running-processes',
+                    f'--user-tag={user_tags_str}'
                 ]
                 
-                # Write workload params to a JSON file for this sweep
                 params_file = sweep_results_dir / 'workload-params.json'
                 with open(params_file, 'w') as f:
                     json.dump(final_params, f, indent=2)
@@ -358,9 +352,8 @@ class BenchmarkRunner:
                 # Pass the file path to opensearch-benchmark
                 cmd.extend(['--workload-params', str(params_file)])
                 
-                # Set up environment
                 env = os.environ.copy()
-                env['TERM'] = 'dumb'  # Disable terminal features
+                env['TERM'] = 'dumb'
                 env['BENCHMARK_HOME'] = '/datasets/opensearch-benchmark'
                 
                 logger.info(f"Executing benchmark sweep {sweep_idx}/{len(parameter_sweeps)}: dataset={dataset}, engine={engine}, scenario={scenario}")
@@ -372,55 +365,82 @@ class BenchmarkRunner:
                 if self.metrics_collector:
                     logger.info("📊 Starting metrics collection in background...")
                     metrics_collector = self.metrics_collector
-                    
                     scenario_name = f"{dataset}-{scenario}-sweep{sweep_idx}"
 
                     def collect_metrics():
                         try:
-                            metrics_collector.start_collection(
-                                scenario_name=scenario_name,
-                                interval=10,
-                                duration=None
-                            )
-                            # Save inside the thread so the file is written even if
-                            # the main thread's join() times out before we finish.
+                            metrics_collector.start_collection(scenario_name=scenario_name, interval=10, duration=None)
                             metrics_collector.save_metrics(scenario_name)
                         except Exception as e:
                             logger.error(f"Error in metrics collection thread: {e}")
                     
                     self.metrics_thread = threading.Thread(target=collect_metrics, daemon=True)
                     self.metrics_thread.start()
-                    logger.info("✓ Metrics collection started")
                 
                 start_time = datetime.utcnow()
                 stats_before = _fetch_node_stats(target_host)
                 proc = None
                 result = None
-                # Use the top-level job_id (not scenario_job_id sub-path) as the key
-                # so that benchmark_runner.cancel(top_level_job_id) can find this process.
                 active_key = job_id.split('/')[0] if '/' in job_id else job_id
+                
+                # Cross-worker Gunicorn Tracking Variables
+                run_dir = Path("/workspace/run")
+                run_dir.mkdir(parents=True, exist_ok=True)
+                pgid_file = run_dir / f"job_{active_key}.pgid"
+
                 try:
-                    # Launch in its own process group so we can kill the whole tree
+                    # Launch process group
                     proc = subprocess.Popen(
                         cmd,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
                         env=env,
-                        start_new_session=True  # new PGID == proc.pid
+                        start_new_session=True  # Breaks into its own PGID
                     )
+                    
+                    # Track PGID right away for cross-Gunicorn worker access
+                    pgid = os.getpgid(proc.pid)
+                    pgid_file.write_text(str(pgid))
+                    
                     with self._active_lock:
                         self._active[active_key] = (proc, cancel_event)
-                    try:
-                        stdout, stderr = proc.communicate(timeout=21600)  # 6 hour timeout
-                    except subprocess.TimeoutExpired:
-                        _kill_proc_group(proc)
-                        stdout, stderr = proc.communicate()
-                    # Build a lightweight result object that mirrors subprocess.run
+                    
+                    # Timeout tracking (6 hours = 21600 seconds)
+                    timeout_limit = 21600
+                    poll_interval = 1.0
+                    elapsed = 0.0
+                    
+                    # NON-BLOCKING POLLING LOOP: Frees thread to inspect cancel_event status
+                    while proc.poll() is None:
+                        if cancel_event and cancel_event.is_set():
+                            logger.info(f"Job {job_id}: Cancel payload flag caught inside runner. Evicting process tree.")
+                            _kill_proc_group(proc)
+                            break
+                        
+                        if elapsed >= timeout_limit:
+                            logger.warning(f"Job {job_id} hit hard 6-hour execution limit. Timeout triggered.")
+                            _kill_proc_group(proc)
+                            break
+                            
+                        time.sleep(poll_interval)
+                        elapsed += poll_interval
+                    
+                    # Drain execution pipelines natively safely
+                    stdout, stderr = proc.communicate()
                     result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+                    
                 finally:
+                    # CRITICAL CROSS-WORKER CLEANUP: Ensure artifact is deleted
+                    if pgid_file.exists():
+                        try:
+                            pgid_file.unlink()
+                        except Exception:
+                            pass
+
                     with self._active_lock:
                         self._active.pop(active_key, None)
+                        
                     end_time = datetime.utcnow()
                     stats_after = _fetch_node_stats(target_host)
                     if stats_before and stats_after:
@@ -429,24 +449,18 @@ class BenchmarkRunner:
                                 'captured_at_start': start_time.isoformat(),
                                 'captured_at_end': end_time.isoformat(),
                                 'node_deltas': _diff_node_stats(stats_before, stats_after),
-                                'snapshots': {
-                                    'before': stats_before,
-                                    'after': stats_after
-                                }
+                                'snapshots': {'before': stats_before, 'after': stats_after}
                             }
                             with open(sweep_results_dir / 'server_stats.json', 'w') as f:
                                 json.dump(server_stats, f, indent=2)
-                            logger.info("✓ Server stats captured to server_stats.json")
                         except Exception as e:
                             logger.warning(f"Failed to save server_stats: {e}")
 
                     if self.metrics_collector and self.metrics_thread:
                         logger.info("📊 Stopping metrics collection...")
-                        metrics_collector = self.metrics_collector
                         try:
-                            metrics_collector.stop_collection()
-                            self.metrics_thread.join(timeout=60)
-                            logger.info("✓ Metrics saved")
+                            self.metrics_collector.stop_collection()
+                            self.metrics_thread.join(timeout=30)
                         except Exception as e:
                             logger.error(f"Error saving metrics: {e}")
                         finally:
@@ -455,21 +469,21 @@ class BenchmarkRunner:
                 duration = (end_time - start_time).total_seconds()
 
                 if result is None:
-                    # Popen itself failed (e.g. binary not found) — nothing to parse
                     all_results.append({
                         'status': 'failed',
-                        'error': 'Process failed to start',
+                        'error': 'Process exited or failed to initialize output pipelines',
                         'sweep_index': sweep_idx,
                         'sweep_params': sweep_params,
                     })
                     continue
 
-                # Download artifacts (test_run.json and benchmark.log) to results directory
                 self._download_artifacts(result.stdout, sweep_results_dir)
                 
-                # Parse results for this sweep
+                # Check explicitly if it was killed by us (SIGKILL / exit code -9)
+                is_cancelled = (cancel_event and cancel_event.is_set()) or result.returncode == -9
+                
                 sweep_result = {
-                    'status': 'completed' if result.returncode == 0 else 'failed',
+                    'status': 'cancelled' if is_cancelled else ('completed' if result.returncode == 0 else 'failed'),
                     'exit_code': result.returncode,
                     'duration_seconds': duration,
                     'started_at': start_time.isoformat(),
@@ -482,43 +496,35 @@ class BenchmarkRunner:
                     'stderr_tail': result.stderr[-5000:] if result.stderr else ''
                 }
                 
-                if result.returncode != 0:
-                    logger.error(f"Sweep {sweep_idx} failed with exit code {result.returncode}")
-                    logger.error(f"STDERR:")
-                    if result.stderr:
-                        logger.error(result.stderr[-2000:])
-                    else:
-                        logger.error("(empty)")
-                    logger.error(f"STDOUT (last 1000 chars):")
-                    if result.stdout:
-                        logger.error(result.stdout[-1000:])
-                    else:
-                        logger.error("(empty)")
-                else:
-                    logger.info(f"Sweep {sweep_idx} completed successfully in {duration:.1f}s")
-                
                 all_results.append(sweep_result)
+                
+                # If this sweep was cancelled, break out of subsequent sweeps immediately
+                if is_cancelled:
+                    break
             
             # Return aggregated results
             total_duration = sum(r.get('duration_seconds', 0) for r in all_results)
-            failed_sweeps = [r for r in all_results if r.get('status') != 'completed']
+            failed_sweeps = [r for r in all_results if r.get('status') == 'failed']
+            cancelled_sweeps = [r for r in all_results if r.get('status') == 'cancelled']
             
+            if cancelled_sweeps:
+                overall_status = 'cancelled'
+            elif failed_sweeps:
+                overall_status = 'partial_failure' if len(failed_sweeps) < len(all_results) else 'failed'
+            else:
+                overall_status = 'completed'
+
             return {
-                'status': 'completed' if not failed_sweeps else 'partial_failure',
+                'status': overall_status,
                 'total_sweeps': len(all_results),
-                'successful_sweeps': len(all_results) - len(failed_sweeps),
+                'successful_sweeps': len(all_results) - len(failed_sweeps) - len(cancelled_sweeps),
                 'failed_sweeps': len(failed_sweeps),
+                'cancelled_sweeps': len(cancelled_sweeps),
                 'total_duration_seconds': total_duration,
                 'results_dir': str(self.results_dir / job_id),
                 'sweep_results': all_results
             }
             
-        except subprocess.TimeoutExpired:
-            logger.error(f"Benchmark timed out after 6 hours")
-            return {
-                'status': 'timeout',
-                'error': 'Benchmark execution timed out after 6 hours'
-            }
         except Exception as e:
             logger.error(f"Benchmark execution error: {e}", exc_info=True)
             return {

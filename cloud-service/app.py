@@ -48,7 +48,14 @@ _cancel_events_lock = threading.Lock()
 TERMINAL_STATUSES = {'completed', 'error', 'cancelled', 'failed', 'partial', 'partial_failure'}
 
 def init_db():
-    """Initialize SQLite database for job storage and queue"""
+    """Initialize SQLite database and recover from unclean shutdowns.
+
+    On every startup:
+    1. Jobs left in 'running' state (orphaned by a pod restart mid-run) are
+       reset to 'queued' so the queue processor retries them automatically.
+    2. Stale engine lock files are released so a lock that survived a pod
+       restart cannot permanently block the queue processor for that engine.
+    """
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
@@ -68,13 +75,46 @@ def init_db():
                 queue_position INTEGER
             )
         """)
-        # Index for efficient queue queries
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_engine_status_queue
             ON jobs(engine, status, queue_position)
         """)
+
+        # Crash-recovery: reset any orphaned 'running' jobs back to 'queued'
+        cursor = conn.execute("SELECT job_id FROM jobs WHERE status = 'running'")
+        orphaned = [row[0] for row in cursor.fetchall()]
+        if orphaned:
+            conn.execute(
+                "UPDATE jobs SET status='queued', started_at=NULL "
+                f"WHERE job_id IN ({','.join('?'*len(orphaned))})",
+                orphaned
+            )
+            logger.warning(
+                f"Startup recovery: reset {len(orphaned)} orphaned running "
+                f"job(s) to queued: {orphaned}"
+            )
+
         conn.commit()
+
+    # Release any stale engine lock files left over from the previous process
+    locks_dir = "/workspace/locks"
+    if os.path.isdir(locks_dir):
+        for fname in os.listdir(locks_dir):
+            if fname.endswith(".lock"):
+                lock_path = os.path.join(locks_dir, fname)
+                try:
+                    fl = FileLock(lock_path, timeout=0)
+                    fl.acquire()
+                    fl.release()
+                    logger.info(f"Startup: released stale lock {lock_path}")
+                except Exception:
+                    logger.warning(
+                        f"Startup: could not release {lock_path} — "
+                        "another live process may hold it"
+                    )
+
     logger.info(f"Initialized SQLite database at {DB_PATH}")
+
 
 # Initialize database on module load
 init_db()
@@ -234,29 +274,50 @@ MAX_CONCURRENT_JOBS = 3
 executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS)
 
 
+def _start_processors_for_pending_engines():
+    """Start queue-processor threads for every engine that has queued jobs.
+
+    Called once at startup so jobs queued before a pod restart are picked up
+    immediately without needing a new submission to kick the processor.
+    """
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT engine FROM jobs "
+                "WHERE status = 'queued' AND engine IS NOT NULL"
+            ).fetchall()
+        for (engine,) in rows:
+            ensure_processor_running(engine)
+            logger.info(f"Startup: started queue processor for engine '{engine}'")
+    except Exception as e:
+        logger.error(f"Startup: failed to start processors for pending engines: {e}")
+
+
+_start_processors_for_pending_engines()
+
+
 def process_engine_queue(engine: str):
-    """Process queued jobs for a specific engine (runs in background thread)
-    This thread never terminates - it waits for new jobs indefinitely"""
-    import time
-    job = None
-    
+    """Process queued jobs for a specific engine (runs in background thread).
+    This thread never terminates — it polls for new jobs indefinitely.
+    """
     logger.info(f"Queue processor started for engine: {engine}")
-    
+
     while True:
+        # job is declared at the top of the loop body so that a stale reference
+        # from a previous iteration can never leak through on an exception path.
+        job = None
         try:
-            # Get next queued job
             job = get_next_queued_job(engine)
             if not job:
-                # No queued jobs, wait a bit and check again
                 time.sleep(5)
                 continue
-            
+
             job_id = job['job_id']
-            
-            # Check if job was cancelled while queued
+
+            # Skip jobs that reached a terminal state while sitting in the queue
             current_job = get_job(job_id)
-            if current_job and current_job['status'] == 'cancelled':
-                logger.info(f"Job {job_id} was cancelled, skipping")
+            if current_job and current_job['status'] in TERMINAL_STATUSES:
+                logger.info(f"Job {job_id} is already {current_job['status']}, skipping")
                 continue
             
             dataset = job['dataset']
@@ -327,7 +388,6 @@ def process_engine_queue(engine: str):
             
         except Exception as e:
             logger.error(f"Error processing queue for engine {engine}: {e}", exc_info=True)
-            # Try to update job status if we have a job_id
             if job and 'job_id' in job:
                 try:
                     update_job_status(
@@ -336,9 +396,8 @@ def process_engine_queue(engine: str):
                         error=str(e),
                         completed_at=datetime.utcnow().isoformat()
                     )
-                except:
+                except Exception:
                     pass
-            # Don't break - continue processing queue
             time.sleep(5)
 
 
@@ -423,46 +482,44 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
 
             scenario_completed_at = datetime.utcnow().isoformat()
 
-            # If the event fired while run_benchmark was blocked, mark this scenario
-            # and all remaining ones as cancelled in a single save, then stop.
+            # Always annotate and store the result BEFORE checking cancellation.
+            # This ensures any work completed before the kill signal is not lost.
+            result['dataset'] = dataset
+            result['scenario_label'] = label
+            result['results_subdir'] = scenario_key
+            batch_results['scenario_results'][scenario_key] = result
+
+            scenario_run_status = result.get('status')
+            if scenario_run_status == 'completed':
+                batch_results['scenarios_completed'] += 1
+            else:
+                batch_results['scenarios_failed'] += 1
+
+            # Persist scenario-level status and timing unconditionally so the UI
+            # always reflects what happened, even when we are about to break out.
+            job_data = get_job(job_id)
+            if job_data and 'scenario_status' in job_data:
+                job_data['scenario_status'][scenario_key] = scenario_run_status or 'failed'
+                job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = scenario_completed_at
+                save_job(job_id, job_data)
+
+            if scenario_run_status == 'completed':
+                logger.info(f"Batch job {job_id}: Scenario {scenario_key} completed successfully")
+            else:
+                logger.error(f"Batch job {job_id}: Scenario {scenario_key} finished with status '{scenario_run_status}'")
+
+            # If the cancel event fired while run_benchmark was blocked, mark
+            # all not-yet-started scenarios as cancelled and stop the loop.
             if cancel_event and cancel_event.is_set():
-                logger.info(f"Batch job {job_id}: Cancellation detected after scenario {scenario_key}, marking it and all remaining as cancelled")
+                logger.info(f"Batch job {job_id}: Cancellation detected after {scenario_key}, stopping loop")
                 job_data = get_job(job_id)
                 if job_data and 'scenario_status' in job_data:
-                    job_data['scenario_status'][scenario_key] = 'cancelled'
-                    job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = scenario_completed_at
                     for remaining in scenarios[idx + 1:]:
                         remaining_key = f"{remaining['dataset']}-{remaining['label']}"
                         if job_data['scenario_status'].get(remaining_key) == 'queued':
                             job_data['scenario_status'][remaining_key] = 'cancelled'
                     save_job(job_id, job_data)
                 break
-
-            # Store scenario result using dataset-label as key for better identification
-            result['dataset'] = dataset
-            result['scenario_label'] = label
-            # Store relative path for get_job_results to find sweep directories
-            result['results_subdir'] = scenario_key
-            batch_results['scenario_results'][scenario_key] = result
-
-            if result.get('status') == 'completed':
-                batch_results['scenarios_completed'] += 1
-                # Update scenario status and times
-                job_data = get_job(job_id)
-                if job_data and 'scenario_status' in job_data:
-                    job_data['scenario_status'][scenario_key] = 'completed'
-                    job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = scenario_completed_at
-                    save_job(job_id, job_data)
-                logger.info(f"Batch job {job_id}: Scenario {scenario_key} completed successfully")
-            else:
-                batch_results['scenarios_failed'] += 1
-                # Update scenario status and times
-                job_data = get_job(job_id)
-                if job_data and 'scenario_status' in job_data:
-                    job_data['scenario_status'][scenario_key] = 'failed'
-                    job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = scenario_completed_at
-                    save_job(job_id, job_data)
-                logger.error(f"Batch job {job_id}: Scenario {scenario_key} failed")
 
         except Exception as e:
             scenario_key = f"{dataset}-{label}"
@@ -475,23 +532,27 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
                 job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = datetime.utcnow().isoformat()
                 save_job(job_id, job_data)
     
-    # Update final batch job status — but only if the job wasn't cancelled
+    # Always flush the final state so /results can serve data for any job,
+    # including cancelled ones, and current_scenario is never left stale.
     job_data = get_job(job_id)
-    if job_data and job_data.get('status') not in TERMINAL_STATUSES:
-        job_data['result'] = batch_results
+    if job_data:
         job_data['current_scenario'] = None
-        
-        # Determine overall status
-        if batch_results['scenarios_failed'] == 0:
-            job_data['status'] = 'completed'
-        elif batch_results['scenarios_completed'] == 0:
-            job_data['status'] = 'failed'
-        else:
-            job_data['status'] = 'partial'
-        
-        job_data['completed_at'] = datetime.utcnow().isoformat()
+        job_data['result'] = batch_results
+
+        if job_data.get('status') not in TERMINAL_STATUSES:
+            # Normal completion — derive the final status from outcomes.
+            if batch_results['scenarios_failed'] == 0:
+                job_data['status'] = 'completed'
+            elif batch_results['scenarios_completed'] == 0:
+                job_data['status'] = 'failed'
+            else:
+                job_data['status'] = 'partial'
+            job_data['completed_at'] = datetime.utcnow().isoformat()
+        # For cancelled jobs the status was already set by cancel_job();
+        # we only need to persist the partial batch_results accumulated above.
+
         save_job(job_id, job_data)
-    
+
     logger.info(f"Batch job {job_id} finished: {batch_results['scenarios_completed']} completed, {batch_results['scenarios_failed']} failed")
 
 
@@ -1128,7 +1189,7 @@ def get_job_results(job_id: str):
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     
-    if job.get('status') not in ['completed', 'error', 'partial']:
+    if job.get('status') not in ['completed', 'error', 'partial', 'cancelled']:
         return jsonify({'error': f'Job is {job.get("status", "unknown")}, no results available yet'}), 400
     
     # Use results_base if available (batch jobs), otherwise use job_id (single jobs)
