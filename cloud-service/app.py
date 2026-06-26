@@ -350,6 +350,12 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any])
     
     # Run each test sequentially
     for idx, scenario in enumerate(scenarios):
+        # Check for cancellation before starting each scenario
+        current_job = get_job(job_id)
+        if current_job and current_job.get('status') == 'cancelled':
+            logger.info(f"Batch job {job_id}: Cancelled — stopping after scenario {idx}/{len(scenarios)}")
+            break
+
         dataset = scenario['dataset']
         label = scenario['label']
         procedure_name = scenario['procedure_name']
