@@ -17,44 +17,44 @@ from k8s_metrics_collector import K8sMetricsCollector
 
 
 def _kill_proc_group(proc: subprocess.Popen) -> None:
-    """Escalate signals to the entire process tree: SIGINT → SIGTERM → SIGKILL.
-
-    opensearch-benchmark re-forks itself, so the grandchildren may end up in a
-    different process group than proc.pid.  We therefore kill by the *session*
-    (os.killpg on the session leader SID) as well as by the immediate PGID so
-    every descendent is reached regardless of how many times the binary forked.
     """
+    Escalate signals across the entire container to kill all opensearch-benchmark 
+    processes and their multiprocessing actor children.
+    """
+    def _pkill(sig: int) -> None:
+        try:
+            # -f matches the full command line argument string pattern
+            subprocess.run(
+                ["pkill", f"-{int(sig)}", "-f", "opensearch-benchmark"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception:
+            pass
+
+    # 1. Escalate with SIGINT (allows graceful test teardown/cleaning if possible)
+    _pkill(signal.SIGINT)
     try:
-        pgid = os.getpgid(proc.pid)
-        # Also try the session ID — equals proc.pid when start_new_session=True
-        sid = proc.pid
+        proc.wait(timeout=5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
 
-        def _kill(sig: int) -> None:
-            for group in {pgid, sid}:
-                try:
-                    os.killpg(group, sig)
-                except ProcessLookupError:
-                    pass
+    # 2. Step up to SIGTERM
+    _pkill(signal.SIGTERM)
+    try:
+        proc.wait(timeout=3)
+        return
+    except subprocess.TimeoutExpired:
+        pass
 
-        _kill(signal.SIGINT)
-        try:
-            proc.wait(timeout=10)
-            return
-        except subprocess.TimeoutExpired:
-            pass
-
-        _kill(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-            return
-        except subprocess.TimeoutExpired:
-            pass
-
-        _kill(signal.SIGKILL)
-        # tini (PID 1) reaps zombie children, so no explicit wait is needed.
-    except ProcessLookupError:
-        pass  # Process already gone
-    except Exception:
+    # 3. Final Absolute Nuke: SIGKILL everything
+    _pkill(signal.SIGKILL)
+    
+    # Final check to let the wrapper process release the pipes
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
         pass
 
 
