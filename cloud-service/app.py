@@ -420,15 +420,31 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
                 workload_params=workload_params if workload_params else None,
                 cancel_event=cancel_event
             )
-            
+
+            scenario_completed_at = datetime.utcnow().isoformat()
+
+            # If the event fired while run_benchmark was blocked, mark this scenario
+            # and all remaining ones as cancelled in a single save, then stop.
+            if cancel_event and cancel_event.is_set():
+                logger.info(f"Batch job {job_id}: Cancellation detected after scenario {scenario_key}, marking it and all remaining as cancelled")
+                job_data = get_job(job_id)
+                if job_data and 'scenario_status' in job_data:
+                    job_data['scenario_status'][scenario_key] = 'cancelled'
+                    job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = scenario_completed_at
+                    for remaining in scenarios[idx + 1:]:
+                        remaining_key = f"{remaining['dataset']}-{remaining['label']}"
+                        if job_data['scenario_status'].get(remaining_key) == 'queued':
+                            job_data['scenario_status'][remaining_key] = 'cancelled'
+                    save_job(job_id, job_data)
+                break
+
             # Store scenario result using dataset-label as key for better identification
             result['dataset'] = dataset
             result['scenario_label'] = label
             # Store relative path for get_job_results to find sweep directories
             result['results_subdir'] = scenario_key
             batch_results['scenario_results'][scenario_key] = result
-            
-            scenario_completed_at = datetime.utcnow().isoformat()
+
             if result.get('status') == 'completed':
                 batch_results['scenarios_completed'] += 1
                 # Update scenario status and times
@@ -906,13 +922,16 @@ def cancel_job(job_id: str):
     status = job['status']
     
     if status == 'queued':
-        # Cancel queued job - just update status
-        update_job_status(
-            job_id,
-            'cancelled',
-            completed_at=datetime.utcnow().isoformat(),
-            error='Job cancelled by user'
-        )
+        # Mark all individual scenario_status entries as cancelled too,
+        # so the UI doesn't show them as perpetually 'queued'.
+        job['status'] = 'cancelled'
+        job['completed_at'] = datetime.utcnow().isoformat()
+        job['error'] = 'Job cancelled by user'
+        if 'scenario_status' in job:
+            job['scenario_status'] = {
+                k: 'cancelled' for k in job['scenario_status']
+            }
+        save_job(job_id, job)
         logger.info(f"Job {job_id} cancelled (was queued)")
         return jsonify({
             'message': 'Job cancelled successfully',
