@@ -53,6 +53,18 @@ spec:
     requests:
       storage: 100Gi
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: benchmark-results-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-rwo
+  resources:
+    requests:
+      storage: 50Gi
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -95,7 +107,7 @@ spec:
             pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn requests
             
             echo "Setting up directories..."
-            mkdir -p /datasets/opensearch-benchmark /workspace/results /opt/benchmark-src /app/web
+            mkdir -p /datasets/opensearch-benchmark /workspace /opt/benchmark-src /app/web
             
             echo "Cloning OpenSearch Benchmark..."
             git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark /opt/benchmark-src
@@ -111,11 +123,11 @@ spec:
               git pull origin main || echo "Git pull failed, using existing version"
             fi
             
-            # Configure SSH for git push using the mounted deploy key
+            # Configure SSH — one key used for both github.com and github.ibm.com
             mkdir -p /root/.ssh
             cp /root/.ssh-key/id_ed25519 /root/.ssh/id_ed25519
             chmod 600 /root/.ssh/id_ed25519
-            ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null
+            ssh-keyscan github.com github.ibm.com >> /root/.ssh/known_hosts 2>/dev/null
 
             if [ ! -d "/workspace/.git" ]; then
               echo "Cloning benchmark automation project (first time)..."
@@ -129,10 +141,20 @@ spec:
               git pull origin main || echo "Git pull failed, using existing version"
             fi
 
+            # Clone the results repo into /results (persisted on its own PVC)
+            if [ ! -d "/results/.git" ]; then
+              echo "Cloning benchmark results repo..."
+              git clone git@github.ibm.com:bharath/opensearch-benchmark-results.git /results
+            else
+              echo "Results repo already exists, pulling latest..."
+              cd /results && git pull origin main || echo "Results pull failed, continuing"
+            fi
+
             # Configure git identity for commit-back
             git config --global user.name "benchmark-bot"
             git config --global user.email "benchmark-bot@users.noreply.github.com"
             git config --global --add safe.directory /workspace
+            git config --global --add safe.directory /results
             
             echo "Setting up cloud-native API service..."
             cp /workspace/cloud-service/*.py /app/
@@ -171,6 +193,8 @@ spec:
           readOnly: true
         - name: workspace
           mountPath: /workspace
+        - name: results
+          mountPath: /results
         - name: github-deploy-key
           mountPath: /root/.ssh-key
           readOnly: true
@@ -204,6 +228,9 @@ spec:
       - name: workspace
         persistentVolumeClaim:
           claimName: benchmark-workspace-storage
+      - name: results
+        persistentVolumeClaim:
+          claimName: benchmark-results-storage
       - name: github-deploy-key
         secret:
           secretName: github-deploy-key

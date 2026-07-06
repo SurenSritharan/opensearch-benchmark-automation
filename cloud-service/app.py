@@ -30,7 +30,7 @@ CORS(app)
 
 # Initialize components
 config_loader = ConfigLoader(workspace_dir='/workspace')
-benchmark_runner = BenchmarkRunner(config_loader, results_dir='/workspace/results')
+benchmark_runner = BenchmarkRunner(config_loader, results_dir='/results')
 
 # SQLite database for job storage (shared across all workers)
 DB_PATH = "/workspace/jobs.db"
@@ -406,49 +406,41 @@ def process_engine_queue(engine: str):
 # ---------------------------------------------------------------------------
 # Git commit-back
 # ---------------------------------------------------------------------------
-WORKSPACE_DIR = Path("/workspace")
-GIT_RESULTS_DIR = WORKSPACE_DIR / "results"
+RESULTS_DIR = Path("/results")
 
 
 def _commit_results_to_git(job_id: str, final_status: str) -> None:
-    """Commit the completed job's result directory to git and push.
+    """Commit the completed job's result directory and push to the results repo.
 
-    Results are written directly to /workspace/results/<job_id>/ by
-    benchmark_runner, so no copying is needed — just add and push.
+    The results repo is cloned to /results at pod startup (persisted on its own
+    PVC), so BenchmarkRunner writes directly into it.  Just add, commit, push.
 
-    Controlled by the GIT_COMMIT_RESULTS env var (set to "true" to enable).
-    Runs in a background thread so it never blocks the job queue.
-
-    Commit message format:
-        results: add <job_id> [<status>]
+    Controlled by GIT_COMMIT_RESULTS=true.  Runs in a background thread.
     """
     if os.environ.get("GIT_COMMIT_RESULTS", "").lower() != "true":
         return
 
-    if not (GIT_RESULTS_DIR / job_id).exists():
-        logger.warning(f"git commit-back: results dir not found: {GIT_RESULTS_DIR / job_id}")
+    if not (RESULTS_DIR / job_id).exists():
+        logger.warning(f"git commit-back: results dir not found: {RESULTS_DIR / job_id}")
         return
 
     try:
         commit_msg = f"results: add {job_id} [{final_status}]"
-        steps = [
+        for cmd in [
             ["git", "pull", "--rebase", "origin", "main"],
-            ["git", "add", f"results/{job_id}"],
+            ["git", "add", job_id],
             ["git", "commit", "-m", commit_msg],
             ["git", "push", "origin", "main"],
-        ]
-        for cmd in steps:
-            r = subprocess.run(cmd, cwd=str(WORKSPACE_DIR),
-                               capture_output=True, text=True, timeout=60)
+        ]:
+            r = subprocess.run(cmd, cwd=str(RESULTS_DIR),
+                               capture_output=True, text=True, timeout=120)
             if r.returncode != 0:
-                logger.warning(
-                    f"git commit-back: `{' '.join(cmd)}` failed "
-                    f"(exit {r.returncode}): {r.stderr.strip()}"
-                )
+                logger.warning(f"git commit-back: `{' '.join(cmd)}` failed: {r.stderr.strip()}")
                 return
-        logger.info(f"git commit-back: pushed results for job {job_id}")
+
+        logger.info(f"git commit-back: pushed {job_id}")
     except Exception as e:
-        logger.warning(f"git commit-back: git operations failed for {job_id}: {e}")
+        logger.warning(f"git commit-back: failed for {job_id}: {e}")
 
 
 def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event = None):
