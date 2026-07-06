@@ -380,6 +380,8 @@ def process_engine_queue(engine: str):
                             job_result['status'] = result.get('status', 'completed')
                             job_result['completed_at'] = datetime.utcnow().isoformat()
                             save_job(job_id, job_result)
+                            # Auto-commit results to git
+                            executor.submit(_commit_results_to_git, job_id, job_result['status'])
                         
                         logger.info(f"Job {job_id} completed with status: {result.get('status', 'completed')}")
                 finally:
@@ -399,6 +401,79 @@ def process_engine_queue(engine: str):
                 except Exception:
                     pass
             time.sleep(5)
+
+
+# ---------------------------------------------------------------------------
+# Git commit-back
+# ---------------------------------------------------------------------------
+WORKSPACE_DIR = Path("/workspace")
+GIT_RESULTS_DIR = WORKSPACE_DIR / "results"
+
+
+def _commit_results_to_git(job_id: str, final_status: str) -> None:
+    """Copy the completed job's result tree into the workspace repo and push.
+
+    Results are written by benchmark_runner to /results/<job_id>/ on the PVC,
+    e.g.:
+        /results/<job_id>/<engine>/<scenario>/sweep-1/benchmark.log
+        /results/<job_id>/<engine>/<scenario>/sweep-1/workload-params.json
+        /results/<job_id>/<engine>/<scenario>/sweep-1/k8s_metrics.json
+        /results/<job_id>/<engine>/<scenario>/sweep-1/server_stats.json
+        /results/<job_id>/<engine>/<scenario>/sweep-1/test_run.json
+
+    This function copies the entire tree into the workspace git repo at:
+        /workspace/results/<job_id>/
+
+    and commits + pushes to origin main.
+
+    Controlled by the GIT_COMMIT_RESULTS env var (set to "true" to enable).
+    Runs in a background thread so it never blocks the job queue.
+
+    Commit message format:
+        results: add <job_id> [<status>]
+    """
+    if os.environ.get("GIT_COMMIT_RESULTS", "").lower() != "true":
+        return
+
+    # Source: the results directory written by benchmark_runner on the PVC
+    results_src = Path("/results") / job_id
+    if not results_src.exists():
+        logger.warning(f"git commit-back: results dir not found: {results_src}")
+        return
+
+    # Destination: results/ directory inside the workspace git repo
+    results_dest = GIT_RESULTS_DIR / job_id
+
+    try:
+        import shutil
+        if results_dest.exists():
+            shutil.rmtree(results_dest)
+        shutil.copytree(str(results_src), str(results_dest))
+        logger.info(f"git commit-back: copied {results_src} -> {results_dest}")
+    except Exception as e:
+        logger.warning(f"git commit-back: could not copy results for {job_id}: {e}")
+        return
+
+    try:
+        commit_msg = f"results: add {job_id} [{final_status}]"
+        steps = [
+            ["git", "pull", "--rebase", "origin", "main"],
+            ["git", "add", f"results/{job_id}"],
+            ["git", "commit", "-m", commit_msg],
+            ["git", "push", "origin", "main"],
+        ]
+        for cmd in steps:
+            r = subprocess.run(cmd, cwd=str(WORKSPACE_DIR),
+                               capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                logger.warning(
+                    f"git commit-back: `{' '.join(cmd)}` failed "
+                    f"(exit {r.returncode}): {r.stderr.strip()}"
+                )
+                return
+        logger.info(f"git commit-back: pushed results for job {job_id}")
+    except Exception as e:
+        logger.warning(f"git commit-back: git operations failed for {job_id}: {e}")
 
 
 def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event = None):
@@ -573,6 +648,10 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
         save_job(job_id, job_data)
 
     logger.info(f"Batch job {job_id} finished: {batch_results['scenarios_completed']} completed, {batch_results['scenarios_failed']} failed")
+
+    # Auto-commit results to git after the job is fully persisted
+    if job_data:
+        executor.submit(_commit_results_to_git, job_id, job_data['status'])
 
 
 RESULTS_DIR = Path("/results").resolve()
