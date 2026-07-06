@@ -44,18 +44,6 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: benchmark-results-storage
-spec:
-  accessModes:
-    - ReadWriteOnce
-  storageClassName: premium-rwo
-  resources:
-    requests:
-      storage: 50Gi
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
   name: benchmark-workspace-storage
 spec:
   accessModes:
@@ -63,7 +51,7 @@ spec:
   storageClassName: premium-rwo
   resources:
     requests:
-      storage: 10Gi
+      storage: 100Gi
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -107,7 +95,7 @@ spec:
             pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn requests
             
             echo "Setting up directories..."
-            mkdir -p /datasets/opensearch-benchmark /results /opt/benchmark-src /app/web
+            mkdir -p /datasets/opensearch-benchmark /workspace/results /opt/benchmark-src /app/web
             
             echo "Cloning OpenSearch Benchmark..."
             git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark /opt/benchmark-src
@@ -178,8 +166,6 @@ spec:
         volumeMounts:
         - name: datasets
           mountPath: /datasets
-        - name: results
-          mountPath: /results
         - name: certs
           mountPath: /certs
           readOnly: true
@@ -211,9 +197,6 @@ spec:
       - name: datasets
         persistentVolumeClaim:
           claimName: benchmark-nvme-storage
-      - name: results
-        persistentVolumeClaim:
-          claimName: benchmark-results-storage
       - name: certs
         secret:
           secretName: opensearch-shared-certs

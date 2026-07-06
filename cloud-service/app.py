@@ -30,7 +30,7 @@ CORS(app)
 
 # Initialize components
 config_loader = ConfigLoader(workspace_dir='/workspace')
-benchmark_runner = BenchmarkRunner(config_loader, results_dir='/results')
+benchmark_runner = BenchmarkRunner(config_loader, results_dir='/workspace/results')
 
 # SQLite database for job storage (shared across all workers)
 DB_PATH = "/workspace/jobs.db"
@@ -411,20 +411,10 @@ GIT_RESULTS_DIR = WORKSPACE_DIR / "results"
 
 
 def _commit_results_to_git(job_id: str, final_status: str) -> None:
-    """Copy the completed job's result tree into the workspace repo and push.
+    """Commit the completed job's result directory to git and push.
 
-    Results are written by benchmark_runner to /results/<job_id>/ on the PVC,
-    e.g.:
-        /results/<job_id>/<engine>/<scenario>/sweep-1/benchmark.log
-        /results/<job_id>/<engine>/<scenario>/sweep-1/workload-params.json
-        /results/<job_id>/<engine>/<scenario>/sweep-1/k8s_metrics.json
-        /results/<job_id>/<engine>/<scenario>/sweep-1/server_stats.json
-        /results/<job_id>/<engine>/<scenario>/sweep-1/test_run.json
-
-    This function copies the entire tree into the workspace git repo at:
-        /workspace/results/<job_id>/
-
-    and commits + pushes to origin main.
+    Results are written directly to /workspace/results/<job_id>/ by
+    benchmark_runner, so no copying is needed — just add and push.
 
     Controlled by the GIT_COMMIT_RESULTS env var (set to "true" to enable).
     Runs in a background thread so it never blocks the job queue.
@@ -435,23 +425,8 @@ def _commit_results_to_git(job_id: str, final_status: str) -> None:
     if os.environ.get("GIT_COMMIT_RESULTS", "").lower() != "true":
         return
 
-    # Source: the results directory written by benchmark_runner on the PVC
-    results_src = Path("/results") / job_id
-    if not results_src.exists():
-        logger.warning(f"git commit-back: results dir not found: {results_src}")
-        return
-
-    # Destination: results/ directory inside the workspace git repo
-    results_dest = GIT_RESULTS_DIR / job_id
-
-    try:
-        import shutil
-        if results_dest.exists():
-            shutil.rmtree(results_dest)
-        shutil.copytree(str(results_src), str(results_dest))
-        logger.info(f"git commit-back: copied {results_src} -> {results_dest}")
-    except Exception as e:
-        logger.warning(f"git commit-back: could not copy results for {job_id}: {e}")
+    if not (GIT_RESULTS_DIR / job_id).exists():
+        logger.warning(f"git commit-back: results dir not found: {GIT_RESULTS_DIR / job_id}")
         return
 
     try:
