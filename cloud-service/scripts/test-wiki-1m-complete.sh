@@ -1,6 +1,6 @@
 #!/bin/bash
 # Complete end-to-end batch test: create-index, bulk-ingest, refresh, force-merge, search with sweeps
-# Tests 5M vectors with MS MARCO dataset
+# Dataset: cohere-wiki-en-768 (768-dim, innerproduct) @ 1M vectors
 
 set -e
 
@@ -232,11 +232,11 @@ echo "View results at: $API_URL/results.html?job_id=$JOB_ID"
 echo ""
 echo "Expected Results:"
 echo "  - 1 sweep for create-index"
-echo "  - 1 sweep for bulk-ingest-5m"
+echo "  - 1 sweep for bulk-ingest-1m"
 echo "  - 1 sweep for refresh-index"
 echo "  - 1 sweep for force-merge-1seg"
-echo "  - 5 sweeps for search-k100-ef100 (clients: 4,8,10,12,16)"
-echo "  - 5 sweeps for search-k10-ef32 (clients: 4,8,10,12,16)"
+echo "  - 5 sweeps for vector-search-k100-ef128 (clients: 4,8,10,12,16)"
+echo "  - 5 sweeps for vector-search-k10-ef128 (clients: 4,8,10,12,16)"
 echo "  Total: 14 sweeps"
 
 # Made with Bob

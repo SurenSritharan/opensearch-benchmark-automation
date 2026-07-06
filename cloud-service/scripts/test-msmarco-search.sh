@@ -1,23 +1,22 @@
 #!/bin/bash
-# Complete end-to-end batch test: create-index, bulk-ingest, refresh, force-merge, search with sweeps
-# Tests 5M vectors with MS MARCO dataset
+# Search-only batch test: runs vector-search scenarios against pre-built indexes
+# Dataset: cohere-msmarco-1024 (1024-dim, cosinesimil) @ 1M and 5M vectors
+# Requires indexes cohere-msmarco-1024-1m and cohere-msmarco-1024-5m to already exist
 
 set -e
 
 API_URL="${API_URL:-http://34.132.114.18}"
 
 echo "=========================================="
-echo "Complete Batch Test - 5M Vectors"
+echo "Search-Only Batch Test - MS MARCO (1M + 5M Vectors)"
 echo "=========================================="
 echo "API URL: $API_URL"
 echo ""
-echo "Test Flow:"
-echo "  1. Create index"
-echo "  2. Bulk ingest 5M vectors"
-echo "  3. Refresh index"
-echo "  4. Force-merge to 1 segment"
-echo "  5. Search with k=100, ef=128 (5 client sweeps)"
-echo "  6. Search with k=10, ef=128 (5 client sweeps)"
+echo "Test Flow (indexes must already exist):"
+echo "  1. Search cohere-msmarco-1024-5m with k=100 (5 client sweeps)"
+echo "  2. Search cohere-msmarco-1024-5m with k=10  (5 client sweeps)"
+echo "  3. Search cohere-msmarco-1024-1m with k=100 (5 client sweeps)"
+echo "  4. Search cohere-msmarco-1024-1m with k=10  (5 client sweeps)"
 echo ""
 
 # Complete batch payload with all steps
@@ -205,12 +204,10 @@ echo "Job ID: $JOB_ID"
 echo "View results at: $API_URL/results.html?job_id=$JOB_ID"
 echo ""
 echo "Expected Results:"
-echo "  - 1 sweep for create-index"
-echo "  - 1 sweep for bulk-ingest-5m"
-echo "  - 1 sweep for refresh-index"
-echo "  - 1 sweep for force-merge-1seg"
-echo "  - 5 sweeps for search-k100-ef128 (clients: 4,8,10,12,16)"
-echo "  - 5 sweeps for search-k10-ef128 (clients: 4,8,10,12,16)"
-echo "  Total: 14 sweeps"
+echo "  - 5 sweeps for vector-search-k100-ef128-5m (clients: 4,8,10,12,16)"
+echo "  - 5 sweeps for vector-search-k10-ef128-5m  (clients: 4,8,10,12,16)"
+echo "  - 5 sweeps for vector-search-k100-ef128-1m (clients: 4,8,10,12,16)"
+echo "  - 5 sweeps for vector-search-k10-ef128-1m  (clients: 4,8,10,12,16)"
+echo "  Total: 20 sweeps"
 
 # Made with Bob
