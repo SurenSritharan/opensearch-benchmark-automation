@@ -101,7 +101,7 @@ spec:
             set -e
             echo "Installing dependencies..."
             apt-get update -y -qq
-            apt-get install -y -qq git curl wget vim libhdf5-dev gcc python3-dev jq nmon procps tini
+            apt-get install -y -qq git curl wget vim libhdf5-dev gcc python3-dev jq nmon procps tini openssh-client
             
             echo "Installing Python packages..."
             pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn requests
@@ -123,9 +123,15 @@ spec:
               git pull origin main || echo "Git pull failed, using existing version"
             fi
             
+            # Configure SSH for git push using the mounted deploy key
+            mkdir -p /root/.ssh
+            cp /root/.ssh-key/id_ed25519 /root/.ssh/id_ed25519
+            chmod 600 /root/.ssh/id_ed25519
+            ssh-keyscan github.com >> /root/.ssh/known_hosts 2>/dev/null
+
             if [ ! -d "/workspace/.git" ]; then
               echo "Cloning benchmark automation project (first time)..."
-              git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
+              git clone --depth 1 git@github.com:SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
               mv /workspace-tmp/* /workspace/
               mv /workspace-tmp/.git /workspace/
               rm -rf /workspace-tmp
@@ -134,6 +140,11 @@ spec:
               cd /workspace
               git pull origin main || echo "Git pull failed, using existing version"
             fi
+
+            # Configure git identity for commit-back
+            git config --global user.name "benchmark-bot"
+            git config --global user.email "benchmark-bot@users.noreply.github.com"
+            git config --global --add safe.directory /workspace
             
             echo "Setting up cloud-native API service..."
             cp /workspace/cloud-service/*.py /app/
@@ -146,13 +157,15 @@ spec:
             
             echo "Starting cloud-native API service..."
             cd /app
-            exec /usr/bin/tini -- gunicorn --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 300 --access-logfile - app:app
+            exec /usr/bin/tini -- gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 4 --timeout 60 --access-logfile - app:app
         
         env:
         - name: BENCHMARK_HOME
           value: "/datasets/opensearch-benchmark"
         - name: PYTHONUNBUFFERED
           value: "1"
+        - name: GIT_COMMIT_RESULTS
+          value: "true"
         
         resources:
           requests:
@@ -172,6 +185,9 @@ spec:
           readOnly: true
         - name: workspace
           mountPath: /workspace
+        - name: github-deploy-key
+          mountPath: /root/.ssh-key
+          readOnly: true
         
         ports:
         - containerPort: 8080
@@ -205,5 +221,9 @@ spec:
       - name: workspace
         persistentVolumeClaim:
           claimName: benchmark-workspace-storage
+      - name: github-deploy-key
+        secret:
+          secretName: github-deploy-key
+          defaultMode: 0400
 
 # Made with Bob

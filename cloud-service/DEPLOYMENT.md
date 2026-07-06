@@ -207,6 +207,74 @@ kubectl exec -n benchmark-api opensearch-benchmark-client-0 -- \
 kubectl exec -n benchmark-api opensearch-benchmark-client-0 -- ls -lh /results
 ```
 
+## Auto-Commit Results to Git
+
+When `GIT_COMMIT_RESULTS=true` is set on the pod, `app.py` will automatically
+commit a summary JSON to `results/<job_id>.json` in the workspace
+repo and push to `origin main` after every job completes.
+
+### What gets committed
+
+The complete result tree copied from the pod's `/results` PVC into the repo at `results/<job_id>/`, e.g.:
+
+```
+results/<job_id>/<engine>/<scenario>/sweep-1/benchmark.log
+results/<job_id>/<engine>/<scenario>/sweep-1/workload-params.json
+results/<job_id>/<engine>/<scenario>/sweep-1/k8s_metrics.json
+results/<job_id>/<engine>/<scenario>/sweep-1/server_stats.json
+results/<job_id>/<engine>/<scenario>/sweep-1/test_run.json
+results/<job_id>/<engine>/<scenario>/sweep-2/...
+```
+
+### Setup
+
+**1. Enable the feature and configure push credentials**
+
+`GIT_COMMIT_RESULTS=true` is already set in the manifest `env` block. Git
+identity (`user.name` / `user.email`) is configured via `git config --global`
+in the pod startup script — no additional env vars are needed.
+
+The only thing required is an SSH deploy key so the pod can push. The
+workspace repo at `/workspace` is cloned over SSH and the deploy key is
+mounted into the pod:
+
+The workspace repo at `/workspace` must be cloned with push access. The
+recommended approach is a [GitHub Deploy Key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys)
+with write access, mounted as an SSH key into the pod:
+
+```yaml
+# In your pod spec — mount the deploy key secret
+volumeMounts:
+  - name: github-deploy-key
+    mountPath: /root/.ssh
+    readOnly: true
+volumes:
+  - name: github-deploy-key
+    secret:
+      secretName: github-deploy-key
+      defaultMode: 0400
+```
+
+Create the secret:
+```bash
+kubectl create secret generic github-deploy-key \
+  --from-file=id_ed25519=cloud-service/keys/github-deploy-key \
+  -n benchmark-api
+```
+
+**3. Verify it's working**
+
+After a job completes, check the pod logs:
+```bash
+kubectl logs -n benchmark-api opensearch-benchmark-client-0 | grep "git commit-back"
+```
+
+You should see:
+```
+git commit-back: copied /results/<job_id> -> /workspace/results/<job_id>
+git commit-back: pushed results for job <job_id>
+```
+
 ## Next Steps
 
 1. Commit the `cloud-service/` directory to your repository
