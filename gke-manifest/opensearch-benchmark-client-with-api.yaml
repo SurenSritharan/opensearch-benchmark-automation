@@ -39,7 +39,7 @@ spec:
   storageClassName: premium-rwo
   resources:
     requests:
-      storage: 100Gi
+      storage: 250Gi
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -141,13 +141,18 @@ spec:
               git pull origin main || echo "Git pull failed, using existing version"
             fi
 
-            # Clone the results repo into /results (persisted on its own PVC)
-            if [ ! -d "/results/.git" ]; then
-              echo "Cloning benchmark results repo..."
-              git clone git@github.ibm.com:bharath/opensearch-benchmark-results.git /results
-            else
+            # Set up results repo in /results (persisted on its own PVC)
+            if [ -d "/results/.git" ]; then
               echo "Results repo already exists, pulling latest..."
               cd /results && git pull origin main || echo "Results pull failed, continuing"
+            else
+              echo "Initializing results repo in-place (preserves any existing files)..."
+              cd /results
+              git init
+              git remote add origin git@github.ibm.com:bharath/opensearch-benchmark-results.git
+              git fetch origin || true
+              git checkout main 2>/dev/null || git checkout -b main
+              git branch --set-upstream-to=origin/main main 2>/dev/null || true
             fi
 
             # Configure git identity for commit-back

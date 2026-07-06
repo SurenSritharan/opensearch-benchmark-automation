@@ -426,11 +426,24 @@ def _commit_results_to_git(job_id: str, final_status: str) -> None:
 
     try:
         commit_msg = f"results: add {job_id} [{final_status}]"
+
+        # Only pull if remote branch already exists (repo may be empty on first push)
+        has_remote = subprocess.run(
+            ["git", "ls-remote", "--heads", "origin", "main"],
+            cwd=str(RESULTS_DIR), capture_output=True, text=True, timeout=30
+        ).stdout.strip()
+
+        if has_remote:
+            r = subprocess.run(["git", "pull", "--rebase", "origin", "main"],
+                                cwd=str(RESULTS_DIR), capture_output=True, text=True, timeout=120)
+            if r.returncode != 0:
+                logger.warning(f"git commit-back: pull failed: {r.stderr.strip()}")
+                return
+
         for cmd in [
-            ["git", "pull", "--rebase", "origin", "main"],
             ["git", "add", job_id],
             ["git", "commit", "-m", commit_msg],
-            ["git", "push", "origin", "main"],
+            ["git", "push", "--set-upstream", "origin", "main"],
         ]:
             r = subprocess.run(cmd, cwd=str(RESULTS_DIR),
                                capture_output=True, text=True, timeout=120)
