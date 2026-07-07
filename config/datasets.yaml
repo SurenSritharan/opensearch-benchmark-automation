@@ -38,8 +38,6 @@ datasets:
           target_index_replica_shards: 1
           target_index_dimension: 768
           target_index_space_type: "innerproduct"
-          train_index_name: "cohere-768-train-index"
-          train_index_body: "indices/train-index.json"
           hnsw_ef_construction: 128
           hnsw_m: 16
         # Engine-specific parameters for index creation
