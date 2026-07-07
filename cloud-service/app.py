@@ -456,6 +456,34 @@ def _commit_results_to_git(job_id: str, final_status: str) -> None:
         logger.warning(f"git commit-back: failed for {job_id}: {e}")
 
 
+def _save_index_snapshot(engine: str, index_name: str, results_dir: Path) -> None:
+    """Fetch mapping, settings and stats for index_name and save to index_snapshot.json.
+
+    Runs synchronously — called right after each scenario completes so the
+    snapshot reflects the index as it existed during that run.
+    """
+    try:
+        host = config_loader.get_target_host(engine)
+        base_url = f"https://{host}/{index_name}"
+        auth = ("admin", "admin")
+        kwargs = dict(auth=auth, verify=False, timeout=15)
+
+        snapshot = {"index": index_name, "engine": engine}
+        for key, path in [("mapping", "/_mapping"), ("settings", "/_settings"), ("stats", "/_stats")]:
+            r = requests.get(base_url + path, **kwargs)
+            if r.ok:
+                snapshot[key] = r.json()
+            else:
+                snapshot[key] = {"error": f"HTTP {r.status_code}"}
+
+        out = results_dir / "index_snapshot.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(snapshot, indent=2))
+        logger.info(f"Saved index snapshot for {index_name} to {out}")
+    except Exception as e:
+        logger.warning(f"index snapshot failed for {index_name}: {e}")
+
+
 def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event = None):
     """Process a batch job by running multiple dataset+scenario combinations sequentially
     
@@ -560,6 +588,11 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
 
             if scenario_run_status == 'completed':
                 logger.info(f"Batch job {job_id}: Scenario {scenario_key} completed successfully")
+                # Save index mapping/settings/stats for this scenario's index
+                index_name = workload_params.get('target_index_name')
+                if index_name:
+                    scenario_results_dir = RESULTS_DIR / results_base / scenario_key
+                    _save_index_snapshot(engine, index_name, scenario_results_dir)
             else:
                 logger.error(f"Batch job {job_id}: Scenario {scenario_key} finished with status '{scenario_run_status}'")
 
