@@ -63,7 +63,7 @@ PAYLOAD=$(cat <<'EOF'
     {
       "dataset": "cohere-wiki-en-768",
       "scenario": "refresh-index",
-      "label": "wiki-1m-refresh",
+      "label": "wiki-1m-refresh-after-ingest",
       "params": {
         "target_index_name": "cohere-wiki-en-768-1m"
       }
@@ -75,6 +75,14 @@ PAYLOAD=$(cat <<'EOF'
       "params": {
         "target_index_name": "cohere-wiki-en-768-1m",
         "target_index_max_num_segments": 1
+      }
+    },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "refresh-index",
+      "label": "wiki-1m-refresh-after-merge",
+      "params": {
+        "target_index_name": "cohere-wiki-en-768-1m"
       }
     },
     {
@@ -133,7 +141,7 @@ PAYLOAD=$(cat <<'EOF'
     {
       "dataset": "cohere-wiki-en-768",
       "scenario": "refresh-index",
-      "label": "wiki-5m-refresh",
+      "label": "wiki-5m-refresh-after-ingest",
       "params": {
         "target_index_name": "cohere-wiki-en-768-5m"
       }
@@ -145,6 +153,14 @@ PAYLOAD=$(cat <<'EOF'
       "params": {
         "target_index_name": "cohere-wiki-en-768-5m",
         "target_index_max_num_segments": 1
+      }
+    },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "refresh-index",
+      "label": "wiki-5m-refresh-after-merge",
+      "params": {
+        "target_index_name": "cohere-wiki-en-768-5m"
       }
     },
     {
@@ -207,7 +223,7 @@ PAYLOAD=$(cat <<'EOF'
     {
       "dataset": "cohere-msmarco-1024",
       "scenario": "refresh-index",
-      "label": "msmarco-1m-refresh",
+      "label": "msmarco-1m-refresh-after-ingest",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m"
       }
@@ -219,6 +235,14 @@ PAYLOAD=$(cat <<'EOF'
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m",
         "target_index_max_num_segments": 1
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "refresh-index",
+      "label": "msmarco-1m-refresh-after-merge",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m"
       }
     },
     {
@@ -283,7 +307,7 @@ PAYLOAD=$(cat <<'EOF'
     {
       "dataset": "cohere-msmarco-1024",
       "scenario": "refresh-index",
-      "label": "msmarco-5m-refresh",
+      "label": "msmarco-5m-refresh-after-ingest",
       "params": {
         "target_index_name": "cohere-msmarco-1024-5m"
       }
@@ -295,6 +319,14 @@ PAYLOAD=$(cat <<'EOF'
       "params": {
         "target_index_name": "cohere-msmarco-1024-5m",
         "target_index_max_num_segments": 1
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "refresh-index",
+      "label": "msmarco-5m-refresh-after-merge",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-5m"
       }
     },
     {
