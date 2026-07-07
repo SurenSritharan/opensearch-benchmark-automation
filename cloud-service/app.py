@@ -427,6 +427,10 @@ def _commit_results_to_git(job_id: str, final_status: str) -> None:
     try:
         commit_msg = f"results: add {job_id} [{final_status}]"
 
+        # Stage first so pull --rebase doesn't fail on unstaged changes
+        subprocess.run(["git", "add", job_id],
+                       cwd=str(RESULTS_DIR), capture_output=True, text=True, timeout=30)
+
         # Only pull if remote branch already exists (repo may be empty on first push)
         has_remote = subprocess.run(
             ["git", "ls-remote", "--heads", "origin", "main"],
@@ -441,7 +445,7 @@ def _commit_results_to_git(job_id: str, final_status: str) -> None:
                 return
 
         for cmd in [
-            ["git", "add", job_id],
+            ["git", "add", job_id],  # re-add in case pull brought in new files
             ["git", "commit", "-m", commit_msg],
             ["git", "push", "--set-upstream", "origin", "main"],
         ]:
