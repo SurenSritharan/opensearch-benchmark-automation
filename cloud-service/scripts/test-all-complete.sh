@@ -206,7 +206,7 @@ PAYLOAD=$(cat <<'EOF'
     },
     {
       "dataset": "cohere-msmarco-1024",
-      "scenario": "refresh",
+      "scenario": "refresh-index",
       "label": "msmarco-1m-refresh",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m"
@@ -282,7 +282,7 @@ PAYLOAD=$(cat <<'EOF'
     },
     {
       "dataset": "cohere-msmarco-1024",
-      "scenario": "refresh",
+      "scenario": "refresh-index",
       "label": "msmarco-5m-refresh",
       "params": {
         "target_index_name": "cohere-msmarco-1024-5m"
