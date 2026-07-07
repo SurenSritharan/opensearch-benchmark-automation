@@ -110,7 +110,7 @@ echo ""
 PREV_STATUS=""
 PREV_SCENARIO=""
 while true; do
-  STATUS_RESPONSE=$(curl -s "$API_URL/api/v1/benchmark/$JOB_ID/status")
+  STATUS_RESPONSE=$(curl -s "$API_URL/api/v1/benchmark/$JOB_ID")
   if ! echo "$STATUS_RESPONSE" | jq '.' > /dev/null 2>&1; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for job to appear (got: ${STATUS_RESPONSE:-(empty)})"
     sleep 10
@@ -147,7 +147,7 @@ while true; do
     
     # Get full job details
     echo "Final job details:"
-    curl -s "$API_URL/api/v1/benchmark/$JOB_ID/status" | jq '{
+    curl -s "$API_URL/api/v1/benchmark/$JOB_ID" | jq '{
       job_id,
       status,
       scenarios_completed,

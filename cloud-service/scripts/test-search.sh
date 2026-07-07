@@ -36,7 +36,7 @@ PAYLOAD=$(cat <<'EOF'
         "target_index_name": "cohere-wiki-en-768-5m",
         "num_vectors": 5000000,
         "query_k": 100,
-        "time_period": 1800
+        "time_period": 300
       }
     },
     {
@@ -47,7 +47,7 @@ PAYLOAD=$(cat <<'EOF'
         "target_index_name": "cohere-wiki-en-768-5m",
         "num_vectors": 5000000,
         "query_k": 10,
-        "time_period": 1800
+        "time_period": 300
       }
     },
     {
@@ -58,7 +58,7 @@ PAYLOAD=$(cat <<'EOF'
         "target_index_name": "cohere-wiki-en-768-1m",
         "num_vectors": 1000000,
         "query_k": 100,
-        "time_period": 1800
+        "time_period": 300
       }
     },
     {
@@ -69,7 +69,7 @@ PAYLOAD=$(cat <<'EOF'
         "target_index_name": "cohere-wiki-en-768-1m",
         "num_vectors": 1000000,
         "query_k": 10,
-        "time_period": 1800
+        "time_period": 300
       }
     },
     {
@@ -81,7 +81,7 @@ PAYLOAD=$(cat <<'EOF'
         "num_vectors": 5000000,
         "query_k": 100,
         "hnsw_ef_search": 256,
-        "time_period": 1800
+        "time_period": 300
       }
     },
     {
@@ -93,7 +93,7 @@ PAYLOAD=$(cat <<'EOF'
         "num_vectors": 5000000,
         "query_k": 10,
         "hnsw_ef_search": 256,
-        "time_period": 1800
+        "time_period": 300
       }
     },
     {
@@ -105,7 +105,7 @@ PAYLOAD=$(cat <<'EOF'
         "num_vectors": 1000000,
         "query_k": 100,
         "hnsw_ef_search": 256,
-        "time_period": 1800
+        "time_period": 300
       }
     },
     {
@@ -117,7 +117,7 @@ PAYLOAD=$(cat <<'EOF'
         "num_vectors": 1000000,
         "query_k": 10,
         "hnsw_ef_search": 256,
-        "time_period": 1800
+        "time_period": 300
       }
     }
   ]
@@ -158,7 +158,7 @@ echo ""
 PREV_STATUS=""
 PREV_SCENARIO=""
 while true; do
-  STATUS_RESPONSE=$(curl -s "$API_URL/api/v1/benchmark/$JOB_ID/status")
+  STATUS_RESPONSE=$(curl -s "$API_URL/api/v1/benchmark/$JOB_ID")
   if ! echo "$STATUS_RESPONSE" | jq '.' > /dev/null 2>&1; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for job to appear (got: ${STATUS_RESPONSE:-(empty)})"
     sleep 10
@@ -195,7 +195,7 @@ while true; do
     
     # Get full job details
     echo "Final job details:"
-    curl -s "$API_URL/api/v1/benchmark/$JOB_ID/status" | jq '{
+    curl -s "$API_URL/api/v1/benchmark/$JOB_ID" | jq '{
       job_id,
       status,
       scenarios_completed,
