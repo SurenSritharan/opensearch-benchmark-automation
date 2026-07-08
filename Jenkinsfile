@@ -10,18 +10,18 @@ metadata:
 spec:
   serviceAccountName: jenkins
   containers:
-  - name: python
-    image: python:3.11-slim
+  - name: curl
+    image: alpine/curl:latest
     command:
     - cat
     tty: true
     resources:
       requests:
-        memory: "2Gi"
-        cpu: "1000m"
+        memory: "128Mi"
+        cpu: "100m"
       limits:
-        memory: "4Gi"
-        cpu: "2000m"
+        memory: "256Mi"
+        cpu: "250m"
   - name: kubectl
     image: bitnami/kubectl:latest
     command:
@@ -37,373 +37,247 @@ spec:
 """
         }
     }
-    
+
     parameters {
         choice(
-            name: 'DATASET',
-            choices: ['cohere-1m-768-dp', 'msmarco'],
-            description: 'Dataset to benchmark'
-        )
-        choice(
-            name: 'ENGINES',
-            choices: ['all', 'jvector', 'faiss', 'lucene', 'jvector,faiss', 'jvector,lucene', 'faiss,lucene'],
-            description: 'Vector search engines to test'
-        )
-        choice(
-            name: 'SCENARIOS',
-            choices: ['all', 'index', 'merge', 'search', 'index,search', 'index,merge,search'],
-            description: 'Benchmark scenarios to run'
+            name: 'PIPELINE',
+            choices: [
+                'all',
+                'wiki-1m',
+                'wiki-5m',
+                'msmarco-1m',
+                'msmarco-5m',
+                'search-only'
+            ],
+            description: 'Test pipeline to run. "all" runs both datasets at 1M + 5M. "search-only" requires indexes to already exist.'
         )
         string(
-            name: 'SEARCH_CLIENTS',
-            defaultValue: '1,2,4,8',
-            description: 'Comma-separated list of concurrent search clients'
-        )
-        string(
-            name: 'QUERY_COUNT',
-            defaultValue: '10000',
-            description: 'Number of queries to execute per search scenario'
+            name: 'API_URL',
+            defaultValue: 'http://34.132.114.18',
+            description: 'Base URL of the benchmark cloud service API'
         )
         booleanParam(
-            name: 'ENABLE_PROFILING',
+            name: 'SCALE_CLUSTERS',
             defaultValue: true,
-            description: 'Enable CPU profiling with async-profiler'
+            description: 'Scale up clusters before benchmarking and scale them down afterwards'
+        )
+        choice(
+            name: 'SCALE_TARGET',
+            choices: ['all', 'os-jvector', 'os-faiss', 'os-lucene'],
+            description: 'Which cluster namespace(s) to scale up/down (only used when SCALE_CLUSTERS is true)'
         )
         booleanParam(
-            name: 'ENABLE_METRICS',
-            defaultValue: true,
-            description: 'Enable GKE metrics collection'
+            name: 'REDEPLOY_CLUSTERS',
+            defaultValue: false,
+            description: 'Re-deploy OpenSearch clusters before benchmarking (applies OPENSEARCH_VERSION)'
         )
         string(
-            name: 'METRICS_INTERVAL',
-            defaultValue: '10',
-            description: 'Metrics collection interval in seconds'
+            name: 'OPENSEARCH_VERSION',
+            defaultValue: '3.6.0',
+            description: 'OpenSearch version to deploy (only used when REDEPLOY_CLUSTERS is true)'
         )
-        string(
-            name: 'METRICS_DURATION',
-            defaultValue: '3600',
-            description: 'Maximum metrics collection duration in seconds'
+        booleanParam(
+            name: 'DELETE_PVCS',
+            defaultValue: false,
+            description: 'Delete PVCs during re-deploy — destroys all indexed data (only used when REDEPLOY_CLUSTERS is true)'
         )
     }
-    
+
     environment {
         RESULTS_DIR = "results/${BUILD_ID}"
-        PYTHON_VENV = "${WORKSPACE}/venv"
-        KUBECONFIG = credentials('gke-kubeconfig')
+        KUBECONFIG  = credentials('gke-kubeconfig')
     }
-    
+
     options {
         buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
         timestamps()
-        timeout(time: 6, unit: 'HOURS')
+        timeout(time: 12, unit: 'HOURS')
         disableConcurrentBuilds()
     }
-    
+
     stages {
-        stage('Setup Environment') {
+        // ── 1. Cluster re-deploy (optional, run before scale-up) ──────────────
+        stage('Re-deploy Clusters') {
+            when {
+                expression { params.REDEPLOY_CLUSTERS }
+            }
             steps {
-                container('python') {
-                    script {
-                        echo "🔧 Setting up Python environment..."
-                        sh '''
-                            python3 -m venv ${PYTHON_VENV}
-                            . ${PYTHON_VENV}/bin/activate
-                            pip install --upgrade pip
-                            pip install -r requirements.txt
-                        '''
-                    }
-                }
                 container('kubectl') {
                     script {
-                        echo "🔍 Verifying GKE cluster connectivity..."
+                        def extraArgs = "--version ${params.OPENSEARCH_VERSION} --force"
+                        if (params.DELETE_PVCS) {
+                            extraArgs += " --delete-pvcs"
+                        }
+
+                        def target = params.SCALE_TARGET
+                        if (target == 'all') {
+                            echo "Re-deploying all OpenSearch clusters (version ${params.OPENSEARCH_VERSION})..."
+                            sh "gke-manifest/deploy-all-clusters.sh ${extraArgs}"
+                        } else {
+                            echo "Re-deploying ${target} (version ${params.OPENSEARCH_VERSION})..."
+                            sh "gke-manifest/deploy-namespace-cluster.sh ${target} ${extraArgs}"
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── 2. Scale up clusters ───────────────────────────────────────────────
+        stage('Scale Up Clusters') {
+            when {
+                expression { params.SCALE_CLUSTERS && !params.REDEPLOY_CLUSTERS }
+            }
+            steps {
+                container('kubectl') {
+                    script {
+                        echo "Scaling up ${params.SCALE_TARGET}..."
+                        sh "gke-manifest/scale-up-clusters.sh ${params.SCALE_TARGET}"
+                    }
+                }
+            }
+        }
+
+        // ── 3. Verify cluster health ───────────────────────────────────────────
+        stage('Verify Cluster Health') {
+            steps {
+                container('kubectl') {
+                    script {
+                        echo "Verifying cluster health before benchmark..."
                         sh '''
                             kubectl cluster-info
                             kubectl get nodes
-                            kubectl get namespaces | grep "^os-"
+                            for ns in os-jvector os-faiss os-lucene; do
+                                if kubectl get namespace $ns &>/dev/null; then
+                                    echo "--- $ns ---"
+                                    kubectl get pods -n $ns
+                                fi
+                            done
                         '''
                     }
                 }
             }
         }
-        
-        stage('Pre-Benchmark Validation') {
-            parallel {
-                stage('Validate Cluster State') {
-                    steps {
-                        container('kubectl') {
-                            script {
-                                echo "✅ Validating cluster state..."
-                                sh '''
-                                    # Check if metrics-server is available
-                                    kubectl get deployment metrics-server -n kube-system || echo "⚠️ metrics-server not found"
-                                    
-                                    # Verify node pools
-                                    kubectl get nodes -o json | jq -r '.items[] | .metadata.labels["cloud.google.com/gke-nodepool"]' | sort | uniq
-                                    
-                                    # Check OpenSearch pods status
-                                    for ns in os-jvector os-faiss os-lucene; do
-                                        if kubectl get namespace $ns &>/dev/null; then
-                                            echo "Checking namespace: $ns"
-                                            kubectl get pods -n $ns
-                                        fi
-                                    done
-                                '''
-                            }
-                        }
-                    }
-                }
-                
-                stage('Collect Baseline Metrics') {
-                    when {
-                        expression { params.ENABLE_METRICS }
-                    }
-                    steps {
-                        container('python') {
-                            script {
-                                echo "📸 Collecting baseline metrics snapshots..."
-                                def engines = params.ENGINES == 'all' ? ['jvector', 'faiss', 'lucene'] : params.ENGINES.split(',')
-                                
-                                engines.each { engine ->
-                                    sh """
-                                        . ${PYTHON_VENV}/bin/activate
-                                        python collect_metrics.py \
-                                            --namespace os-${engine} \
-                                            --snapshot \
-                                            --label "baseline-pre-benchmark" \
-                                            --output ${RESULTS_DIR}/${engine}-metrics/baseline
-                                    """
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('Run Benchmarks with Metrics') {
+
+        // ── 4. Run benchmark via cloud service ────────────────────────────────
+        stage('Run Benchmark') {
             steps {
-                container('python') {
+                container('curl') {
                     script {
-                        echo "🚀 Starting benchmark execution with metrics collection..."
-                        
-                        // Prepare benchmark arguments
-                        def benchmarkArgs = [
-                            "--dataset ${params.DATASET}",
-                            "--engines ${params.ENGINES}",
-                            "--scenarios ${params.SCENARIOS}",
-                            "--search-clients ${params.SEARCH_CLIENTS}",
-                            "--query-count ${params.QUERY_COUNT}",
-                            "--results-dir ${RESULTS_DIR}"
+                        def scriptMap = [
+                            'all'        : 'cloud-service/scripts/test-all-complete.sh',
+                            'wiki-1m'    : 'cloud-service/scripts/test-wiki-1m-complete.sh',
+                            'wiki-5m'    : 'cloud-service/scripts/test-wiki-5m-complete.sh',
+                            'msmarco-1m' : 'cloud-service/scripts/test-msmarco-1m-complete.sh',
+                            'msmarco-5m' : 'cloud-service/scripts/test-msmarco-5m-complete.sh',
+                            'search-only': 'cloud-service/scripts/test-search.sh'
                         ]
-                        
-                        if (!params.ENABLE_PROFILING) {
-                            benchmarkArgs.add("--no-profiling")
+
+                        def script = scriptMap[params.PIPELINE]
+                        if (!script) {
+                            error("Unknown PIPELINE value: ${params.PIPELINE}")
                         }
-                        
-                        // Start metrics collection in background if enabled
-                        if (params.ENABLE_METRICS) {
-                            def engines = params.ENGINES == 'all' ? ['jvector', 'faiss', 'lucene'] : params.ENGINES.split(',')
-                            
-                            engines.each { engine ->
-                                echo "📊 Starting metrics collection for ${engine}..."
-                                def metricsCmd = """
-                                    . ${PYTHON_VENV}/bin/activate
-                                    python collect_metrics.py \
-                                        --namespace os-${engine} \
-                                        --duration ${params.METRICS_DURATION} \
-                                        --interval ${params.METRICS_INTERVAL} \
-                                        --scenario "jenkins-build-${BUILD_ID}" \
-                                        --output ${RESULTS_DIR}/${engine}-metrics \
-                                        > ${RESULTS_DIR}/${engine}-metrics-collection.log 2>&1 &
-                                    echo \$! > ${RESULTS_DIR}/${engine}-metrics.pid
-                                """
-                                sh metricsCmd
-                            }
-                        }
-                        
-                        // Run the main benchmark
-                        try {
-                            sh """
-                                . ${PYTHON_VENV}/bin/activate
-                                python run_benchmark.py ${benchmarkArgs.join(' ')}
-                            """
-                        } finally {
-                            // Stop metrics collection processes
-                            if (params.ENABLE_METRICS) {
-                                echo "🛑 Stopping metrics collection..."
-                                sh """
-                                    for pidfile in ${RESULTS_DIR}/*-metrics.pid; do
-                                        if [ -f "\$pidfile" ]; then
-                                            pid=\$(cat "\$pidfile")
-                                            kill \$pid 2>/dev/null || true
-                                            rm "\$pidfile"
-                                        fi
-                                    done
-                                """
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('Post-Benchmark Analysis') {
-            parallel {
-                stage('Collect Final Metrics') {
-                    when {
-                        expression { params.ENABLE_METRICS }
-                    }
-                    steps {
-                        container('python') {
-                            script {
-                                echo "📸 Collecting post-benchmark metrics snapshots..."
-                                def engines = params.ENGINES == 'all' ? ['jvector', 'faiss', 'lucene'] : params.ENGINES.split(',')
-                                
-                                engines.each { engine ->
-                                    sh """
-                                        . ${PYTHON_VENV}/bin/activate
-                                        python collect_metrics.py \
-                                            --namespace os-${engine} \
-                                            --snapshot \
-                                            --label "post-benchmark" \
-                                            --output ${RESULTS_DIR}/${engine}-metrics/final
-                                    """
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                stage('Generate Metrics Summary') {
-                    when {
-                        expression { params.ENABLE_METRICS }
-                    }
-                    steps {
-                        container('python') {
-                            script {
-                                echo "📈 Generating metrics summary reports..."
-                                sh """
-                                    . ${PYTHON_VENV}/bin/activate
-                                    
-                                    # Generate summary for each engine
-                                    for metrics_dir in ${RESULTS_DIR}/*-metrics; do
-                                        if [ -d "\$metrics_dir" ]; then
-                                            engine=\$(basename "\$metrics_dir" | sed 's/-metrics//')
-                                            echo "Generating summary for \$engine..."
-                                            
-                                            # Create summary using jq if metrics files exist
-                                            if [ -f "\$metrics_dir/gke_metrics.json" ]; then
-                                                jq -r '
-                                                    "=== Metrics Summary for " + .namespace + " ===",
-                                                    "Duration: " + (.duration_seconds | tostring) + "s",
-                                                    "Samples: " + (.summary.total_samples | tostring),
-                                                    "",
-                                                    "Node Metrics:",
-                                                    (.summary.nodes | to_entries[] | 
-                                                        "  " + .key + ":",
-                                                        "    CPU Avg: " + (.value.cpu_avg | tostring) + "%",
-                                                        "    CPU Max: " + (.value.cpu_max | tostring) + "%",
-                                                        "    Memory Avg: " + (.value.memory_avg | tostring) + "%",
-                                                        "    Memory Max: " + (.value.memory_max | tostring) + "%"
-                                                    )
-                                                ' "\$metrics_dir/gke_metrics.json" > "\$metrics_dir/summary.txt"
-                                            fi
-                                        fi
-                                    done
-                                """
-                            }
-                        }
-                    }
-                }
-                
-                stage('Collect Cluster Telemetry') {
-                    steps {
-                        container('kubectl') {
-                            script {
-                                echo "📊 Collecting cluster telemetry..."
-                                def engines = params.ENGINES == 'all' ? ['jvector', 'faiss', 'lucene'] : params.ENGINES.split(',')
-                                
-                                engines.each { engine ->
-                                    sh """
-                                        mkdir -p ${RESULTS_DIR}/${engine}-metrics/cluster-telemetry
-                                        
-                                        # Collect pod status
-                                        kubectl get pods -n os-${engine} -o json > ${RESULTS_DIR}/${engine}-metrics/cluster-telemetry/pods.json
-                                        
-                                        # Collect node information
-                                        kubectl get nodes -o json > ${RESULTS_DIR}/${engine}-metrics/cluster-telemetry/nodes.json
-                                        
-                                        # Collect events
-                                        kubectl get events -n os-${engine} --sort-by='.lastTimestamp' > ${RESULTS_DIR}/${engine}-metrics/cluster-telemetry/events.txt
-                                    """
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        stage('Archive Results') {
-            steps {
-                script {
-                    echo "💾 Archiving benchmark results and metrics..."
-                    
-                    // Archive all results
-                    archiveArtifacts artifacts: "${RESULTS_DIR}/**/*", 
-                                     allowEmptyArchive: false,
-                                     fingerprint: true
-                    
-                    // Generate and archive summary report
-                    container('python') {
+
+                        echo "Running pipeline '${params.PIPELINE}' against ${params.API_URL} ..."
                         sh """
-                            . ${PYTHON_VENV}/bin/activate
-                            
-                            # Create a consolidated summary
+                            chmod +x ${script}
+                            API_URL=${params.API_URL} ${script} 2>&1 | tee benchmark-run.log
+
+                            # Capture the job_id from the log for later use
+                            JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run.log | tail -1 || true)
+                            if [ -n "\$JOB_ID" ]; then
+                                echo "\$JOB_ID" > job_id.txt
+                                echo "Job ID captured: \$JOB_ID"
+                            fi
+                        """
+                    }
+                }
+            }
+        }
+
+        // ── 5. Fetch & save results ────────────────────────────────────────────
+        stage('Fetch Results') {
+            steps {
+                container('curl') {
+                    script {
+                        echo "Fetching final results from cloud service..."
+                        sh """
+                            mkdir -p ${RESULTS_DIR}
+                            cp benchmark-run.log ${RESULTS_DIR}/benchmark-run.log
+
+                            if [ -f job_id.txt ]; then
+                                JOB_ID=\$(cat job_id.txt)
+                                echo "Fetching results for job: \$JOB_ID"
+
+                                # Job status summary
+                                curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID" \
+                                    | jq '.' > ${RESULTS_DIR}/job-status.json
+
+                                # Full sweep results
+                                curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results" \
+                                    | jq '.' > ${RESULTS_DIR}/results.json
+
+                                echo "Results saved to ${RESULTS_DIR}/"
+                                echo ""
+                                echo "Summary:"
+                                jq '{job_id, status, scenarios_completed, scenarios_total}' \
+                                    ${RESULTS_DIR}/job-status.json
+
+                                echo ""
+                                echo "View results at: ${params.API_URL}/results.html?job_id=\$JOB_ID"
+                            else
+                                echo "WARNING: No job_id.txt found — results may be embedded in the log above."
+                            fi
+
+                            # Write build summary
                             cat > ${RESULTS_DIR}/BUILD_SUMMARY.txt << EOF
 ========================================
 OpenSearch Benchmark Build Summary
 ========================================
-Build ID: ${BUILD_ID}
+Build ID:  ${BUILD_ID}
 Build URL: ${BUILD_URL}
-Date: \$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+Date:      \$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
 Parameters:
-- Dataset: ${params.DATASET}
-- Engines: ${params.ENGINES}
-- Scenarios: ${params.SCENARIOS}
-- Search Clients: ${params.SEARCH_CLIENTS}
-- Query Count: ${params.QUERY_COUNT}
-- Profiling: ${params.ENABLE_PROFILING}
-- Metrics Collection: ${params.ENABLE_METRICS}
+  Pipeline:           ${params.PIPELINE}
+  API URL:            ${params.API_URL}
+  Scale Clusters:     ${params.SCALE_CLUSTERS}
+  Scale Target:       ${params.SCALE_TARGET}
+  Redeploy Clusters:  ${params.REDEPLOY_CLUSTERS}
+  OpenSearch Version: ${params.OPENSEARCH_VERSION}
 
 Results Directory: ${RESULTS_DIR}
 ========================================
 EOF
-                            
-                            # Append metrics summaries if they exist
-                            for summary in ${RESULTS_DIR}/*-metrics/summary.txt; do
-                                if [ -f "\$summary" ]; then
-                                    echo "" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
-                                    cat "\$summary" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
-                                fi
-                            done
-                            
                             cat ${RESULTS_DIR}/BUILD_SUMMARY.txt
                         """
                     }
                 }
             }
         }
+
+        // ── 6. Archive results ─────────────────────────────────────────────────
+        stage('Archive Results') {
+            steps {
+                archiveArtifacts artifacts: "${RESULTS_DIR}/**/*",
+                                 allowEmptyArchive: true,
+                                 fingerprint: true
+            }
+        }
     }
-    
+
     post {
         always {
             script {
-                echo "🧹 Cleaning up..."
-                
-                // Display final summary
-                container('python') {
+                // Scale down clusters after the run (even on failure)
+                if (params.SCALE_CLUSTERS) {
+                    container('kubectl') {
+                        echo "Scaling down ${params.SCALE_TARGET} to conserve resources..."
+                        sh "gke-manifest/scale-down-clusters.sh ${params.SCALE_TARGET} || true"
+                    }
+                }
+
+                // Print final summary if it was written
+                container('curl') {
                     sh """
                         if [ -f ${RESULTS_DIR}/BUILD_SUMMARY.txt ]; then
                             cat ${RESULTS_DIR}/BUILD_SUMMARY.txt
@@ -412,23 +286,21 @@ EOF
                 }
             }
         }
-        
+
         success {
-            echo "✅ Benchmark pipeline completed successfully!"
+            echo "Benchmark pipeline completed successfully."
         }
-        
+
         failure {
-            echo "❌ Benchmark pipeline failed. Check logs for details."
+            echo "Benchmark pipeline failed. Check logs for details."
         }
-        
+
         cleanup {
-            // Clean up workspace but preserve results
             cleanWs(
                 deleteDirs: true,
                 patterns: [
-                    [pattern: 'venv/**', type: 'INCLUDE'],
                     [pattern: '.pytest_cache/**', type: 'INCLUDE'],
-                    [pattern: '__pycache__/**', type: 'INCLUDE']
+                    [pattern: '__pycache__/**',   type: 'INCLUDE']
                 ]
             )
         }
