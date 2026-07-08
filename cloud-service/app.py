@@ -427,8 +427,10 @@ def _commit_results_to_git(job_id: str, final_status: str) -> None:
     try:
         commit_msg = f"results: add {job_id} [{final_status}]"
 
-        # Stage first so pull --rebase doesn't fail on unstaged changes
-        subprocess.run(["git", "add", job_id],
+        # Reset any previously staged changes so the index is clean before we
+        # pull. This handles the case where a prior job's git add was staged but
+        # never committed (e.g. because the pod restarted mid-push).
+        subprocess.run(["git", "reset", "HEAD"],
                        cwd=str(RESULTS_DIR), capture_output=True, text=True, timeout=30)
 
         # Only pull if remote branch already exists (repo may be empty on first push)
@@ -445,13 +447,17 @@ def _commit_results_to_git(job_id: str, final_status: str) -> None:
                 return
 
         for cmd in [
-            ["git", "add", job_id],  # re-add in case pull brought in new files
+            ["git", "add", job_id],
             ["git", "commit", "-m", commit_msg],
             ["git", "push", "--set-upstream", "origin", "main"],
         ]:
             r = subprocess.run(cmd, cwd=str(RESULTS_DIR),
                                capture_output=True, text=True, timeout=120)
             if r.returncode != 0:
+                # git commit exits 1 when there is nothing new to stage — not fatal.
+                if cmd[1] == "commit" and r.returncode == 1:
+                    logger.info(f"git commit-back: nothing to commit for {job_id}, skipping push")
+                    return
                 logger.warning(f"git commit-back: `{' '.join(cmd)}` failed: {r.stderr.strip()}")
                 return
 
