@@ -198,13 +198,12 @@ PAYLOAD=$(cat <<'EOF'
         "engine": "jvector",
         "method_name": "disk_ann",
         "mode": "on_disk",
-        "compression_level": "16x",
         "target_index_primary_shards": 3,
         "target_index_replica_shards": 0,
         "refresh_interval": "-1",
         "translog_flush_threshold_size": "15gb",
-        "hnsw_ef_construction": 128,
-        "hnsw_m": 16,
+        "hnsw_ef_construction": 256,
+        "hnsw_m": 32,
         "max_merged_segment": "25gb"
       }
     },
@@ -282,13 +281,12 @@ PAYLOAD=$(cat <<'EOF'
         "engine": "jvector",
         "method_name": "disk_ann",
         "mode": "on_disk",
-        "compression_level": "16x",
         "target_index_primary_shards": 3,
         "target_index_replica_shards": 0,
         "refresh_interval": "-1",
         "translog_flush_threshold_size": "15gb",
-        "hnsw_ef_construction": 128,
-        "hnsw_m": 16,
+        "hnsw_ef_construction": 256,
+        "hnsw_m": 32,
         "max_merged_segment": "25gb"
       }
     },
