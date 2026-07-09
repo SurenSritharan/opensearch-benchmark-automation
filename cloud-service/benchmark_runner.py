@@ -541,21 +541,7 @@ class BenchmarkRunner:
             available = ', '.join(available_engines)
             return f"Engine '{engine}' not supported for dataset '{dataset}'. Available: {available}"
         
-        # If using param_files (legacy), check if file exists
-        if engine in param_files:
-            try:
-                params_file = self.config.get_workload_params_file(dataset, engine)
-                if not Path(params_file).exists():
-                    return f"Workload params file not found: {params_file}"
-            except Exception as e:
-                return f"Error getting params file: {e}"
-        
-        # Check if workload path exists
-        workload_path = self.config.get_workload_path(dataset)
-        if not Path(workload_path).exists():
-            return f"Workload path not found: {workload_path}"
-        
-        return None  # Valid
+        return None  # Valid — filesystem checks happen at execution time on the worker
     
     def _check_cluster_health(self, target_host: str) -> bool:
         """Check if OpenSearch cluster is healthy and ready"""
