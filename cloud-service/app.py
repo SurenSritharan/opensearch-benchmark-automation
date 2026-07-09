@@ -319,9 +319,6 @@ def _start_processors_for_pending_engines():
         logger.error(f"Startup: failed to start processors for pending engines: {e}")
 
 
-_start_processors_for_pending_engines()
-
-
 def process_engine_queue(engine: str):
     """Process queued jobs for a specific engine (runs in background thread).
     This thread never terminates — it polls for new jobs indefinitely.
@@ -522,6 +519,10 @@ def _save_index_snapshot(engine: str, index_name: str, results_dir: Path) -> Non
         logger.info(f"Saved index snapshot for {index_name} to {out}")
     except Exception as e:
         logger.warning(f"index snapshot failed for {index_name}: {e}")
+
+
+# Call after process_engine_queue is defined so executor.submit can reference it
+_start_processors_for_pending_engines()
 
 
 def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event = None):
