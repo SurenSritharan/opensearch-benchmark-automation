@@ -6,8 +6,8 @@ pipeline {
     // The GKE pod → Jenkins callback (JNLP) is not needed at all.
     //
     // Prerequisites on the Jenkins node: kubectl, curl, jq, bash
-    // The kubernetes-cli plugin (withKubeConfig) handles kubeconfig setup
-    // from the gcp-jenkins-key service account credential automatically.
+    // Kubeconfig is sourced from the gke-kubeconfig Secret file credential,
+    // generated from the jenkins ServiceAccount in benchmark-api namespace.
     agent any
 
     parameters {
@@ -60,6 +60,9 @@ pipeline {
 
     environment {
         RESULTS_DIR = "results/${BUILD_ID}"
+        // Kubeconfig written from the jenkins ServiceAccount credential.
+        // Scoped to the workspace so concurrent builds don't collide.
+        KUBECONFIG  = "${env.WORKSPACE}/.kube/config"
     }
 
     options {
@@ -72,21 +75,21 @@ pipeline {
     stages {
 
         // ── 1. Prepare ─────────────────────────────────────────────────────────
+        // Write the kubeconfig from the Jenkins credential into the workspace.
+        // KUBECONFIG env var is set pipeline-wide so every kubectl call in every
+        // subsequent stage picks it up automatically.
         stage('Prepare') {
             steps {
-                sh 'chmod +x gke-manifest/*.sh cloud-service/scripts/*.sh'
-                withKubeConfig([credentialsId: 'gcp-jenkins-key']) {
+                withCredentials([file(credentialsId: 'gke-kubeconfig', variable: 'KUBECONFIG_SRC')]) {
                     sh '''
-                        echo "=== Cluster info ==="
-                        kubectl cluster-info
-                        echo ""
-                        echo "=== Current context ==="
-                        kubectl config current-context
-                        echo ""
-                        echo "=== All namespaces ==="
-                        kubectl get namespaces
+                        mkdir -p "$(dirname "${KUBECONFIG}")"
+                        cp "${KUBECONFIG_SRC}" "${KUBECONFIG}"
+                        chmod 600 "${KUBECONFIG}"
                     '''
                 }
+                sh '''
+                    chmod +x gke-manifest/*.sh cloud-service/scripts/*.sh
+                '''
             }
         }
 
@@ -96,18 +99,16 @@ pipeline {
                 expression { params.REDEPLOY_CLUSTERS }
             }
             steps {
-                withKubeConfig([credentialsId: 'gcp-jenkins-key']) {
-                    script {
-                        def extraArgs = "--version ${params.OPENSEARCH_VERSION} --force"
-                        if (params.DELETE_PVCS) { extraArgs += " --delete-pvcs" }
+                script {
+                    def extraArgs = "--version ${params.OPENSEARCH_VERSION} --force"
+                    if (params.DELETE_PVCS) { extraArgs += " --delete-pvcs" }
 
-                        if (params.ENGINE_TARGET == 'all') {
-                            echo "Re-deploying all OpenSearch clusters (version ${params.OPENSEARCH_VERSION})..."
-                            sh "gke-manifest/deploy-all-clusters.sh ${extraArgs}"
-                        } else {
-                            echo "Re-deploying ${params.ENGINE_TARGET} (version ${params.OPENSEARCH_VERSION})..."
-                            sh "gke-manifest/deploy-namespace-cluster.sh ${params.ENGINE_TARGET} ${extraArgs}"
-                        }
+                    if (params.ENGINE_TARGET == 'all') {
+                        echo "Re-deploying all OpenSearch clusters (version ${params.OPENSEARCH_VERSION})..."
+                        sh "gke-manifest/deploy-all-clusters.sh ${extraArgs}"
+                    } else {
+                        echo "Re-deploying ${params.ENGINE_TARGET} (version ${params.OPENSEARCH_VERSION})..."
+                        sh "gke-manifest/deploy-namespace-cluster.sh ${params.ENGINE_TARGET} ${extraArgs}"
                     }
                 }
             }
@@ -125,47 +126,45 @@ pipeline {
                 expression { params.SCALE_CLUSTERS && !params.REDEPLOY_CLUSTERS }
             }
             steps {
-                withKubeConfig([credentialsId: 'gcp-jenkins-key']) {
-                    script {
-                        def engines = params.ENGINE_TARGET == 'all'
-                            ? ['jvector', 'faiss', 'lucene']
-                            : [params.ENGINE_TARGET.replace('os-', '')]
+                script {
+                    def engines = params.ENGINE_TARGET == 'all'
+                        ? ['jvector', 'faiss', 'lucene']
+                        : [params.ENGINE_TARGET.replace('os-', '')]
 
-                        echo "Scaling up OpenSearch clusters: ${engines}"
-                        if (params.ENGINE_TARGET == 'all') {
-                            sh "gke-manifest/scale-up-clusters.sh all"
-                        } else {
-                            sh "gke-manifest/scale-up-clusters.sh ${params.ENGINE_TARGET}"
-                        }
+                    echo "Scaling up OpenSearch clusters: ${engines}"
+                    if (params.ENGINE_TARGET == 'all') {
+                        sh "gke-manifest/scale-up-clusters.sh all"
+                    } else {
+                        sh "gke-manifest/scale-up-clusters.sh ${params.ENGINE_TARGET}"
+                    }
 
-                        echo "Scaling up API server in benchmark-api namespace..."
-                        sh '''
-                            kubectl scale deployment opensearch-benchmark-api-server \
+                    echo "Scaling up API server in benchmark-api namespace..."
+                    sh '''
+                        kubectl scale deployment opensearch-benchmark-api-server \
+                            --replicas=1 -n benchmark-api
+                    '''
+
+                    echo "Scaling up benchmark worker(s) in benchmark-api namespace..."
+                    engines.each { engine ->
+                        sh """
+                            kubectl scale statefulset opensearch-benchmark-worker-${engine} \
                                 --replicas=1 -n benchmark-api
-                        '''
+                        """
+                    }
 
-                        echo "Scaling up benchmark worker(s) in benchmark-api namespace..."
-                        engines.each { engine ->
-                            sh """
-                                kubectl scale statefulset opensearch-benchmark-worker-${engine} \
-                                    --replicas=1 -n benchmark-api
-                            """
-                        }
+                    echo "Waiting for API server to be ready..."
+                    sh '''
+                        kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
+                            -n benchmark-api --timeout=300s
+                    '''
 
-                        echo "Waiting for API server to be ready..."
-                        sh '''
-                            kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
-                                -n benchmark-api --timeout=300s
-                        '''
-
-                        echo "Waiting for benchmark worker(s) to be ready..."
-                        engines.each { engine ->
-                            sh """
-                                kubectl wait --for=condition=ready pod \
-                                    -l app=opensearch-benchmark,component=worker,engine=${engine} \
-                                    -n benchmark-api --timeout=600s
-                            """
-                        }
+                    echo "Waiting for benchmark worker(s) to be ready..."
+                    engines.each { engine ->
+                        sh """
+                            kubectl wait --for=condition=ready pod \
+                                -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                -n benchmark-api --timeout=600s
+                        """
                     }
                 }
             }
@@ -174,22 +173,16 @@ pipeline {
         // ── 4. Verify cluster and worker health ────────────────────────────────
         stage('Verify Health') {
             steps {
-                withKubeConfig([credentialsId: 'gcp-jenkins-key']) {
-                    sh '''
-                        kubectl cluster-info
-                        echo ""
-                        echo "=== OpenSearch Clusters ==="
-                        for ns in os-jvector os-faiss os-lucene; do
-                            if kubectl get namespace $ns &>/dev/null; then
-                                echo "--- $ns ---"
-                                kubectl get pods -n $ns
-                            fi
-                        done
-                        echo ""
-                        echo "=== Benchmark API (benchmark-api namespace) ==="
-                        kubectl get pods -n benchmark-api
-                    '''
-                }
+                sh '''
+                    echo "=== OpenSearch Clusters ==="
+                    for ns in os-jvector os-faiss os-lucene; do
+                        echo "--- $ns ---"
+                        kubectl get pods -n $ns 2>/dev/null || echo "(not deployed)"
+                    done
+                    echo ""
+                    echo "=== Benchmark API (benchmark-api namespace) ==="
+                    kubectl get pods -n benchmark-api
+                '''
                 sh """
                     curl -sf ${params.API_URL}/health || \
                         (echo "WARNING: API health check failed — service may still be starting" && true)
@@ -330,38 +323,34 @@ EOF
         always {
             script {
                 if (params.SCALE_CLUSTERS) {
-                    withKubeConfig([credentialsId: 'gcp-jenkins-key']) {
-                        script {
-                            def engines = params.ENGINE_TARGET == 'all'
-                                ? ['jvector', 'faiss', 'lucene']
-                                : [params.ENGINE_TARGET.replace('os-', '')]
+                    def engines = params.ENGINE_TARGET == 'all'
+                        ? ['jvector', 'faiss', 'lucene']
+                        : [params.ENGINE_TARGET.replace('os-', '')]
 
-                            // Scale down benchmark workers first
-                            echo "Scaling down benchmark worker(s)..."
-                            engines.each { engine ->
-                                sh """
-                                    kubectl scale statefulset opensearch-benchmark-worker-${engine} \
-                                        --replicas=0 -n benchmark-api || true
-                                """
-                            }
+                    // Scale down benchmark workers first
+                    echo "Scaling down benchmark worker(s)..."
+                    engines.each { engine ->
+                        sh """
+                            kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                --replicas=0 -n benchmark-api || true
+                        """
+                    }
 
-                            // Scale down API server only when all workers are going down
-                            if (params.ENGINE_TARGET == 'all') {
-                                echo "Scaling down API server..."
-                                sh '''
-                                    kubectl scale deployment opensearch-benchmark-api-server \
-                                        --replicas=0 -n benchmark-api || true
-                                '''
-                            }
+                    // Scale down API server only when all workers are going down
+                    if (params.ENGINE_TARGET == 'all') {
+                        echo "Scaling down API server..."
+                        sh '''
+                            kubectl scale deployment opensearch-benchmark-api-server \
+                                --replicas=0 -n benchmark-api || true
+                        '''
+                    }
 
-                            // Scale down OpenSearch clusters
-                            echo "Scaling down OpenSearch cluster(s)..."
-                            if (params.ENGINE_TARGET == 'all') {
-                                sh "gke-manifest/scale-down-clusters.sh all || true"
-                            } else {
-                                sh "gke-manifest/scale-down-clusters.sh ${params.ENGINE_TARGET} || true"
-                            }
-                        }
+                    // Scale down OpenSearch clusters
+                    echo "Scaling down OpenSearch cluster(s)..."
+                    if (params.ENGINE_TARGET == 'all') {
+                        sh "gke-manifest/scale-down-clusters.sh all || true"
+                    } else {
+                        sh "gke-manifest/scale-down-clusters.sh ${params.ENGINE_TARGET} || true"
                     }
                 }
 
@@ -386,6 +375,7 @@ EOF
             cleanWs(
                 deleteDirs: true,
                 patterns: [
+                    [pattern: '.kube/**',        type: 'INCLUDE'],
                     [pattern: '.pytest_cache/**', type: 'INCLUDE'],
                     [pattern: '__pycache__/**',   type: 'INCLUDE']
                 ]
