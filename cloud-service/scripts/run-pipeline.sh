@@ -354,7 +354,7 @@ while true; do
     PREV_SCENARIO="$CURRENT_SCENARIO"
   fi
 
-  if [ "$STATUS" = "completed" ] || [ "$STATUS" = "error" ] || [ "$STATUS" = "cancelled" ]; then
+  if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ] || [ "$STATUS" = "error" ] || [ "$STATUS" = "cancelled" ]; then
     echo ""
     echo "=========================================="
     echo "Job finished with status: $STATUS"
