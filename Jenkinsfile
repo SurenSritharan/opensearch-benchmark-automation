@@ -9,6 +9,9 @@ metadata:
   labels:
     jenkins: agent
 spec:
+  serviceAccountName: jenkins
+  nodeSelector:
+    cloud.google.com/gke-nodepool: client-pool
   containers:
   - name: curl
     image: alpine/curl:latest
@@ -91,7 +94,6 @@ spec:
 
     environment {
         RESULTS_DIR = "results/${BUILD_ID}"
-        KUBECONFIG  = credentials('gke-kubeconfig')
     }
 
     options {
