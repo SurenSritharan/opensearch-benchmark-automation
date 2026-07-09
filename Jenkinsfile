@@ -5,17 +5,15 @@ pipeline {
     //   - HTTP access to the benchmark API LoadBalancer (outbound to GCP)
     // The GKE pod → Jenkins callback (JNLP) is not needed at all.
     //
-    // Prerequisites on the Jenkins node:
-    //   kubectl, curl, jq, bash  (all standard on a Linux Jenkins agent)
+    // Prerequisites on the Jenkins node: kubectl, curl, jq, bash
+    // The kubernetes-cli plugin (withKubeConfig) handles kubeconfig setup
+    // from the gcp-jenkins-key service account credential automatically.
     agent any
 
     parameters {
         choice(
             name: 'PIPELINE',
-            choices: [
-                'complete',
-                'search-only'
-            ],
+            choices: ['complete', 'search-only'],
             description: '"complete" runs create-index → bulk-ingest → refresh → force-merge → search for every selected engine. "search-only" runs search sweeps only (indexes must already exist).'
         )
         choice(
@@ -73,28 +71,37 @@ pipeline {
 
     stages {
 
-        // ── 1. Re-deploy OpenSearch clusters (optional) ────────────────────────
+        // ── 1. Prepare ─────────────────────────────────────────────────────────
+        stage('Prepare') {
+            steps {
+                sh 'chmod +x gke-manifest/*.sh cloud-service/scripts/*.sh'
+            }
+        }
+
+        // ── 2. Re-deploy OpenSearch clusters (optional) ────────────────────────
         stage('Re-deploy Clusters') {
             when {
                 expression { params.REDEPLOY_CLUSTERS }
             }
             steps {
-                script {
-                    def extraArgs = "--version ${params.OPENSEARCH_VERSION} --force"
-                    if (params.DELETE_PVCS) { extraArgs += " --delete-pvcs" }
+                withKubeConfig([credentialsId: 'gcp-jenkins-key']) {
+                    script {
+                        def extraArgs = "--version ${params.OPENSEARCH_VERSION} --force"
+                        if (params.DELETE_PVCS) { extraArgs += " --delete-pvcs" }
 
-                    if (params.ENGINE_TARGET == 'all') {
-                        echo "Re-deploying all OpenSearch clusters (version ${params.OPENSEARCH_VERSION})..."
-                        sh "gke-manifest/deploy-all-clusters.sh ${extraArgs}"
-                    } else {
-                        echo "Re-deploying ${params.ENGINE_TARGET} (version ${params.OPENSEARCH_VERSION})..."
-                        sh "gke-manifest/deploy-namespace-cluster.sh ${params.ENGINE_TARGET} ${extraArgs}"
+                        if (params.ENGINE_TARGET == 'all') {
+                            echo "Re-deploying all OpenSearch clusters (version ${params.OPENSEARCH_VERSION})..."
+                            sh "gke-manifest/deploy-all-clusters.sh ${extraArgs}"
+                        } else {
+                            echo "Re-deploying ${params.ENGINE_TARGET} (version ${params.OPENSEARCH_VERSION})..."
+                            sh "gke-manifest/deploy-namespace-cluster.sh ${params.ENGINE_TARGET} ${extraArgs}"
+                        }
                     }
                 }
             }
         }
 
-        // ── 2. Scale up OpenSearch clusters + benchmark workers ────────────────
+        // ── 3. Scale up OpenSearch clusters + benchmark workers ────────────────
         //    Each engine (jvector/faiss/lucene) has:
         //      - An OpenSearch cluster in its own namespace (os-<engine>)
         //      - A dedicated benchmark worker pod in the benchmark-api namespace
@@ -106,55 +113,56 @@ pipeline {
                 expression { params.SCALE_CLUSTERS && !params.REDEPLOY_CLUSTERS }
             }
             steps {
-                script {
-                    def engines = params.ENGINE_TARGET == 'all'
-                        ? ['jvector', 'faiss', 'lucene']
-                        : [params.ENGINE_TARGET.replace('os-', '')]
+                withKubeConfig([credentialsId: 'gcp-jenkins-key']) {
+                    script {
+                        def engines = params.ENGINE_TARGET == 'all'
+                            ? ['jvector', 'faiss', 'lucene']
+                            : [params.ENGINE_TARGET.replace('os-', '')]
 
-                    echo "Scaling up OpenSearch clusters: ${engines}"
-                    if (params.ENGINE_TARGET == 'all') {
-                        sh "gke-manifest/scale-up-clusters.sh all"
-                    } else {
-                        sh "gke-manifest/scale-up-clusters.sh ${params.ENGINE_TARGET}"
-                    }
+                        echo "Scaling up OpenSearch clusters: ${engines}"
+                        if (params.ENGINE_TARGET == 'all') {
+                            sh "gke-manifest/scale-up-clusters.sh all"
+                        } else {
+                            sh "gke-manifest/scale-up-clusters.sh ${params.ENGINE_TARGET}"
+                        }
 
-                    echo "Scaling up API server in benchmark-api namespace..."
-                    sh '''
-                        kubectl scale deployment opensearch-benchmark-api-server \
-                            --replicas=1 -n benchmark-api
-                    '''
-
-                    echo "Scaling up benchmark worker(s) in benchmark-api namespace..."
-                    engines.each { engine ->
-                        sh """
-                            kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                        echo "Scaling up API server in benchmark-api namespace..."
+                        sh '''
+                            kubectl scale deployment opensearch-benchmark-api-server \
                                 --replicas=1 -n benchmark-api
-                        """
-                    }
+                        '''
 
-                    echo "Waiting for API server to be ready..."
-                    sh '''
-                        kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
-                            -n benchmark-api --timeout=300s
-                    '''
+                        echo "Scaling up benchmark worker(s) in benchmark-api namespace..."
+                        engines.each { engine ->
+                            sh """
+                                kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                    --replicas=1 -n benchmark-api
+                            """
+                        }
 
-                    echo "Waiting for benchmark worker(s) to be ready..."
-                    engines.each { engine ->
-                        sh """
-                            kubectl wait --for=condition=ready pod \
-                                -l app=opensearch-benchmark,component=worker,engine=${engine} \
-                                -n benchmark-api --timeout=600s
-                        """
+                        echo "Waiting for API server to be ready..."
+                        sh '''
+                            kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
+                                -n benchmark-api --timeout=300s
+                        '''
+
+                        echo "Waiting for benchmark worker(s) to be ready..."
+                        engines.each { engine ->
+                            sh """
+                                kubectl wait --for=condition=ready pod \
+                                    -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                    -n benchmark-api --timeout=600s
+                            """
+                        }
                     }
                 }
             }
         }
 
-        // ── 3. Verify cluster and worker health ────────────────────────────────
+        // ── 4. Verify cluster and worker health ────────────────────────────────
         stage('Verify Health') {
             steps {
-                script {
-                    echo "Verifying OpenSearch cluster and benchmark worker health..."
+                withKubeConfig([credentialsId: 'gcp-jenkins-key']) {
                     sh '''
                         kubectl cluster-info
                         echo ""
@@ -169,20 +177,18 @@ pipeline {
                         echo "=== Benchmark API (benchmark-api namespace) ==="
                         kubectl get pods -n benchmark-api
                     '''
-
-                    echo "Checking API server health endpoint..."
-                    sh """
-                        curl -sf ${params.API_URL}/health || \
-                            (echo "WARNING: API health check failed — service may still be starting" && true)
-                    """
                 }
+                sh """
+                    curl -sf ${params.API_URL}/health || \
+                        (echo "WARNING: API health check failed — service may still be starting" && true)
+                """
             }
         }
 
-        // ── 4. Run benchmark via cloud service API ─────────────────────────────
-        //    run-pipeline.sh is a single generic script that builds the correct
-        //    JSON payload for any engine/dataset/corpus combination and routes
-        //    it to the right worker via the "engine" field in the API request.
+        // ── 5. Run benchmark via cloud service API ─────────────────────────────
+        //    run-pipeline.sh builds the correct JSON payload for any
+        //    engine/dataset/corpus combination and routes it to the right worker
+        //    via the "engine" field in the API request.
         //    When ENGINE_TARGET=all, all three engines run in parallel — each
         //    gets its own job ID and results file.
         stage('Run Benchmark') {
@@ -194,8 +200,6 @@ pipeline {
 
                     def datasetEnv = params.DATASET == 'all' ? '' : "DATASET=${params.DATASET}"
                     def corpusSize = params.CORPUS_SIZE
-
-                    sh "chmod +x cloud-service/scripts/run-pipeline.sh"
 
                     // Run all engines in parallel; each writes its own log and results file
                     def parallelBranches = engines.collectEntries { engine ->
@@ -225,7 +229,7 @@ pipeline {
             }
         }
 
-        // ── 5. Fetch & save results ────────────────────────────────────────────
+        // ── 6. Fetch & save results ────────────────────────────────────────────
         //    One job ID per engine — fetch each independently and write per-engine
         //    files plus a combined summary. The shared results.html on the API server
         //    can filter by job_id to view any individual engine's results.
@@ -300,7 +304,7 @@ EOF
             }
         }
 
-        // ── 6. Archive results ─────────────────────────────────────────────────
+        // ── 7. Archive results ─────────────────────────────────────────────────
         stage('Archive Results') {
             steps {
                 archiveArtifacts artifacts: "${RESULTS_DIR}/**/*",
@@ -314,34 +318,38 @@ EOF
         always {
             script {
                 if (params.SCALE_CLUSTERS) {
-                    def engines = params.ENGINE_TARGET == 'all'
-                        ? ['jvector', 'faiss', 'lucene']
-                        : [params.ENGINE_TARGET.replace('os-', '')]
+                    withKubeConfig([credentialsId: 'gcp-jenkins-key']) {
+                        script {
+                            def engines = params.ENGINE_TARGET == 'all'
+                                ? ['jvector', 'faiss', 'lucene']
+                                : [params.ENGINE_TARGET.replace('os-', '')]
 
-                    // Scale down benchmark workers first
-                    echo "Scaling down benchmark worker(s)..."
-                    engines.each { engine ->
-                        sh """
-                            kubectl scale statefulset opensearch-benchmark-worker-${engine} \
-                                --replicas=0 -n benchmark-api || true
-                        """
-                    }
+                            // Scale down benchmark workers first
+                            echo "Scaling down benchmark worker(s)..."
+                            engines.each { engine ->
+                                sh """
+                                    kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                        --replicas=0 -n benchmark-api || true
+                                """
+                            }
 
-                    // Scale down API server only when all workers are going down
-                    if (params.ENGINE_TARGET == 'all') {
-                        echo "Scaling down API server..."
-                        sh '''
-                            kubectl scale deployment opensearch-benchmark-api-server \
-                                --replicas=0 -n benchmark-api || true
-                        '''
-                    }
+                            // Scale down API server only when all workers are going down
+                            if (params.ENGINE_TARGET == 'all') {
+                                echo "Scaling down API server..."
+                                sh '''
+                                    kubectl scale deployment opensearch-benchmark-api-server \
+                                        --replicas=0 -n benchmark-api || true
+                                '''
+                            }
 
-                    // Scale down OpenSearch clusters
-                    echo "Scaling down OpenSearch cluster(s)..."
-                    if (params.ENGINE_TARGET == 'all') {
-                        sh "gke-manifest/scale-down-clusters.sh all || true"
-                    } else {
-                        sh "gke-manifest/scale-down-clusters.sh ${params.ENGINE_TARGET} || true"
+                            // Scale down OpenSearch clusters
+                            echo "Scaling down OpenSearch cluster(s)..."
+                            if (params.ENGINE_TARGET == 'all') {
+                                sh "gke-manifest/scale-down-clusters.sh all || true"
+                            } else {
+                                sh "gke-manifest/scale-down-clusters.sh ${params.ENGINE_TARGET} || true"
+                            }
+                        }
                     }
                 }
 
