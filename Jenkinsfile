@@ -5,10 +5,10 @@ pipeline {
 apiVersion: v1
 kind: Pod
 metadata:
+  namespace: benchmark-api
   labels:
     jenkins: agent
 spec:
-  serviceAccountName: jenkins
   containers:
   - name: curl
     image: alpine/curl:latest
