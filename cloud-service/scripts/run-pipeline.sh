@@ -51,8 +51,8 @@ else
   CORPUS_SIZES="$CORPUS_ARG"
 fi
 
-# Resolve datasets list
-if [ -z "${DATASET:-}" ]; then
+# Resolve datasets list — treat unset, empty, or "all" as "run both"
+if [ -z "${DATASET:-}" ] || [ "${DATASET:-}" = "all" ]; then
   DATASETS="cohere-wiki-en-768 cohere-msmarco-1024"
 else
   DATASETS="$DATASET"
