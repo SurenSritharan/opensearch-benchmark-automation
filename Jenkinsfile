@@ -42,34 +42,40 @@ spec:
         choice(
             name: 'PIPELINE',
             choices: [
-                'all',
-                'wiki-1m',
-                'wiki-5m',
-                'msmarco-1m',
-                'msmarco-5m',
+                'complete',
                 'search-only'
             ],
-            description: 'Test pipeline to run. "all" runs both datasets at 1M + 5M. "search-only" requires indexes to already exist.'
+            description: '"complete" runs create-index → bulk-ingest → refresh → force-merge → search for every selected engine. "search-only" runs search sweeps only (indexes must already exist).'
+        )
+        choice(
+            name: 'CORPUS_SIZE',
+            choices: ['all', '1m', '5m'],
+            description: 'Vector corpus size to benchmark. "all" runs 1m then 5m in a single job per engine.'
+        )
+        choice(
+            name: 'DATASET',
+            choices: ['all', 'cohere-wiki-en-768', 'cohere-msmarco-1024'],
+            description: 'Dataset to benchmark. "all" runs both datasets sequentially within each engine job.'
         )
         string(
             name: 'API_URL',
             defaultValue: 'http://34.132.114.18',
-            description: 'Base URL of the benchmark cloud service API'
+            description: 'Base URL of the benchmark cloud service API (single endpoint — the shared API server in benchmark-api namespace)'
+        )
+        choice(
+            name: 'ENGINE_TARGET',
+            choices: ['all', 'os-jvector', 'os-faiss', 'os-lucene'],
+            description: 'Which engine cluster(s) to run against. "all" scales up all three OS clusters and all three benchmark workers.'
         )
         booleanParam(
             name: 'SCALE_CLUSTERS',
             defaultValue: true,
-            description: 'Scale up clusters before benchmarking and scale them down afterwards'
-        )
-        choice(
-            name: 'SCALE_TARGET',
-            choices: ['all', 'os-jvector', 'os-faiss', 'os-lucene'],
-            description: 'Which cluster namespace(s) to scale up/down (only used when SCALE_CLUSTERS is true)'
+            description: 'Scale up engine clusters + benchmark workers before benchmarking and scale them down afterwards'
         )
         booleanParam(
             name: 'REDEPLOY_CLUSTERS',
             defaultValue: false,
-            description: 'Re-deploy OpenSearch clusters before benchmarking (applies OPENSEARCH_VERSION)'
+            description: 'Re-deploy OpenSearch clusters before benchmarking (applies OPENSEARCH_VERSION). Implies scale-up.'
         )
         string(
             name: 'OPENSEARCH_VERSION',
@@ -96,7 +102,8 @@ spec:
     }
 
     stages {
-        // ── 1. Cluster re-deploy (optional, run before scale-up) ──────────────
+
+        // ── 1. Re-deploy OpenSearch clusters (optional) ────────────────────────
         stage('Re-deploy Clusters') {
             when {
                 expression { params.REDEPLOY_CLUSTERS }
@@ -105,130 +112,202 @@ spec:
                 container('kubectl') {
                     script {
                         def extraArgs = "--version ${params.OPENSEARCH_VERSION} --force"
-                        if (params.DELETE_PVCS) {
-                            extraArgs += " --delete-pvcs"
-                        }
+                        if (params.DELETE_PVCS) { extraArgs += " --delete-pvcs" }
 
-                        def target = params.SCALE_TARGET
-                        if (target == 'all') {
+                        if (params.ENGINE_TARGET == 'all') {
                             echo "Re-deploying all OpenSearch clusters (version ${params.OPENSEARCH_VERSION})..."
                             sh "gke-manifest/deploy-all-clusters.sh ${extraArgs}"
                         } else {
-                            echo "Re-deploying ${target} (version ${params.OPENSEARCH_VERSION})..."
-                            sh "gke-manifest/deploy-namespace-cluster.sh ${target} ${extraArgs}"
+                            echo "Re-deploying ${params.ENGINE_TARGET} (version ${params.OPENSEARCH_VERSION})..."
+                            sh "gke-manifest/deploy-namespace-cluster.sh ${params.ENGINE_TARGET} ${extraArgs}"
                         }
                     }
                 }
             }
         }
 
-        // ── 2. Scale up clusters ───────────────────────────────────────────────
-        stage('Scale Up Clusters') {
+        // ── 2. Scale up OpenSearch clusters + benchmark workers ────────────────
+        //    Each engine (jvector/faiss/lucene) has:
+        //      - An OpenSearch cluster in its own namespace (os-<engine>)
+        //      - A dedicated benchmark worker pod in the benchmark-api namespace
+        //    The shared API server (benchmark-api/opensearch-benchmark-api-server)
+        //    is always scaled up alongside whichever workers are needed.
+        stage('Scale Up') {
             when {
+                // Re-deploy already starts the pods, so skip pure scale-up in that case
                 expression { params.SCALE_CLUSTERS && !params.REDEPLOY_CLUSTERS }
             }
             steps {
                 container('kubectl') {
                     script {
-                        echo "Scaling up ${params.SCALE_TARGET}..."
-                        sh "gke-manifest/scale-up-clusters.sh ${params.SCALE_TARGET}"
+                        def engines = params.ENGINE_TARGET == 'all'
+                            ? ['jvector', 'faiss', 'lucene']
+                            : [params.ENGINE_TARGET.replace('os-', '')]
+
+                        echo "Scaling up OpenSearch clusters: ${engines}"
+                        if (params.ENGINE_TARGET == 'all') {
+                            sh "gke-manifest/scale-up-clusters.sh all"
+                        } else {
+                            sh "gke-manifest/scale-up-clusters.sh ${params.ENGINE_TARGET}"
+                        }
+
+                        echo "Scaling up API server in benchmark-api namespace..."
+                        sh '''
+                            kubectl scale deployment opensearch-benchmark-api-server \
+                                --replicas=1 -n benchmark-api
+                        '''
+
+                        echo "Scaling up benchmark worker(s) in benchmark-api namespace..."
+                        engines.each { engine ->
+                            sh """
+                                kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                    --replicas=1 -n benchmark-api
+                            """
+                        }
+
+                        echo "Waiting for API server to be ready..."
+                        sh '''
+                            kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
+                                -n benchmark-api --timeout=300s
+                        '''
+
+                        echo "Waiting for benchmark worker(s) to be ready..."
+                        engines.each { engine ->
+                            sh """
+                                kubectl wait --for=condition=ready pod \
+                                    -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                    -n benchmark-api --timeout=600s
+                            """
+                        }
                     }
                 }
             }
         }
 
-        // ── 3. Verify cluster health ───────────────────────────────────────────
-        stage('Verify Cluster Health') {
+        // ── 3. Verify cluster and worker health ────────────────────────────────
+        stage('Verify Health') {
             steps {
                 container('kubectl') {
                     script {
-                        echo "Verifying cluster health before benchmark..."
+                        echo "Verifying OpenSearch cluster and benchmark worker health..."
                         sh '''
                             kubectl cluster-info
-                            kubectl get nodes
+                            echo ""
+                            echo "=== OpenSearch Clusters ==="
                             for ns in os-jvector os-faiss os-lucene; do
                                 if kubectl get namespace $ns &>/dev/null; then
                                     echo "--- $ns ---"
                                     kubectl get pods -n $ns
                                 fi
                             done
+                            echo ""
+                            echo "=== Benchmark API (benchmark-api namespace) ==="
+                            kubectl get pods -n benchmark-api
                         '''
-                    }
-                }
-            }
-        }
 
-        // ── 4. Run benchmark via cloud service ────────────────────────────────
-        stage('Run Benchmark') {
-            steps {
-                container('curl') {
-                    script {
-                        def scriptMap = [
-                            'all'        : 'cloud-service/scripts/test-all-complete.sh',
-                            'wiki-1m'    : 'cloud-service/scripts/test-wiki-1m-complete.sh',
-                            'wiki-5m'    : 'cloud-service/scripts/test-wiki-5m-complete.sh',
-                            'msmarco-1m' : 'cloud-service/scripts/test-msmarco-1m-complete.sh',
-                            'msmarco-5m' : 'cloud-service/scripts/test-msmarco-5m-complete.sh',
-                            'search-only': 'cloud-service/scripts/test-search.sh'
-                        ]
-
-                        def script = scriptMap[params.PIPELINE]
-                        if (!script) {
-                            error("Unknown PIPELINE value: ${params.PIPELINE}")
-                        }
-
-                        echo "Running pipeline '${params.PIPELINE}' against ${params.API_URL} ..."
+                        echo "Checking API server health endpoint..."
                         sh """
-                            chmod +x ${script}
-                            API_URL=${params.API_URL} ${script} 2>&1 | tee benchmark-run.log
-
-                            # Capture the job_id from the log for later use
-                            JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run.log | tail -1 || true)
-                            if [ -n "\$JOB_ID" ]; then
-                                echo "\$JOB_ID" > job_id.txt
-                                echo "Job ID captured: \$JOB_ID"
-                            fi
+                            curl -sf ${params.API_URL}/health || \
+                                (echo "WARNING: API health check failed — service may still be starting" && true)
                         """
                     }
                 }
             }
         }
 
+        // ── 4. Run benchmark via cloud service API ─────────────────────────────
+        //    run-pipeline.sh is a single generic script that builds the correct
+        //    JSON payload for any engine/dataset/corpus combination and routes
+        //    it to the right worker via the "engine" field in the API request.
+        //    When ENGINE_TARGET=all, all three engines run in parallel — each
+        //    gets its own job ID and results file.
+        stage('Run Benchmark') {
+            steps {
+                container('curl') {
+                    script {
+                        def engines = params.ENGINE_TARGET == 'all'
+                            ? ['jvector', 'faiss', 'lucene']
+                            : [params.ENGINE_TARGET.replace('os-', '')]
+
+                        def datasetEnv = params.DATASET == 'all' ? '' : "DATASET=${params.DATASET}"
+                        def corpusSize = params.CORPUS_SIZE
+
+                        sh "chmod +x cloud-service/scripts/run-pipeline.sh"
+
+                        // Run all engines in parallel; each writes its own log and results file
+                        def parallelBranches = engines.collectEntries { engine ->
+                            ["${engine}" : {
+                                container('curl') {
+                                    sh """
+                                        ${datasetEnv} \
+                                        API_URL=${params.API_URL} \
+                                        TIME_PERIOD=300 \
+                                        cloud-service/scripts/run-pipeline.sh \
+                                            ${params.PIPELINE} \
+                                            ${engine} \
+                                            ${corpusSize} \
+                                            2>&1 | tee benchmark-run-${engine}.log
+
+                                        # Capture job_id for this engine
+                                        JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-${engine}.log | tail -1 || true)
+                                        if [ -n "\$JOB_ID" ]; then
+                                            echo "\$JOB_ID" > job_id_${engine}.txt
+                                            echo "[${engine}] Job ID captured: \$JOB_ID"
+                                        fi
+                                    """
+                                }
+                            }]
+                        }
+
+                        parallel parallelBranches
+                    }
+                }
+            }
+        }
+
         // ── 5. Fetch & save results ────────────────────────────────────────────
+        //    One job ID per engine — fetch each independently and write per-engine
+        //    files plus a combined summary. The shared results.html on the API server
+        //    can filter by job_id to view any individual engine's results.
         stage('Fetch Results') {
             steps {
                 container('curl') {
                     script {
-                        echo "Fetching final results from cloud service..."
+                        def engines = params.ENGINE_TARGET == 'all'
+                            ? ['jvector', 'faiss', 'lucene']
+                            : [params.ENGINE_TARGET.replace('os-', '')]
+
+                        sh "mkdir -p ${RESULTS_DIR}"
+
+                        def jobLinks = []
+
+                        engines.each { engine ->
+                            sh """
+                                # Copy run log
+                                cp benchmark-run-${engine}.log ${RESULTS_DIR}/ 2>/dev/null || true
+
+                                if [ -f job_id_${engine}.txt ]; then
+                                    JOB_ID=\$(cat job_id_${engine}.txt)
+                                    echo "=== ${engine} (job: \$JOB_ID) ==="
+
+                                    curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID" \
+                                        | jq '.' > ${RESULTS_DIR}/job-status-${engine}.json
+
+                                    curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results" \
+                                        | jq '.' > ${RESULTS_DIR}/results-${engine}.json
+
+                                    jq '{job_id, status, scenarios_completed, scenarios_total}' \
+                                        ${RESULTS_DIR}/job-status-${engine}.json
+
+                                    echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
+                                else
+                                    echo "WARNING: no job_id_${engine}.txt — ${engine} may not have submitted successfully"
+                                fi
+                            """
+                        }
+
+                        // Write build summary
                         sh """
-                            mkdir -p ${RESULTS_DIR}
-                            cp benchmark-run.log ${RESULTS_DIR}/benchmark-run.log
-
-                            if [ -f job_id.txt ]; then
-                                JOB_ID=\$(cat job_id.txt)
-                                echo "Fetching results for job: \$JOB_ID"
-
-                                # Job status summary
-                                curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID" \
-                                    | jq '.' > ${RESULTS_DIR}/job-status.json
-
-                                # Full sweep results
-                                curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results" \
-                                    | jq '.' > ${RESULTS_DIR}/results.json
-
-                                echo "Results saved to ${RESULTS_DIR}/"
-                                echo ""
-                                echo "Summary:"
-                                jq '{job_id, status, scenarios_completed, scenarios_total}' \
-                                    ${RESULTS_DIR}/job-status.json
-
-                                echo ""
-                                echo "View results at: ${params.API_URL}/results.html?job_id=\$JOB_ID"
-                            else
-                                echo "WARNING: No job_id.txt found — results may be embedded in the log above."
-                            fi
-
-                            # Write build summary
                             cat > ${RESULTS_DIR}/BUILD_SUMMARY.txt << EOF
 ========================================
 OpenSearch Benchmark Build Summary
@@ -239,15 +318,27 @@ Date:      \$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
 Parameters:
   Pipeline:           ${params.PIPELINE}
+  Engine Target:      ${params.ENGINE_TARGET}
+  Dataset:            ${params.DATASET}
+  Corpus Size:        ${params.CORPUS_SIZE}
   API URL:            ${params.API_URL}
   Scale Clusters:     ${params.SCALE_CLUSTERS}
-  Scale Target:       ${params.SCALE_TARGET}
   Redeploy Clusters:  ${params.REDEPLOY_CLUSTERS}
   OpenSearch Version: ${params.OPENSEARCH_VERSION}
 
-Results Directory: ${RESULTS_DIR}
-========================================
+Results per engine:
 EOF
+                            for engine in ${engines.join(' ')}; do
+                                if [ -f job_id_\${engine}.txt ]; then
+                                    JOB_ID=\$(cat job_id_\${engine}.txt)
+                                    echo "  \${engine}: ${params.API_URL}/results.html?job_id=\${JOB_ID}" \
+                                        >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
+                                else
+                                    echo "  \${engine}: no job submitted" \
+                                        >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
+                                fi
+                            done
+                            echo "========================================" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
                             cat ${RESULTS_DIR}/BUILD_SUMMARY.txt
                         """
                     }
@@ -268,15 +359,43 @@ EOF
     post {
         always {
             script {
-                // Scale down clusters after the run (even on failure)
                 if (params.SCALE_CLUSTERS) {
                     container('kubectl') {
-                        echo "Scaling down ${params.SCALE_TARGET} to conserve resources..."
-                        sh "gke-manifest/scale-down-clusters.sh ${params.SCALE_TARGET} || true"
+                        script {
+                            def engines = params.ENGINE_TARGET == 'all'
+                                ? ['jvector', 'faiss', 'lucene']
+                                : [params.ENGINE_TARGET.replace('os-', '')]
+
+                            // Scale down benchmark workers first
+                            echo "Scaling down benchmark worker(s)..."
+                            engines.each { engine ->
+                                sh """
+                                    kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                        --replicas=0 -n benchmark-api || true
+                                """
+                            }
+
+                            // Scale down API server only when all workers are going down
+                            if (params.ENGINE_TARGET == 'all') {
+                                echo "Scaling down API server..."
+                                sh '''
+                                    kubectl scale deployment opensearch-benchmark-api-server \
+                                        --replicas=0 -n benchmark-api || true
+                                '''
+                            }
+
+                            // Scale down OpenSearch clusters
+                            echo "Scaling down OpenSearch cluster(s)..."
+                            if (params.ENGINE_TARGET == 'all') {
+                                sh "gke-manifest/scale-down-clusters.sh all || true"
+                            } else {
+                                sh "gke-manifest/scale-down-clusters.sh ${params.ENGINE_TARGET} || true"
+                            }
+                        }
                     }
                 }
 
-                // Print final summary if it was written
+                // Print final summary
                 container('curl') {
                     sh """
                         if [ -f ${RESULTS_DIR}/BUILD_SUMMARY.txt ]; then
