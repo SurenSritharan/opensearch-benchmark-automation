@@ -141,7 +141,13 @@ pipeline {
                     echo "Deploying/scaling up API server in benchmark-api namespace..."
                     sh '''
                         # apply is idempotent — creates if missing, updates if changed
+                        # Scale to 0 first so the pod always restarts and picks up latest code
                         kubectl apply -f gke-manifest/opensearch-benchmark-api-server.yaml -n benchmark-api
+                        kubectl scale deployment opensearch-benchmark-api-server \
+                            --replicas=0 -n benchmark-api
+                        kubectl wait --for=delete pod \
+                            -l app=opensearch-benchmark,component=api-server \
+                            -n benchmark-api --timeout=120s || true
                         kubectl scale deployment opensearch-benchmark-api-server \
                             --replicas=1 -n benchmark-api
                     '''
@@ -157,20 +163,26 @@ pipeline {
                         """
                     }
 
-                    echo "Waiting for API server to be ready..."
-                    sh '''
-                        kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
-                            -n benchmark-api --timeout=300s
-                    '''
-
-                    echo "Waiting for benchmark worker(s) to be ready..."
-                    engines.each { engine ->
-                        sh """
-                            kubectl wait --for=condition=ready pod \
-                                -l app=opensearch-benchmark,component=worker,engine=${engine} \
-                                -n benchmark-api --timeout=600s
-                        """
+                    // Wait for API server and all workers in parallel — workers can take
+                    // up to 20 min on a cold PVC (apt + pip + git clone + pip install -e .)
+                    echo "Waiting for API server and worker(s) to be ready..."
+                    def waitBranches = [:]
+                    waitBranches['api-server'] = {
+                        sh '''
+                            kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
+                                -n benchmark-api --timeout=300s
+                        '''
                     }
+                    engines.each { engine ->
+                        waitBranches["worker-${engine}"] = {
+                            sh """
+                                kubectl wait --for=condition=ready pod \
+                                    -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                    -n benchmark-api --timeout=1200s
+                            """
+                        }
+                    }
+                    parallel waitBranches
                 }
             }
         }
@@ -208,7 +220,11 @@ pipeline {
                         ? ['jvector', 'faiss', 'lucene']
                         : [params.ENGINE_TARGET.replace('os-', '')]
 
-                    def datasetEnv = params.DATASET == 'all' ? '' : "DATASET=${params.DATASET}"
+                    // Jenkins auto-exports build params as env vars, so DATASET=all would
+                    // leak into the shell even when datasetEnv is empty. Explicitly unset it
+                    // when "all" is selected so run-pipeline.sh uses its own default (both datasets).
+                    def datasetEnv = params.DATASET == 'all' ? 'DATASET=' : "DATASET=${params.DATASET}"
+                    // Similarly, pass empty string for corpus "all" — the script handles that arg directly
                     def corpusSize = params.CORPUS_SIZE
 
                     // Run all engines in parallel; each writes its own log and results file
