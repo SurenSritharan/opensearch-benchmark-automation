@@ -120,8 +120,27 @@ def init_db():
 init_db()
 logger.info(f"Initialized shared state in process (PID: {os.getpid()})")
 
+# WORKER_ENGINES controls which engine this pod is allowed to process.
+# API server sets WORKER_ENGINES=none    — queues jobs only, never executes them.
+# Worker pods set WORKER_ENGINES=jvector (or faiss, or lucene) — one engine each.
+_WORKER_ENGINES_RAW = os.environ.get('WORKER_ENGINES', 'none').strip().lower()
+_ALLOWED_ENGINES = set(
+    e.strip() for e in _WORKER_ENGINES_RAW.split(',')
+    if e.strip() not in ('none', '', 'api-only')
+)
+_IS_WORKER = bool(_ALLOWED_ENGINES)
+logger.info(f"WORKER_ENGINES={_WORKER_ENGINES_RAW!r}, allowed engines: {_ALLOWED_ENGINES}, will process jobs: {_IS_WORKER}")
+
 def ensure_processor_running(engine: str):
-    """Ensure a queue processor is running for the given engine"""
+    """Ensure a queue processor is running for the given engine.
+    No-op on the API server (WORKER_ENGINES=none) or if engine is not in WORKER_ENGINES.
+    """
+    if not _IS_WORKER:
+        logger.debug(f"API-only mode — not starting processor for engine: {engine}")
+        return
+    if engine not in _ALLOWED_ENGINES:
+        logger.debug(f"Engine {engine!r} not in allowed engines {_ALLOWED_ENGINES} — skipping processor")
+        return
     with processor_lock:
         if engine not in running_processors:
             running_processors.add(engine)
@@ -279,7 +298,11 @@ def _start_processors_for_pending_engines():
 
     Called once at startup so jobs queued before a pod restart are picked up
     immediately without needing a new submission to kick the processor.
+    No-op on the API server (WORKER_ENGINES=none).
     """
+    if not _IS_WORKER:
+        logger.info("API-only mode — skipping startup queue processors")
+        return
     try:
         with sqlite3.connect(DB_PATH) as conn:
             rows = conn.execute(
@@ -287,6 +310,9 @@ def _start_processors_for_pending_engines():
                 "WHERE status = 'queued' AND engine IS NOT NULL"
             ).fetchall()
         for (engine,) in rows:
+            if engine not in _ALLOWED_ENGINES:
+                logger.debug(f"Startup: skipping engine {engine!r} — not in allowed engines {_ALLOWED_ENGINES}")
+                continue
             ensure_processor_running(engine)
             logger.info(f"Startup: started queue processor for engine '{engine}'")
     except Exception as e:
@@ -299,7 +325,11 @@ _start_processors_for_pending_engines()
 def process_engine_queue(engine: str):
     """Process queued jobs for a specific engine (runs in background thread).
     This thread never terminates — it polls for new jobs indefinitely.
+    No-op on the API server (WORKER_ENGINES=none).
     """
+    if not _IS_WORKER:
+        logger.warning(f"process_engine_queue called on API-only pod — refusing to process engine: {engine}")
+        return
     logger.info(f"Queue processor started for engine: {engine}")
 
     while True:
@@ -498,7 +528,11 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
     """Process a batch job by running multiple dataset+scenario combinations sequentially
     
     Uses scenarios list which contains {dataset, label, procedure_name, params} for each test.
+    No-op on the API server (WORKER_ENGINES=none).
     """
+    if not _IS_WORKER:
+        logger.warning(f"process_batch_job called on API-only pod — refusing to process job: {job_id}")
+        return
     engine = job['engine']
     scenarios = job.get('scenarios', [])
     results_base = job.get('results_base', job_id)
