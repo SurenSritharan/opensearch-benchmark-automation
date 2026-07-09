@@ -158,6 +158,12 @@ pipeline {
                             cat gke-manifest/opensearch-benchmark-worker-template.yaml | \
                                 sed 's/\\\${ENGINE}/${engine}/g' | \
                                 kubectl apply -f -
+                            # Bounce the worker so it always restarts and picks up latest code via git pull
+                            kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                --replicas=0 -n benchmark-api
+                            kubectl wait --for=delete pod \
+                                -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                -n benchmark-api --timeout=120s || true
                             kubectl scale statefulset opensearch-benchmark-worker-${engine} \
                                 --replicas=1 -n benchmark-api
                         """
