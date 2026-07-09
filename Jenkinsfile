@@ -75,6 +75,18 @@ pipeline {
         stage('Prepare') {
             steps {
                 sh 'chmod +x gke-manifest/*.sh cloud-service/scripts/*.sh'
+                withKubeConfig([credentialsId: 'gcp-jenkins-key']) {
+                    sh '''
+                        echo "=== Cluster info ==="
+                        kubectl cluster-info
+                        echo ""
+                        echo "=== Current context ==="
+                        kubectl config current-context
+                        echo ""
+                        echo "=== All namespaces ==="
+                        kubectl get namespaces
+                    '''
+                }
             }
         }
 
