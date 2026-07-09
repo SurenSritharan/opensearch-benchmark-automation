@@ -138,15 +138,20 @@ pipeline {
                         sh "gke-manifest/scale-up-clusters.sh ${params.ENGINE_TARGET}"
                     }
 
-                    echo "Scaling up API server in benchmark-api namespace..."
+                    echo "Deploying/scaling up API server in benchmark-api namespace..."
                     sh '''
+                        # apply is idempotent — creates if missing, updates if changed
+                        kubectl apply -f gke-manifest/opensearch-benchmark-api-server.yaml -n benchmark-api
                         kubectl scale deployment opensearch-benchmark-api-server \
                             --replicas=1 -n benchmark-api
                     '''
 
-                    echo "Scaling up benchmark worker(s) in benchmark-api namespace..."
+                    echo "Deploying/scaling up benchmark worker(s) in benchmark-api namespace..."
                     engines.each { engine ->
                         sh """
+                            cat gke-manifest/opensearch-benchmark-worker-template.yaml | \
+                                sed 's/\\\${ENGINE}/${engine}/g' | \
+                                kubectl apply -f -
                             kubectl scale statefulset opensearch-benchmark-worker-${engine} \
                                 --replicas=1 -n benchmark-api
                         """

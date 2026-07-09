@@ -1,0 +1,157 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: opensearch-benchmark-worker-${ENGINE}
+  namespace: benchmark-api
+  labels:
+    app: opensearch-benchmark
+    component: worker
+    engine: ${ENGINE}
+spec:
+  serviceName: "opensearch-benchmark-worker-${ENGINE}"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opensearch-benchmark
+      component: worker
+      engine: ${ENGINE}
+  template:
+    metadata:
+      labels:
+        app: opensearch-benchmark
+        component: worker
+        engine: ${ENGINE}
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: client-pool
+      
+      # Ensure workers run on separate nodes (no resource sharing)
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: component
+                operator: In
+                values:
+                - worker
+            topologyKey: kubernetes.io/hostname
+      
+      containers:
+      - name: worker
+        image: python:3.11-slim
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -e
+            echo "Installing dependencies..."
+            apt-get update -y -qq
+            apt-get install -y -qq git curl wget vim libhdf5-dev gcc python3-dev jq nmon procps tini
+            
+            echo "Installing Python packages..."
+            pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn filelock
+            
+            echo "Setting up directories..."
+            mkdir -p /datasets/opensearch-benchmark /results /opt/benchmark-src /app
+            
+            echo "Cloning OpenSearch Benchmark..."
+            git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark /opt/benchmark-src
+            cd /opt/benchmark-src
+            pip install -e .
+            
+            echo "Cloning workloads..."
+            if [ ! -d "/datasets/opensearch-benchmark-workloads/.git" ]; then
+              git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-workloads.git /datasets/opensearch-benchmark-workloads
+            else
+              cd /datasets/opensearch-benchmark-workloads
+              git pull origin main || echo "Git pull failed, using existing version"
+            fi
+            
+            echo "Setting up workspace..."
+            if [ ! -d "/workspace/.git" ]; then
+              echo "Cloning benchmark automation project (first time)..."
+              git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
+              cp -r /workspace-tmp/* /workspace/ 2>/dev/null || true
+              cp -r /workspace-tmp/.git /workspace/ 2>/dev/null || true
+              rm -rf /workspace-tmp
+            else
+              echo "Workspace already exists, pulling latest changes..."
+              cd /workspace
+              git pull origin main || echo "Git pull failed, using existing version"
+            fi
+            
+            echo "Setting up worker service..."
+            cp /workspace/cloud-service/*.py /app/
+            
+            if [ -f "/workspace/cloud-service/requirements.txt" ]; then
+              echo "Installing cloud-service requirements..."
+              pip install --quiet -r /workspace/cloud-service/requirements.txt
+            fi
+            
+            echo "Starting ${ENGINE} worker..."
+            cd /app
+            exec /usr/bin/tini -- gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 2 --timeout 7200 --access-logfile - app:app
+        
+        env:
+        - name: WORKER_ENGINES
+          value: "${ENGINE}"
+        - name: WORKER_MODE
+          value: "combined"  # Use local SQLite queue (shared via PVC)
+        - name: BENCHMARK_HOME
+          value: "/datasets/opensearch-benchmark"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        
+        resources:
+          requests:
+            memory: "48Gi"
+            cpu: "12"
+          limits:
+            memory: "48Gi"
+            cpu: "16"
+        
+        volumeMounts:
+        - name: datasets
+          mountPath: /datasets
+        - name: results
+          mountPath: /results
+        - name: certs
+          mountPath: /certs
+          readOnly: true
+        - name: workspace
+          mountPath: /workspace
+        
+        ports:
+        - containerPort: 8080
+          name: http
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 60
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+      
+      volumes:
+      - name: datasets
+        persistentVolumeClaim:
+          claimName: benchmark-nvme-storage
+      - name: results
+        persistentVolumeClaim:
+          claimName: benchmark-results-storage
+      - name: certs
+        secret:
+          secretName: opensearch-shared-certs
+          defaultMode: 0644
+      - name: workspace
+        persistentVolumeClaim:
+          claimName: benchmark-workspace-storage
+
+# Made with Bob
