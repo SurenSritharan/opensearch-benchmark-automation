@@ -125,6 +125,8 @@ pipeline {
         //      - A dedicated benchmark worker pod in the benchmark-api namespace
         //    The shared API server (benchmark-api/opensearch-benchmark-api-server)
         //    is always scaled up alongside whichever workers are needed.
+        //    All readiness waits run in parallel so cluster pod startup doesn't
+        //    block worker pod startup and vice versa.
         stage('Scale Up') {
             when {
                 // Re-deploy already starts the pods, so skip pure scale-up in that case
@@ -136,6 +138,7 @@ pipeline {
                         ? ['jvector', 'faiss', 'lucene']
                         : [params.ENGINE_TARGET.replace('os-', '')]
 
+                    // Kick off OpenSearch cluster scale-up (non-blocking — we wait below)
                     echo "Scaling up OpenSearch clusters: ${engines}"
                     if (params.ENGINE_TARGET == 'all') {
                         sh "gke-manifest/scale-up-clusters.sh all"
@@ -174,18 +177,30 @@ pipeline {
                         """
                     }
 
-                    // Wait for API server and all workers in parallel — workers can take
-                    // up to 20 min on a cold PVC (apt + pip + git clone + pip install -e .)
-                    echo "Waiting for API server and worker(s) to be ready..."
+                    // Wait for all pods in parallel — opensearch-cluster and
+                    // benchmark-cloud-native service startups are independent and can
+                    // take very different amounts of time.
+                    echo "Waiting for all pods to be ready..."
                     def waitBranches = [:]
-                    waitBranches['api-server'] = {
+                    engines.each { engine ->
+                        def ns = "os-${engine}"
+                        waitBranches["opensearch-cluster-${engine}"] = {
+                            sh """
+                                kubectl wait --for=condition=ready pod \
+                                    -l app=opensearch-cluster-manager -n ${ns} --timeout=300s
+                                kubectl wait --for=condition=ready pod \
+                                    -l app=opensearch-data -n ${ns} --timeout=300s
+                            """
+                        }
+                    }
+                    waitBranches['benchmark-api-server'] = {
                         sh '''
                             kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
                                 -n benchmark-api --timeout=300s
                         '''
                     }
                     engines.each { engine ->
-                        waitBranches["worker-${engine}"] = {
+                        waitBranches["benchmark-worker-${engine}"] = {
                             sh """
                                 kubectl wait --for=condition=ready pod \
                                     -l app=opensearch-benchmark,component=worker,engine=${engine} \
