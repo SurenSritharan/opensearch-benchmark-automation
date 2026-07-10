@@ -56,6 +56,11 @@ pipeline {
             defaultValue: false,
             description: 'Delete PVCs during re-deploy — destroys all indexed data (only used when REDEPLOY_CLUSTERS is true)'
         )
+        booleanParam(
+            name: 'SKIP_SCALE_DOWN',
+            defaultValue: false,
+            description: 'Skip the post-run scale-down so clusters and workers stay up for investigation. Overrides SCALE_CLUSTERS teardown.'
+        )
     }
 
     environment {
@@ -384,7 +389,7 @@ EOF
     post {
         always {
             script {
-                if (params.SCALE_CLUSTERS) {
+                if (params.SCALE_CLUSTERS && !params.SKIP_SCALE_DOWN) {
                     def engines = params.ENGINE_TARGET == 'all'
                         ? ['jvector', 'faiss', 'lucene']
                         : [params.ENGINE_TARGET.replace('os-', '')]
