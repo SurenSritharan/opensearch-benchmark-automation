@@ -294,29 +294,19 @@ executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_JOBS)
 
 
 def _start_processors_for_pending_engines():
-    """Start queue-processor threads for every engine that has queued jobs.
+    """Start queue-processor threads for all allowed engines at startup.
 
-    Called once at startup so jobs queued before a pod restart are picked up
-    immediately without needing a new submission to kick the processor.
+    Always starts a processor thread for each engine in WORKER_ENGINES so the
+    worker is ready to pick up jobs immediately — even if the queue is empty at
+    startup and jobs arrive later.
     No-op on the API server (WORKER_ENGINES=none).
     """
     if not _IS_WORKER:
         logger.info("API-only mode — skipping startup queue processors")
         return
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            rows = conn.execute(
-                "SELECT DISTINCT engine FROM jobs "
-                "WHERE status = 'queued' AND engine IS NOT NULL"
-            ).fetchall()
-        for (engine,) in rows:
-            if engine not in _ALLOWED_ENGINES:
-                logger.debug(f"Startup: skipping engine {engine!r} — not in allowed engines {_ALLOWED_ENGINES}")
-                continue
-            ensure_processor_running(engine)
-            logger.info(f"Startup: started queue processor for engine '{engine}'")
-    except Exception as e:
-        logger.error(f"Startup: failed to start processors for pending engines: {e}")
+    for engine in _ALLOWED_ENGINES:
+        ensure_processor_running(engine)
+        logger.info(f"Startup: started queue processor for engine '{engine}'")
 
 
 def process_engine_queue(engine: str):
