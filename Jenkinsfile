@@ -210,6 +210,41 @@ pipeline {
                     curl -sf ${params.API_URL}/health || \
                         (echo "WARNING: API health check failed — service may still be starting" && true)
                 """
+                script {
+                    // Wait for every scaled-up OpenSearch cluster to reach green or yellow
+                    // before allowing the benchmark to start. Pods being Ready is not
+                    // sufficient — shard recovery after a cold restart can keep the cluster
+                    // red for several minutes while pods are already serving HTTP.
+                    if (params.SCALE_CLUSTERS || params.REDEPLOY_CLUSTERS) {
+                        def engines = params.ENGINE_TARGET == 'all'
+                            ? ['jvector', 'faiss', 'lucene']
+                            : [params.ENGINE_TARGET.replace('os-', '')]
+
+                        engines.each { engine ->
+                            def ns = "os-${engine}"
+                            sh """
+                                echo "Waiting for OpenSearch cluster in ${ns} to be green or yellow..."
+                                DEADLINE=\$((SECONDS + 300))
+                                while [ \$SECONDS -lt \$DEADLINE ]; do
+                                    STATUS=\$(kubectl exec -n ${ns} opensearch-data-0 -- \
+                                        curl -sk -u admin:admin \
+                                        https://localhost:9200/_cluster/health 2>/dev/null \
+                                        | grep -oP '(?<="status":")[^"]+' || true)
+                                    echo "  [${ns}] cluster status: \${STATUS:-unknown}"
+                                    if [ "\$STATUS" = "green" ] || [ "\$STATUS" = "yellow" ]; then
+                                        echo "  ✅ ${ns} is ready (\${STATUS})"
+                                        break
+                                    fi
+                                    sleep 10
+                                done
+                                if [ "\$STATUS" != "green" ] && [ "\$STATUS" != "yellow" ]; then
+                                    echo "❌ ${ns} cluster did not reach green/yellow within 5 minutes"
+                                    exit 1
+                                fi
+                            """
+                        }
+                    }
+                }
             }
         }
 

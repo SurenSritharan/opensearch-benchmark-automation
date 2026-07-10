@@ -423,7 +423,7 @@ def process_engine_queue(engine: str):
 # ---------------------------------------------------------------------------
 # Git commit-back
 # ---------------------------------------------------------------------------
-RESULTS_DIR = Path("/results")
+RESULTS_DIR = Path("/results").resolve()
 
 
 def _commit_results_to_git(job_id: str, final_status: str) -> None:
@@ -1335,7 +1335,7 @@ def get_job_results(job_id: str):
     if not job:
         return jsonify({'error': 'Job not found'}), 404
     
-    if job.get('status') not in ['completed', 'error', 'partial', 'cancelled']:
+    if job.get('status') not in ['completed', 'error', 'partial', 'cancelled', 'failed']:
         return jsonify({'error': f'Job is {job.get("status", "unknown")}, no results available yet'}), 400
     
     # Use results_base if available (batch jobs), otherwise use job_id (single jobs)
