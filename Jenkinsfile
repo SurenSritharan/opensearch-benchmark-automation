@@ -429,11 +429,11 @@ EOF
             }
         }
 
-        // ── 7. Collect server logs ─────────────────────────────────────────────
-        //    Pull the last 5000 lines from every OpenSearch pod (manager + data)
-        //    in each engine namespace and store them alongside the benchmark
-        //    results so they can be correlated during analysis.
-        //    Mirrors the structure documented in SERVER_LOGS_README.md.
+        // ── 7. Collect server logs & cluster telemetry ────────────────────────
+        //    Scoped to server-pool pods only (mirrors lib/server_log_collector.py).
+        //    Per pod: stdout log tail, GC log, heap dumps (if OOM occurred).
+        //    Per engine: full cluster telemetry snapshot (nodes, thread pools,
+        //    segments, tasks) saved alongside benchmark results.
         stage('Collect Server Logs') {
             steps {
                 script {
@@ -448,13 +448,24 @@ EOF
                             mkdir -p "\$LOG_DIR"
 
                             echo "Collecting logs from namespace: ${ns}"
+
+                            # Filter to server-pool node-pool pods only
+                            # (excludes benchmark client pods which run on a different node pool)
                             PODS=\$(kubectl get pods -n ${ns} \
-                                --no-headers -o custom-columns=':metadata.name' 2>/dev/null || true)
+                                --no-headers \
+                                -o custom-columns=':metadata.name,:spec.nodeName' 2>/dev/null \
+                                | while read POD NODE; do
+                                    POOL=\$(kubectl get node "\$NODE" \
+                                        -o jsonpath='{.metadata.labels.cloud\\.google\\.com/gke-nodepool}' \
+                                        2>/dev/null || true)
+                                    if [ "\$POOL" = "server-pool" ]; then echo "\$POD"; fi
+                                done || true)
 
                             if [ -z "\$PODS" ]; then
-                                echo "  No pods found in ${ns} — skipping"
+                                echo "  No server-pool pods found in ${ns} — skipping"
                             else
                                 for POD in \$PODS; do
+                                    # ── stdout / stderr log (last 5000 lines) ──────────────
                                     CONTAINERS=\$(kubectl get pod "\$POD" -n ${ns} \
                                         -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
                                     for CONTAINER in \$CONTAINERS; do
@@ -463,6 +474,32 @@ EOF
                                             --tail=5000 2>&1 > "\$LOGFILE" || true
                                         SIZE=\$(wc -l < "\$LOGFILE" 2>/dev/null || echo 0)
                                         echo "  \$POD / \$CONTAINER: \${SIZE} lines -> \$LOGFILE"
+                                    done
+
+                                    # ── JVM GC log ─────────────────────────────────────────
+                                    GC_LOGFILE="\$LOG_DIR/\${POD}-gc.log"
+                                    kubectl exec "\$POD" -c opensearch -n ${ns} -- \
+                                        cat /usr/share/opensearch/logs/gc.log \
+                                        > "\$GC_LOGFILE" 2>/dev/null || true
+                                    if [ -s "\$GC_LOGFILE" ]; then
+                                        echo "  \$POD gc.log: \$(wc -l < \$GC_LOGFILE) lines"
+                                    else
+                                        rm -f "\$GC_LOGFILE"
+                                        echo "  \$POD gc.log: not found (skipping)"
+                                    fi
+
+                                    # ── Heap dumps (OOM evidence) ──────────────────────────
+                                    HPROF_FILES=\$(kubectl exec "\$POD" -c opensearch -n ${ns} -- \
+                                        sh -c 'ls /usr/share/opensearch/data/*.hprof 2>/dev/null || true')
+                                    for HPROF in \$HPROF_FILES; do
+                                        HPROF_NAME=\$(basename "\$HPROF")
+                                        LOCAL_HPROF="\$LOG_DIR/\${POD}-\${HPROF_NAME}"
+                                        echo "  Found heap dump: \$HPROF — copying..."
+                                        kubectl cp "${ns}/\${POD}:\${HPROF}" "\$LOCAL_HPROF" \
+                                            -c opensearch 2>/dev/null || true
+                                        if [ -s "\$LOCAL_HPROF" ]; then
+                                            echo "  Saved: \$LOCAL_HPROF (\$(du -sh \$LOCAL_HPROF | cut -f1))"
+                                        fi
                                     done
                                 done
 
@@ -476,11 +513,36 @@ EOF
                                     echo ""
                                     echo "Collected Logs:"
                                     echo "------------------------------------------------------------"
-                                    ls -lh "\$LOG_DIR"/*.log 2>/dev/null | awk '{print "  " \$NF "  " \$5}' || true
+                                    ls -lh "\$LOG_DIR" 2>/dev/null | awk 'NR>1 {print "  " \$NF "  " \$5}' || true
                                 } > "\$LOG_DIR/SUMMARY.txt"
 
                                 echo "  Summary written: \$LOG_DIR/SUMMARY.txt"
                             fi
+
+                            # ── Cluster telemetry snapshot ─────────────────────────
+                            # Run from the benchmark worker pod — it already has curl,
+                            # targets the same Service DNS as OSB, and is guaranteed up
+                            # at this stage (scale-down happens in post { always }).
+                            TEL_DIR="${RESULTS_DIR}/server-logs/${ns}/telemetry"
+                            mkdir -p "\$TEL_DIR"
+                            OS_HOST="opensearch-cluster.${ns}.svc.cluster.local:9200"
+                            OS_CURL="kubectl exec -n benchmark-api opensearch-benchmark-worker-${engine}-0 -c worker -- curl -sk -u admin:admin https://\$OS_HOST"
+
+                            for ENDPOINT_FILE in \
+                                "/_cluster/health?pretty          cluster-health.json" \
+                                "/_cluster/stats?pretty           cluster-stats.json" \
+                                "/_cluster/settings?include_defaults=true&flat_settings=true&pretty  cluster-settings.json" \
+                                "/_nodes/stats?pretty             nodes-stats.json" \
+                                "/_cat/nodes?v&h=name,heap.percent,heap.current,heap.max,ram.percent,cpu,load_1m,load_5m  nodes.txt" \
+                                "/_cat/thread_pool?v&h=node_name,name,active,queue,rejected,largest,completed  thread-pools.txt" \
+                                "/_cat/tasks?v&detailed           tasks.txt" \
+                                "/_cat/segments?v                 segments.txt"
+                            do
+                                ENDPOINT=\$(echo "\$ENDPOINT_FILE" | awk '{print \$1}')
+                                FILENAME=\$(echo "\$ENDPOINT_FILE" | awk '{print \$2}')
+                                \$OS_CURL "\$ENDPOINT" > "\$TEL_DIR/\$FILENAME" 2>/dev/null || true
+                                echo "  telemetry: \$FILENAME"
+                            done
                         """
                     }
 
