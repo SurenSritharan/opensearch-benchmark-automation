@@ -344,11 +344,45 @@ pipeline {
                                 curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID" \
                                     | jq '.' > ${RESULTS_DIR}/job-status-${engine}.json
 
-                                curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results" \
-                                    | jq '.' > ${RESULTS_DIR}/results-${engine}.json
+                                RESULTS_JSON=\$(curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results")
+                                echo "\$RESULTS_JSON" | jq '.' > ${RESULTS_DIR}/results-${engine}.json
 
                                 jq '{job_id, status, scenarios_completed, scenarios_total}' \
                                     ${RESULTS_DIR}/job-status-${engine}.json
+
+                                # Extract per-sweep test run artifacts from the results payload.
+                                # Each sweep carries test_run.json, workload-params.json,
+                                # benchmark.log (last 100 lines) and k8s_metrics.json.
+                                # Write them into per-sweep subdirectories so they are
+                                # archived together with the high-level result files.
+                                SWEEP_COUNT=\$(echo "\$RESULTS_JSON" | jq '.sweeps | length')
+                                echo "  Extracting artifacts for \$SWEEP_COUNT sweep(s)..."
+                                for i in \$(seq 0 \$(( SWEEP_COUNT - 1 ))); do
+                                    SWEEP_NAME=\$(echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].sweep_name // \"sweep-\$(( i + 1 ))\"")
+                                    LABEL=\$(echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].scenario_label // \"\"")
+                                    SWEEP_DIR="${RESULTS_DIR}/test-runs/${engine}/\${LABEL}/\${SWEEP_NAME}"
+                                    mkdir -p "\$SWEEP_DIR"
+
+                                    # test_run.json — OSB metrics (throughput, latency, recall)
+                                    echo "\$RESULTS_JSON" | jq ".sweeps[\$i].test_run // {}" \
+                                        > "\$SWEEP_DIR/test_run.json"
+
+                                    # workload-params.json — exact params used for this sweep
+                                    echo "\$RESULTS_JSON" | jq ".sweeps[\$i].workload_params // {}" \
+                                        > "\$SWEEP_DIR/workload-params.json"
+
+                                    # k8s_metrics.json — GKE pod metrics (may be null)
+                                    K8S=\$(echo "\$RESULTS_JSON" | jq ".sweeps[\$i].k8s_metrics")
+                                    if [ "\$K8S" != "null" ]; then
+                                        echo "\$K8S" | jq '.' > "\$SWEEP_DIR/k8s_metrics.json"
+                                    fi
+
+                                    # benchmark.log — last 100 lines captured by the API
+                                    echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].benchmark_log // \"\"" \
+                                        > "\$SWEEP_DIR/benchmark.log"
+
+                                    echo "    [\$SWEEP_NAME] \${LABEL} -> \$SWEEP_DIR"
+                                done
 
                                 echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
                             else
@@ -395,7 +429,75 @@ EOF
             }
         }
 
-        // ── 7. Archive results ─────────────────────────────────────────────────
+        // ── 7. Collect server logs ─────────────────────────────────────────────
+        //    Pull the last 5000 lines from every OpenSearch pod (manager + data)
+        //    in each engine namespace and store them alongside the benchmark
+        //    results so they can be correlated during analysis.
+        //    Mirrors the structure documented in SERVER_LOGS_README.md.
+        stage('Collect Server Logs') {
+            steps {
+                script {
+                    def engines = params.ENGINE_TARGET == 'all'
+                        ? ['jvector', 'faiss', 'lucene']
+                        : [params.ENGINE_TARGET.replace('os-', '')]
+
+                    engines.each { engine ->
+                        def ns = "os-${engine}"
+                        sh """
+                            LOG_DIR="${RESULTS_DIR}/server-logs/${ns}"
+                            mkdir -p "\$LOG_DIR"
+
+                            echo "Collecting logs from namespace: ${ns}"
+                            PODS=\$(kubectl get pods -n ${ns} \
+                                --no-headers -o custom-columns=':metadata.name' 2>/dev/null || true)
+
+                            if [ -z "\$PODS" ]; then
+                                echo "  No pods found in ${ns} — skipping"
+                            else
+                                for POD in \$PODS; do
+                                    CONTAINERS=\$(kubectl get pod "\$POD" -n ${ns} \
+                                        -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
+                                    for CONTAINER in \$CONTAINERS; do
+                                        LOGFILE="\$LOG_DIR/\${POD}-\${CONTAINER}.log"
+                                        kubectl logs "\$POD" -c "\$CONTAINER" -n ${ns} \
+                                            --tail=5000 2>&1 > "\$LOGFILE" || true
+                                        SIZE=\$(wc -l < "\$LOGFILE" 2>/dev/null || echo 0)
+                                        echo "  \$POD / \$CONTAINER: \${SIZE} lines -> \$LOGFILE"
+                                    done
+                                done
+
+                                # Write a summary file for this namespace
+                                {
+                                    echo "Server Log Collection Summary"
+                                    echo "============================================================"
+                                    echo "Collection Time: \$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+                                    echo "Namespace:       ${ns}"
+                                    echo "Build ID:        ${BUILD_ID}"
+                                    echo ""
+                                    echo "Collected Logs:"
+                                    echo "------------------------------------------------------------"
+                                    ls -lh "\$LOG_DIR"/*.log 2>/dev/null | awk '{print "  " \$NF "  " \$5}' || true
+                                } > "\$LOG_DIR/SUMMARY.txt"
+
+                                echo "  Summary written: \$LOG_DIR/SUMMARY.txt"
+                            fi
+                        """
+                    }
+
+                    // Also capture benchmark worker pod logs (stdout of the running worker)
+                    engines.each { engine ->
+                        sh """
+                            WORKER_LOG="${RESULTS_DIR}/server-logs/worker-${engine}.log"
+                            kubectl logs statefulset/opensearch-benchmark-worker-${engine} \
+                                -n benchmark-api --tail=5000 2>&1 > "\$WORKER_LOG" || true
+                            echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
+                        """
+                    }
+                }
+            }
+        }
+
+        // ── 8. Archive results ─────────────────────────────────────────────────
         stage('Archive Results') {
             steps {
                 archiveArtifacts artifacts: "${RESULTS_DIR}/**/*",
