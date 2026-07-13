@@ -254,11 +254,13 @@ async function init() {
     try {
         const resp = await fetch('/api/v1/benchmark');
         const data = await resp.json();
-        allJobs = (data.jobs || []).filter(j => j.status === 'completed');
+        const RESULTS_STATUSES = ['completed', 'partial', 'error', 'cancelled', 'failed'];
+        allJobs = (data.jobs || []).filter(j => RESULTS_STATUSES.includes(j.status));
         const opts = '<option value="">Select job…</option>' +
             allJobs.map(j => {
+                const statusTag = j.status !== 'completed' ? ` [${j.status}]` : '';
                 const label = [j.job_id.substring(0, 10), j.dataset, j.engine, j.scenario || j.ui_scenario]
-                    .filter(Boolean).join(' · ');
+                    .filter(Boolean).join(' · ') + statusTag;
                 return `<option value="${j.job_id}">${label}</option>`;
             }).join('');
         document.getElementById('jobA').innerHTML = opts;
