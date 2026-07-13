@@ -623,16 +623,16 @@
                 if (statusResponse.ok) {
                     const statusData = await statusResponse.json();
                     
-                    // If job is running or queued, show live status; for terminal non-result states too
-                    if (statusData.status === 'running' || statusData.status === 'queued' ||
-                        statusData.status === 'error' || statusData.status === 'failed' ||
-                        statusData.status === 'partial_failure' || statusData.status === 'cancelled') {
+                    // If job is running or queued, show live status
+                    if (statusData.status === 'running' || statusData.status === 'queued') {
                         await displayLiveStatus(jobId, statusData.status);
-                        
-                        // Only set up auto-refresh for running/queued jobs
-                        if (statusData.status === 'running' || statusData.status === 'queued') {
-                            liveRefreshInterval = setInterval(() => refreshLiveStatus(), 5000);
-                        }
+                        liveRefreshInterval = setInterval(() => refreshLiveStatus(), 5000);
+                        return;
+                    }
+                    
+                    // For terminal non-result states that have no file-based results, show live status panel
+                    if (statusData.status === 'partial_failure' || statusData.status === 'cancelled') {
+                        await displayLiveStatus(jobId, statusData.status);
                         return;
                     }
                 }
