@@ -70,6 +70,10 @@ pipeline {
         KUBECONFIG  = "${env.WORKSPACE}/.kube/config"
     }
 
+    triggers {
+        cron('0 7 * * *')
+    }
+
     options {
         buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
         timestamps()
