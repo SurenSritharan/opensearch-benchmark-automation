@@ -16,8 +16,17 @@ spec:
     app: opensearch-benchmark
     component: api-server
 ---
-# PVCs removed - they already exist from other manifests
-# Using existing PVCs to preserve data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: benchmark-api-db-storage
+  namespace: benchmark-api
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: premium-rwo
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -56,28 +65,18 @@ spec:
             pip install --quiet flask flask-cors pyyaml gunicorn filelock
             
             echo "Setting up directories..."
-            mkdir -p /results /app/web
+            mkdir -p /app/web
             
-            echo "Setting up workspace..."
-            if [ ! -d "/workspace/.git" ]; then
-              echo "Cloning benchmark automation project (first time)..."
-              git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
-              mv /workspace-tmp/* /workspace/
-              mv /workspace-tmp/.git /workspace/
-              rm -rf /workspace-tmp
-            else
-              echo "Workspace already exists, pulling latest changes..."
-              cd /workspace
-              git pull origin main || echo "Git pull failed, using existing version"
-            fi
+            echo "Cloning benchmark automation project..."
+            git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
+            cp /workspace-tmp/cloud-service/*.py /app/
+            cp -r /workspace-tmp/cloud-service/web /app/
+            cp /workspace-tmp/cloud-service/requirements.txt /app/ 2>/dev/null || true
+            rm -rf /workspace-tmp
             
-            echo "Setting up API service..."
-            cp /workspace/cloud-service/*.py /app/
-            cp -r /workspace/cloud-service/web /app/
-            
-            if [ -f "/workspace/cloud-service/requirements.txt" ]; then
+            if [ -f "/app/requirements.txt" ]; then
               echo "Installing cloud-service requirements..."
-              pip install --quiet -r /workspace/cloud-service/requirements.txt
+              pip install --quiet -r /app/requirements.txt
             fi
             
             echo "Starting API server (no benchmark execution)..."
@@ -92,6 +91,8 @@ spec:
           value: "api-only"
         - name: PYTHONUNBUFFERED
           value: "1"
+        - name: DB_PATH
+          value: "/data/jobs.db"
         
         resources:
           requests:
@@ -102,11 +103,9 @@ spec:
             cpu: "4"
         
         volumeMounts:
-        - name: results
-          mountPath: /results
-        - name: workspace
-          mountPath: /workspace
-        
+        - name: db-storage
+          mountPath: /data
+
         ports:
         - containerPort: 8080
           name: http
@@ -126,11 +125,8 @@ spec:
           periodSeconds: 10
       
       volumes:
-      - name: results
+      - name: db-storage
         persistentVolumeClaim:
-          claimName: benchmark-results-storage
-      - name: workspace
-        persistentVolumeClaim:
-          claimName: benchmark-workspace-storage
+          claimName: benchmark-api-db-storage
 
 # Made with Bob
