@@ -1,0 +1,65 @@
+# One 400Gi SSD PVC per engine worker.
+# Replaces the three shared PVCs (benchmark-nvme-storage, benchmark-results-storage,
+# benchmark-workspace-storage) with isolated per-engine volumes so all three workers
+# can run in parallel without RWO access conflicts.
+#
+# Storage layout inside each pod (via initContainer symlinks):
+#   /data/datasets  → /datasets   (250Gi equivalent — vector data, workloads, OSB home)
+#   /data/results   → /results    (50Gi equivalent  — job results, test_run.json, logs)
+#   /data/workspace → /workspace  (100Gi equivalent — cloned automation repo)
+#
+# Apply once per cluster:
+#   kubectl apply -f gke-manifest/benchmark-worker-pvcs.yaml
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: benchmark-worker-storage-jvector
+  namespace: benchmark-api
+  labels:
+    app: opensearch-benchmark
+    component: worker
+    engine: jvector
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-rwo
+  resources:
+    requests:
+      storage: 400Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: benchmark-worker-storage-faiss
+  namespace: benchmark-api
+  labels:
+    app: opensearch-benchmark
+    component: worker
+    engine: faiss
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-rwo
+  resources:
+    requests:
+      storage: 400Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: benchmark-worker-storage-lucene
+  namespace: benchmark-api
+  labels:
+    app: opensearch-benchmark
+    component: worker
+    engine: lucene
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-rwo
+  resources:
+    requests:
+      storage: 400Gi
+
+# Made with Bob
