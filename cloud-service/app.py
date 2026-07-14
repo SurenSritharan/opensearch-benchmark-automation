@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Cloud-native OpenSearch Benchmark REST API Service"""
-from flask import Flask, request, jsonify, send_from_directory, abort
+from flask import Flask, request, jsonify, send_from_directory, abort, Response
 from flask_cors import CORS
 from collections import deque
 import threading
@@ -132,6 +132,43 @@ _ALLOWED_ENGINES = set(
 )
 _IS_WORKER = bool(_ALLOWED_ENGINES)
 logger.info(f"WORKER_ENGINES={_WORKER_ENGINES_RAW!r}, allowed engines: {_ALLOWED_ENGINES}, will process jobs: {_IS_WORKER}")
+
+# ---------------------------------------------------------------------------
+# Worker proxy helpers (api-only mode)
+# ---------------------------------------------------------------------------
+# Each engine worker is reachable at a predictable in-cluster DNS name.
+# WORKER_BASE_URL_TEMPLATE can be overridden for local testing.
+_WORKER_URL_TEMPLATE = os.environ.get(
+    'WORKER_URL_TEMPLATE',
+    'http://opensearch-benchmark-worker-{engine}-0.opensearch-benchmark-worker-{engine}.benchmark-api.svc.cluster.local:8080'
+)
+_KNOWN_ENGINES = ['jvector', 'faiss', 'lucene']
+
+def _worker_url(engine: str) -> str:
+    return _WORKER_URL_TEMPLATE.format(engine=engine)
+
+def _proxy(engine: str, path: str, method: str = 'GET', **kwargs):
+    """Forward a request to a worker pod and return a Flask response."""
+    url = _worker_url(engine) + path
+    try:
+        resp = requests.request(method, url, timeout=30, **kwargs)
+        return Response(resp.content, status=resp.status_code,
+                        content_type=resp.headers.get('Content-Type', 'application/json'))
+    except requests.exceptions.ConnectionError:
+        return jsonify({'error': f'Worker for engine {engine!r} is unreachable'}), 503
+    except requests.exceptions.Timeout:
+        return jsonify({'error': f'Worker for engine {engine!r} timed out'}), 504
+
+def _engine_from_job_id(job_id: str) -> Optional[str]:
+    """Ask each worker which one owns this job_id; return the engine or None."""
+    for engine in _KNOWN_ENGINES:
+        try:
+            r = requests.get(_worker_url(engine) + f'/api/v1/benchmark/{job_id}', timeout=5)
+            if r.status_code == 200:
+                return engine
+        except Exception:
+            pass
+    return None
 
 def ensure_processor_running(engine: str):
     """Ensure a queue processor is running for the given engine.
@@ -873,6 +910,11 @@ def trigger_batch_benchmark():
         
         if not engine:
             return jsonify({'error': 'engine parameter is required'}), 400
+
+        # In api-only mode, forward the entire request to the engine's worker
+        if not _IS_WORKER:
+            return _proxy(engine, '/api/v1/benchmark/batch', method='POST',
+                          json=request_data)
         if not tests or not isinstance(tests, list):
             return jsonify({'error': 'tests parameter is required and must be a list'}), 400
         
@@ -1099,6 +1141,11 @@ def trigger_benchmark():
 @app.route('/api/v1/benchmark/<job_id>')
 def get_job_status(job_id: str):
     """Get status of a specific job"""
+    if not _IS_WORKER:
+        engine = _engine_from_job_id(job_id)
+        if not engine:
+            return jsonify({'error': 'Job not found'}), 404
+        return _proxy(engine, f'/api/v1/benchmark/{job_id}')
     job = get_job(job_id)
     
     if not job:
@@ -1123,6 +1170,11 @@ def get_job_status(job_id: str):
 @app.route('/api/v1/benchmark/<job_id>/cancel', methods=['POST'])
 def cancel_job(job_id: str):
     """Cancel a queued or running job"""
+    if not _IS_WORKER:
+        engine = _engine_from_job_id(job_id)
+        if not engine:
+            return jsonify({'error': 'Job not found'}), 404
+        return _proxy(engine, f'/api/v1/benchmark/{job_id}/cancel', method='POST')
     job = get_job(job_id)
     
     if not job:
@@ -1211,6 +1263,12 @@ def delete_job(job_id: str):
     Query parameters:
     - cleanup_results: If 'true', also delete the results directory (default: false)
     """
+    if not _IS_WORKER:
+        engine = _engine_from_job_id(job_id)
+        if not engine:
+            return jsonify({'error': 'Job not found'}), 404
+        return _proxy(engine, f'/api/v1/benchmark/{job_id}', method='DELETE',
+                      params=request.args)
     try:
         job = get_job(job_id)
         if not job:
@@ -1271,6 +1329,22 @@ def delete_job(job_id: str):
 @app.route('/api/v1/benchmark')
 def list_jobs():
     """List all jobs"""
+    if not _IS_WORKER:
+        # Fan out to all workers and merge results
+        all_jobs = []
+        total = 0
+        for engine in _KNOWN_ENGINES:
+            try:
+                r = requests.get(_worker_url(engine) + '/api/v1/benchmark', timeout=10)
+                if r.status_code == 200:
+                    data = r.json()
+                    all_jobs.extend(data.get('jobs', []))
+                    total += data.get('total', 0)
+            except Exception:
+                pass
+        all_jobs.sort(key=lambda j: j.get('created_at', ''), reverse=True)
+        return jsonify({'total': total, 'jobs': all_jobs[:50]})
+
     job_list = get_all_jobs(limit=50)
     
     # Get total count
@@ -1333,6 +1407,11 @@ def _parse_sweep_directory(
 @app.route('/api/v1/benchmark/<job_id>/results')
 def get_job_results(job_id: str):
     """Get results for a specific job by driving file resolution from job metadata."""
+    if not _IS_WORKER:
+        engine = _engine_from_job_id(job_id)
+        if not engine:
+            return jsonify({'error': 'Job not found'}), 404
+        return _proxy(engine, f'/api/v1/benchmark/{job_id}/results')
     job = get_job(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
@@ -1473,6 +1552,11 @@ def get_live_status(job_id: str):
     This endpoint works for both running and completed jobs.
     For running jobs, it returns whatever data is available so far.
     """
+    if not _IS_WORKER:
+        engine = _engine_from_job_id(job_id)
+        if not engine:
+            return jsonify({'error': 'Job not found'}), 404
+        return _proxy(engine, f'/api/v1/benchmark/{job_id}/live-status')
     job = get_job(job_id)
     if not job:
         return jsonify({'error': 'Job not found'}), 404
