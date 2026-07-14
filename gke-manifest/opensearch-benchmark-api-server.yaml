@@ -66,12 +66,13 @@ spec:
             
             echo "Setting up directories..."
             mkdir -p /app/web
-            
+
             echo "Cloning benchmark automation project..."
             git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
             cp /workspace-tmp/cloud-service/*.py /app/
             cp -r /workspace-tmp/cloud-service/web /app/
             cp /workspace-tmp/cloud-service/requirements.txt /app/ 2>/dev/null || true
+            cp -r /workspace-tmp/config /app/config
             rm -rf /workspace-tmp
             
             if [ -f "/app/requirements.txt" ]; then
@@ -93,6 +94,10 @@ spec:
           value: "1"
         - name: DB_PATH
           value: "/data/jobs.db"
+        - name: WORKSPACE_DIR
+          value: "/app"
+        - name: RESULTS_DIR
+          value: "/data/results"
         
         resources:
           requests:
