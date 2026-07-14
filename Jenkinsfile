@@ -48,8 +48,8 @@ pipeline {
         )
         string(
             name: 'OPENSEARCH_VERSION',
-            defaultValue: '3.6.0',
-            description: 'OpenSearch version to deploy (only used when REDEPLOY_CLUSTERS is true)'
+            defaultValue: '3.7.0',
+            description: 'OpenSearch version to deploy (used when REDEPLOY_CLUSTERS is true, or on first-time cluster deploy)'
         )
         booleanParam(
             name: 'DELETE_PVCS',
@@ -142,12 +142,22 @@ pipeline {
                         ? ['jvector', 'faiss', 'lucene']
                         : [params.ENGINE_TARGET.replace('os-', '')]
 
-                    // Kick off OpenSearch cluster scale-up (non-blocking — we wait below)
-                    echo "Scaling up OpenSearch clusters: ${engines}"
-                    if (params.ENGINE_TARGET == 'all') {
-                        sh "gke-manifest/scale-up-clusters.sh all"
-                    } else {
-                        sh "gke-manifest/scale-up-clusters.sh ${params.ENGINE_TARGET}"
+                    // Scale up or deploy each OpenSearch cluster as needed.
+                    // If StatefulSets already exist → scale up (fast path, preserves PVC data).
+                    // If StatefulSets are missing → cluster was never deployed, run initial deploy.
+                    engines.each { engine ->
+                        def ns = "os-${engine}"
+                        sh """
+                            STS_COUNT=\$(kubectl get statefulset -n ${ns} --no-headers 2>/dev/null | wc -l)
+                            if [ "\$STS_COUNT" -gt 0 ]; then
+                                echo "Scaling up existing cluster in ${ns}..."
+                                gke-manifest/scale-up-clusters.sh ${ns}
+                            else
+                                echo "No StatefulSets found in ${ns} — running initial deploy (version ${params.OPENSEARCH_VERSION})..."
+                                gke-manifest/deploy-namespace-cluster.sh ${ns} \
+                                    --version ${params.OPENSEARCH_VERSION} --force
+                            fi
+                        """
                     }
 
                     echo "Deploying/scaling up API server in benchmark-api namespace..."
