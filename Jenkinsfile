@@ -232,7 +232,74 @@ pipeline {
             }
         }
 
-        // ── 5. Per-Engine (parallel) ───────────────────────────────────────────
+        // ── 5. Seed Dataset Cache ──────────────────────────────────────────────
+        //    Ensures large HDF5 files that are not publicly available on
+        //    CloudFront are present on every required worker PVC before the
+        //    benchmark starts.  The Jenkins node generates a short-lived signed
+        //    URL from the file stored in GCS and has each worker wget it
+        //    directly (GCS → worker, no traffic through Jenkins).
+        //    Skipped when the file already exists at the correct size.
+        stage('Seed Dataset Cache') {
+            when {
+                expression {
+                    // Only needed when running the cohere-wiki-en-768 dataset at 5m+ corpus size
+                    (params.DATASET == 'cohere-wiki-en-768' || params.DATASET == 'all') &&
+                    (params.CORPUS_SIZE == '5m' || params.CORPUS_SIZE == 'all')
+                }
+            }
+            steps {
+                script {
+                    def engines = params.ENGINE_TARGET == 'all'
+                        ? ['jvector', 'faiss', 'lucene']
+                        : [params.ENGINE_TARGET.replace('os-', '')]
+
+                    // GCS object path for the file
+                    def gcsPath = 'gs://opensearch-benchmark-datasets/cohere-wiki-en-768/cohere-5m.hdf5'
+                    // OSB local dataset cache path expected by the vectorsearch workload
+                    def targetPath = '/datasets/opensearch-benchmark/.osb/benchmarks/data/cohere-5m/cohere-5m.hdf5'
+
+                    // Generate a 2-hour signed URL on the Jenkins node (has GCP credentials)
+                    def signedUrl = sh(
+                        script: "gsutil signurl -d 2h -u ${gcsPath} 2>&1 | tail -1 | awk '{print \$NF}'",
+                        returnStdout: true
+                    ).trim()
+
+                    if (!signedUrl.startsWith('https://')) {
+                        error("Failed to generate signed URL for ${gcsPath}: ${signedUrl}")
+                    }
+
+                    echo "Signed URL generated (valid 2h). Seeding workers: ${engines.join(', ')}"
+
+                    def seedBranches = engines.collectEntries { engine ->
+                        [(engine): {
+                            sh """
+                                POD="opensearch-benchmark-worker-${engine}-0"
+
+                                # Check if file already exists with the correct size (13 GB = 13,002,006,272 bytes).
+                                # Use a size threshold rather than exact match to tolerate minor format variants.
+                                EXISTING_SIZE=\$(kubectl exec -n benchmark-api \$POD -- \
+                                    stat -c '%s' ${targetPath} 2>/dev/null || echo 0)
+
+                                if [ "\$EXISTING_SIZE" -gt 10000000000 ]; then
+                                    echo "[${engine}] cohere-5m.hdf5 already present (\${EXISTING_SIZE} bytes) — skipping"
+                                else
+                                    echo "[${engine}] Downloading cohere-5m.hdf5 (~13 GB) ..."
+                                    kubectl exec -n benchmark-api \$POD -- sh -c \
+                                        "mkdir -p \$(dirname ${targetPath}) && \
+                                         wget -q --show-progress -O ${targetPath} '${signedUrl}'"
+                                    FINAL_SIZE=\$(kubectl exec -n benchmark-api \$POD -- stat -c '%s' ${targetPath} 2>/dev/null || echo 0)
+                                    echo "[${engine}] Done — \${FINAL_SIZE} bytes at ${targetPath}"
+                                fi
+                            """
+                        }]
+                    }
+
+                    parallel seedBranches
+                }
+            }
+        }
+
+        // ── 6. Per-Engine (parallel) ───────────────────────────────────────────
         //    One branch per engine runs all four per-engine steps in sequence:
         //      a) Wait for cluster health (green/yellow)
         //      b) Run benchmark
@@ -445,7 +512,7 @@ pipeline {
             }
         }
 
-        // ── 6. Build summary ───────────────────────────────────────────────────
+        // ── 7. Build summary ───────────────────────────────────────────────────
         stage('Build Summary') {
             steps {
                 script {
@@ -491,7 +558,7 @@ EOF
             }
         }
 
-        // ── 7. Archive results ─────────────────────────────────────────────────
+        // ── 8. Archive results ─────────────────────────────────────────────────
         stage('Archive Results') {
             steps {
                 archiveArtifacts artifacts: "${RESULTS_DIR}/**/*",
