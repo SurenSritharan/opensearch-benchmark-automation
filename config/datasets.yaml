@@ -10,6 +10,22 @@ datasets:
 
     supported_corpus_sizes: ["1m", "5m", "10m"]
 
+    # Files that must be pre-seeded onto worker PVCs before benchmarking.
+    # These are HDF5 corpus files not publicly available on CloudFront that are
+    # stored in GCS and downloaded by the Jenkins "Seed Dataset Cache" stage.
+    # Add an entry here whenever a new corpus file is stored in GCS.
+    #
+    # Fields:
+    #   corpus_size  - matches a value in supported_corpus_sizes (used to scope
+    #                  the seed step to only the corpus sizes being benchmarked)
+    #   gcs_path     - full gs:// object path
+    #   target_path  - absolute path on the worker pod where OSB expects the file
+    #                  (under BENCHMARK_HOME/.osb/benchmarks/data/<corpus>/<file>)
+    gcs_cache_files:
+      - corpus_size: "5m"
+        gcs_path: "gs://opensearch-benchmark-datasets/cohere-wiki-en-768/cohere-5m.hdf5"
+        target_path: "/datasets/opensearch-benchmark/.osb/benchmarks/data/cohere-5m/cohere-5m.hdf5"
+
     # Common parameters shared across all scenarios
     common_params:
       target_index_name: "cohere-wiki-en-768-{{corpus_size}}"
@@ -38,8 +54,8 @@ datasets:
           target_index_replica_shards: 1
           target_index_dimension: 768
           target_index_space_type: "innerproduct"
-          hnsw_ef_construction: 128
-          hnsw_m: 16
+          hnsw_ef_construction: 256
+          hnsw_m: 32
         # Engine-specific parameters for index creation
         engine_params:
           faiss:
@@ -162,8 +178,8 @@ datasets:
           target_index_dimension: 1024
           target_field_name: "vector"
           target_index_space_type: "cosinesimil"
-          hnsw_ef_construction: 128
-          hnsw_m: 16
+          hnsw_ef_construction: 256
+          hnsw_m: 32
         engine_params:
           jvector:
             method_name: "disk_ann"

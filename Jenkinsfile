@@ -233,68 +233,92 @@ pipeline {
         }
 
         // ── 5. Seed Dataset Cache ──────────────────────────────────────────────
-        //    Ensures large HDF5 files that are not publicly available on
-        //    CloudFront are present on every required worker PVC before the
-        //    benchmark starts.  The Jenkins node generates a short-lived signed
-        //    URL from the file stored in GCS and has each worker wget it
-        //    directly (GCS → worker, no traffic through Jenkins).
-        //    Skipped when the file already exists at the correct size.
+        //    Ensures GCS-hosted corpus files are present on every worker PVC
+        //    before benchmarking starts.  Which files to seed is driven entirely
+        //    by the `gcs_cache_files` list in config/datasets.yaml
+        //
+        //    To add a new file: add an entry under `gcs_cache_files` in the
+        //    relevant dataset in config/datasets.yaml and upload the file to GCS.
+        //
+        //    Flow per file:
+        //      1. Jenkins generates a 2h signed URL (no credentials on the pod needed)
+        //      2. Each worker pod wgets the file directly from GCS in parallel
+        //      3. Skip if the file already exists
         stage('Seed Dataset Cache') {
-            when {
-                expression {
-                    // Only needed when running the cohere-wiki-en-768 dataset at 5m+ corpus size
-                    (params.DATASET == 'cohere-wiki-en-768' || params.DATASET == 'all') &&
-                    (params.CORPUS_SIZE == '5m' || params.CORPUS_SIZE == 'all')
-                }
-            }
             steps {
                 script {
                     def engines = params.ENGINE_TARGET == 'all'
                         ? ['jvector', 'faiss', 'lucene']
                         : [params.ENGINE_TARGET.replace('os-', '')]
 
-                    // GCS object path for the file
-                    def gcsPath = 'gs://opensearch-benchmark-datasets/cohere-wiki-en-768/cohere-5m.hdf5'
-                    // OSB local dataset cache path expected by the vectorsearch workload
-                    def targetPath = '/datasets/opensearch-benchmark/.osb/benchmarks/data/cohere-5m/cohere-5m.hdf5'
+                    def corpusSizes = params.CORPUS_SIZE == 'all'
+                        ? ['1m', '5m']
+                        : [params.CORPUS_SIZE]
 
-                    // Generate a 2-hour signed URL on the Jenkins node (has GCP credentials)
-                    def signedUrl = sh(
-                        script: "gsutil signurl -d 2h -u ${gcsPath} 2>&1 | tail -1 | awk '{print \$NF}'",
-                        returnStdout: true
-                    ).trim()
+                    def datasets = params.DATASET == 'all'
+                        ? ['cohere-wiki-en-768', 'cohere-msmarco-1024']
+                        : [params.DATASET]
 
-                    if (!signedUrl.startsWith('https://')) {
-                        error("Failed to generate signed URL for ${gcsPath}: ${signedUrl}")
+                    // Parse datasets.yaml to find all gcs_cache_files entries that
+                    // match the selected datasets and corpus sizes.
+                    def filesToSeed = []
+                    def datasetsConfig = readYaml file: 'config/datasets.yaml'
+
+                    datasets.each { dataset ->
+                        def cacheFiles = datasetsConfig.datasets[dataset]?.gcs_cache_files ?: []
+                        cacheFiles.each { entry ->
+                            if (corpusSizes.contains(entry.corpus_size)) {
+                                filesToSeed << entry
+                            }
+                        }
                     }
 
-                    echo "Signed URL generated (valid 2h). Seeding workers: ${engines.join(', ')}"
-
-                    def seedBranches = engines.collectEntries { engine ->
-                        [(engine): {
-                            sh """
-                                POD="opensearch-benchmark-worker-${engine}-0"
-
-                                # Check if file already exists with the correct size (13 GB = 13,002,006,272 bytes).
-                                # Use a size threshold rather than exact match to tolerate minor format variants.
-                                EXISTING_SIZE=\$(kubectl exec -n benchmark-api \$POD -- \
-                                    stat -c '%s' ${targetPath} 2>/dev/null || echo 0)
-
-                                if [ "\$EXISTING_SIZE" -gt 10000000000 ]; then
-                                    echo "[${engine}] cohere-5m.hdf5 already present (\${EXISTING_SIZE} bytes) — skipping"
-                                else
-                                    echo "[${engine}] Downloading cohere-5m.hdf5 (~13 GB) ..."
-                                    kubectl exec -n benchmark-api \$POD -- sh -c \
-                                        "mkdir -p \$(dirname ${targetPath}) && \
-                                         wget -q --show-progress -O ${targetPath} '${signedUrl}'"
-                                    FINAL_SIZE=\$(kubectl exec -n benchmark-api \$POD -- stat -c '%s' ${targetPath} 2>/dev/null || echo 0)
-                                    echo "[${engine}] Done — \${FINAL_SIZE} bytes at ${targetPath}"
-                                fi
-                            """
-                        }]
+                    if (filesToSeed.isEmpty()) {
+                        echo "No GCS cache files required for dataset=${params.DATASET} corpus=${params.CORPUS_SIZE} — skipping"
+                        return
                     }
 
-                    parallel seedBranches
+                    echo "Files to seed: ${filesToSeed.collect { it.gcs_path }.join(', ')}"
+
+                    // For each file: generate a signed URL once, then seed all engines in parallel
+                    filesToSeed.each { entry ->
+                        def gcsPath    = entry.gcs_path
+                        def targetPath = entry.target_path
+
+                        def signedUrl = sh(
+                            script: "gsutil signurl -d 2h -u ${gcsPath} 2>&1 | tail -1 | awk '{print \$NF}'",
+                            returnStdout: true
+                        ).trim()
+
+                        if (!signedUrl.startsWith('https://')) {
+                            error("Failed to generate signed URL for ${gcsPath}: ${signedUrl}")
+                        }
+
+                        def fileName = gcsPath.tokenize('/').last()
+                        echo "Seeding ${fileName} to ${engines.size()} worker(s)..."
+
+                        def seedBranches = engines.collectEntries { engine ->
+                            [(engine): {
+                                sh """
+                                    POD="opensearch-benchmark-worker-${engine}-0"
+
+                                    if kubectl exec -n benchmark-api \$POD -- test -f ${targetPath} 2>/dev/null; then
+                                        echo "[${engine}] ${fileName} already present — skipping"
+                                    else
+                                        echo "[${engine}] Downloading ${fileName} ..."
+                                        kubectl exec -n benchmark-api \$POD -- sh -c \
+                                            "mkdir -p \$(dirname ${targetPath}) && \
+                                             wget -q --show-progress -O ${targetPath} '${signedUrl}'"
+                                        FINAL_SIZE=\$(kubectl exec -n benchmark-api \$POD -- \
+                                            stat -c '%s' ${targetPath} 2>/dev/null || echo 0)
+                                        echo "[${engine}] Done — \${FINAL_SIZE} bytes"
+                                    fi
+                                """
+                            }]
+                        }
+
+                        parallel seedBranches
+                    }
                 }
             }
         }
