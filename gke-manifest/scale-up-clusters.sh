@@ -35,10 +35,12 @@ scale_up_namespace() {
         return
     fi
     
-    # Check if there are any StatefulSets
+    # If no StatefulSets exist, the cluster was never deployed — run initial deploy
     local statefulsets=$(kubectl get statefulset -n $ns -o name 2>/dev/null | wc -l)
     if [ "$statefulsets" -eq 0 ]; then
-        echo -e "${YELLOW}⚠️  No StatefulSets found in $ns, skipping...${NC}"
+        echo -e "${YELLOW}⚠️  No StatefulSets found in $ns — running initial deploy...${NC}"
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        "$SCRIPT_DIR/deploy-namespace-cluster.sh" "$ns" --force
         return
     fi
     
@@ -49,61 +51,19 @@ scale_up_namespace() {
     echo ""
     echo "Scaling up StatefulSets to operational replicas..."
     
-    # Scale up cluster manager first (needs to be ready before data nodes)
+    # Scale up cluster manager
     if kubectl get statefulset opensearch-cluster-manager -n $ns &> /dev/null; then
         echo "  📈 Scaling up opensearch-cluster-manager to 1 replica..."
         kubectl scale statefulset opensearch-cluster-manager --replicas=1 -n $ns
-        
-        echo "  ⏳ Waiting for cluster manager to be ready..."
-        kubectl wait --for=condition=ready pod -l app=opensearch-cluster-manager -n $ns --timeout=300s || {
-            echo -e "${YELLOW}⚠️  Cluster manager took longer than expected to start${NC}"
-        }
     fi
-    
+
     # Scale up data nodes
     if kubectl get statefulset opensearch-data -n $ns &> /dev/null; then
         echo "  📈 Scaling up opensearch-data to 3 replicas..."
         kubectl scale statefulset opensearch-data --replicas=3 -n $ns
-        
-        echo "  ⏳ Waiting for data nodes to be ready..."
-        kubectl wait --for=condition=ready pod -l app=opensearch-data -n $ns --timeout=300s || {
-            echo -e "${YELLOW}⚠️  Data nodes took longer than expected to start${NC}"
-        }
     fi
-    
-    # Scale up benchmark client
-    if kubectl get statefulset opensearch-benchmark-client -n $ns &> /dev/null; then
-        echo "  📈 Scaling up opensearch-benchmark-client to 1 replica..."
-        kubectl scale statefulset opensearch-benchmark-client --replicas=1 -n $ns
-        
-        echo "  ⏳ Waiting for benchmark client to be ready..."
-        kubectl wait --for=condition=ready pod -l app=opensearch-benchmark-client -n $ns --timeout=180s || {
-            echo -e "${YELLOW}⚠️  Benchmark client took longer than expected to start${NC}"
-        }
-    fi
-    
-    # Show final status
-    echo ""
-    echo "Final StatefulSet status:"
-    kubectl get statefulset -n $ns -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas,READY:.status.readyReplicas
-    
-    echo ""
-    echo "Pod status:"
-    kubectl get pods -n $ns
-    
-    # Check cluster health
-    echo ""
-    echo "Checking cluster health..."
-    sleep 5  # Give cluster a moment to stabilize
-    
-    if kubectl get pod opensearch-data-0 -n $ns &> /dev/null; then
-        echo "Cluster health:"
-        kubectl exec -n $ns opensearch-data-0 -- curl -k -u admin:admin -s https://localhost:9200/_cluster/health?pretty 2>/dev/null || {
-            echo -e "${YELLOW}⚠️  Could not retrieve cluster health (cluster may still be initializing)${NC}"
-        }
-    fi
-    
-    echo -e "${GREEN}✅ Namespace $ns scaled up successfully${NC}"
+
+    echo -e "${GREEN}✅ Scale commands issued for $ns${NC}"
 }
 
 # Main logic
