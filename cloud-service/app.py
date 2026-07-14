@@ -29,11 +29,13 @@ app = Flask(__name__, static_folder='web', static_url_path='')
 CORS(app)
 
 # Initialize components
-config_loader = ConfigLoader(workspace_dir='/workspace')
-benchmark_runner = BenchmarkRunner(config_loader, results_dir='/results')
+_workspace_dir = os.environ.get("WORKSPACE_DIR", "/workspace")
+_results_dir   = os.environ.get("RESULTS_DIR",   "/results")
+config_loader = ConfigLoader(workspace_dir=_workspace_dir)
+benchmark_runner = BenchmarkRunner(config_loader, results_dir=_results_dir)
 
 # SQLite database for job storage (shared across all workers)
-DB_PATH = "/workspace/jobs.db"
+DB_PATH = os.environ.get("DB_PATH", "/workspace/jobs.db")
 db_lock = threading.RLock()
 
 # Track which engine processors are running (in-memory per worker)
