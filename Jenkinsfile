@@ -198,8 +198,8 @@ pipeline {
                                     -n benchmark-api --timeout=120s || true
                                 kubectl scale statefulset opensearch-benchmark-worker-${engine} \
                                     --replicas=1 -n benchmark-api
-                                kubectl wait --for=condition=ready pod \
-                                    -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                # rollout status waits for the StatefulSet controller to create the pod
+                                kubectl rollout status statefulset/opensearch-benchmark-worker-${engine} \
                                     -n benchmark-api --timeout=1200s
                             """
                         }

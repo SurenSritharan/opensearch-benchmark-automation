@@ -58,9 +58,6 @@ data:
     knn.cache.item.expiry.enabled: false
     knn.cache.item.expiry.minutes: "180m"
     knn.circuit_breaker.triggered: "false"
-
-    prometheus.indices: false    
-    prometheus.nodes.filter: "_local"
 ---
 apiVersion: v1
 kind: Service
