@@ -142,64 +142,23 @@ pipeline {
                         ? ['jvector', 'faiss', 'lucene']
                         : [params.ENGINE_TARGET.replace('os-', '')]
 
-                    // Scale up or deploy each OpenSearch cluster as needed.
-                    // If StatefulSets already exist → scale up (fast path, preserves PVC data).
-                    // If StatefulSets are missing → cluster was never deployed, run initial deploy.
-                    engines.each { engine ->
-                        def ns = "os-${engine}"
-                        sh """
-                            STS_COUNT=\$(kubectl get statefulset -n ${ns} --no-headers 2>/dev/null | wc -l)
-                            if [ "\$STS_COUNT" -gt 0 ]; then
-                                echo "Scaling up existing cluster in ${ns}..."
-                                gke-manifest/scale-up-clusters.sh ${ns}
-                            else
-                                echo "No StatefulSets found in ${ns} — running initial deploy (version ${params.OPENSEARCH_VERSION})..."
-                                gke-manifest/deploy-namespace-cluster.sh ${ns} \
-                                    --version ${params.OPENSEARCH_VERSION} --force
-                            fi
-                        """
-                    }
-
-                    echo "Deploying/scaling up API server in benchmark-api namespace..."
-                    sh '''
-                        # apply is idempotent — creates if missing, updates if changed
-                        # Scale to 0 first so the pod always restarts and picks up latest code
-                        kubectl apply -f gke-manifest/opensearch-benchmark-api-server.yaml -n benchmark-api
-                        kubectl scale deployment opensearch-benchmark-api-server \
-                            --replicas=0 -n benchmark-api
-                        kubectl wait --for=delete pod \
-                            -l app=opensearch-benchmark,component=api-server \
-                            -n benchmark-api --timeout=120s || true
-                        kubectl scale deployment opensearch-benchmark-api-server \
-                            --replicas=1 -n benchmark-api
-                    '''
-
-                    echo "Deploying/scaling up benchmark worker(s) in benchmark-api namespace..."
-                    engines.each { engine ->
-                        sh """
-                            cat gke-manifest/opensearch-benchmark-worker-template.yaml | \
-                                sed 's/\\\${ENGINE}/${engine}/g' | \
-                                kubectl apply -f -
-                            # Bounce the worker so it always restarts and picks up latest code via git pull
-                            kubectl scale statefulset opensearch-benchmark-worker-${engine} \
-                                --replicas=0 -n benchmark-api
-                            kubectl wait --for=delete pod \
-                                -l app=opensearch-benchmark,component=worker,engine=${engine} \
-                                -n benchmark-api --timeout=120s || true
-                            kubectl scale statefulset opensearch-benchmark-worker-${engine} \
-                                --replicas=1 -n benchmark-api
-                        """
-                    }
-
-                    // Wait for all pods in parallel — opensearch-cluster and
-                    // benchmark-cloud-native service startups are independent and can
-                    // take very different amounts of time.
-                    echo "Waiting for all pods to be ready..."
+                    // Each branch scales up (or deploys) its component then waits for it to be
+                    // ready — all branches run fully in parallel so no component blocks another.
                     def waitBranches = [:]
+
                     engines.each { engine ->
                         def ns = "os-${engine}"
                         waitBranches["opensearch-cluster-${engine}"] = {
                             sh """
+                                STS_COUNT=\$(kubectl get statefulset -n ${ns} --no-headers 2>/dev/null | wc -l)
+                                if [ "\$STS_COUNT" -gt 0 ]; then
+                                    echo "Scaling up existing cluster in ${ns}..."
+                                    gke-manifest/scale-up-clusters.sh ${ns}
+                                else
+                                    echo "No StatefulSets found in ${ns} — running initial deploy (version ${params.OPENSEARCH_VERSION})..."
+                                    gke-manifest/deploy-namespace-cluster.sh ${ns} \
+                                        --version ${params.OPENSEARCH_VERSION} --force
+                                fi
                                 kubectl wait --for=condition=ready pod \
                                     -l app=opensearch-cluster-manager -n ${ns} --timeout=300s
                                 kubectl wait --for=condition=ready pod \
@@ -207,21 +166,45 @@ pipeline {
                             """
                         }
                     }
+
                     waitBranches['benchmark-api-server'] = {
                         sh '''
+                            # apply is idempotent — creates if missing, updates if changed
+                            # Scale to 0 first so the pod always restarts and picks up latest code
+                            kubectl apply -f gke-manifest/opensearch-benchmark-api-server.yaml -n benchmark-api
+                            kubectl scale deployment opensearch-benchmark-api-server \
+                                --replicas=0 -n benchmark-api
+                            kubectl wait --for=delete pod \
+                                -l app=opensearch-benchmark,component=api-server \
+                                -n benchmark-api --timeout=120s || true
+                            kubectl scale deployment opensearch-benchmark-api-server \
+                                --replicas=1 -n benchmark-api
                             kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
                                 -n benchmark-api --timeout=300s
                         '''
                     }
+
                     engines.each { engine ->
                         waitBranches["benchmark-worker-${engine}"] = {
                             sh """
+                                cat gke-manifest/opensearch-benchmark-worker-template.yaml | \
+                                    sed 's/\\\${ENGINE}/${engine}/g' | \
+                                    kubectl apply -f -
+                                # Bounce the worker so it always restarts and picks up latest code via git pull
+                                kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                    --replicas=0 -n benchmark-api
+                                kubectl wait --for=delete pod \
+                                    -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                    -n benchmark-api --timeout=120s || true
+                                kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                    --replicas=1 -n benchmark-api
                                 kubectl wait --for=condition=ready pod \
                                     -l app=opensearch-benchmark,component=worker,engine=${engine} \
                                     -n benchmark-api --timeout=1200s
                             """
                         }
                     }
+
                     parallel waitBranches
                 }
             }
