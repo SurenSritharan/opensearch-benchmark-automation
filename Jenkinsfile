@@ -159,10 +159,10 @@ pipeline {
                                     gke-manifest/deploy-namespace-cluster.sh ${ns} \
                                         --version ${params.OPENSEARCH_VERSION} --force
                                 fi
-                                kubectl wait --for=condition=ready pod \
-                                    -l app=opensearch-cluster-manager -n ${ns} --timeout=300s
-                                kubectl wait --for=condition=ready pod \
-                                    -l app=opensearch-data -n ${ns} --timeout=300s
+                                kubectl rollout status statefulset/opensearch-cluster-manager \
+                                    -n ${ns} --timeout=300s
+                                kubectl rollout status statefulset/opensearch-data \
+                                    -n ${ns} --timeout=300s
                             """
                         }
                     }
