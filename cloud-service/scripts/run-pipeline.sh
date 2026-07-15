@@ -324,9 +324,8 @@ echo "Job ID: $JOB_ID"
 echo ""
 
 # ── Poll for completion ────────────────────────────────────────────────────────
-# Prints a line only when a scenario completes — avoids flicker from polling
-# current_scenario mid-transition. Uses the list endpoint so scenario_status
-# and the clean label are available in one call.
+# Prints a line only when a scenario completes — avoids flicker from
+# current_scenario mid-transition.
 echo "Monitoring job status..."
 echo ""
 
@@ -335,31 +334,25 @@ PREV_STATUS=""
 
 while true; do
   now="[$(date '+%Y-%m-%d %H:%M:%S')]"
-  list_resp=$(curl -s "${API_URL}/api/v1/benchmark")
-  if ! echo "$list_resp" | jq '.' > /dev/null 2>&1; then
+  resp=$(curl -s "${API_URL}/api/v1/benchmark/${JOB_ID}?engine=${ENGINE}")
+  if ! echo "$resp" | jq '.' > /dev/null 2>&1; then
     echo "$now Waiting for job to appear..."
     sleep 10
     continue
   fi
 
-  # Extract status line for this engine's row in one jq pass: "status|completed|total|label"
-  summary=$(echo "$list_resp" | jq -r --arg jid "$JOB_ID" --arg eng "$ENGINE" '
-    (.jobs[] | select(.job_id == $jid and .engine == $eng)) as $row |
-    ($row.options._batch_metadata.current_scenario // "") as $cur |
-    ($row.options._batch_scenarios // []) as $scens |
+  # scenario_status and current_scenario are unpacked at the top level by the API.
+  # Resolve current_scenario key → label via the scenarios list.
+  summary=$(echo "$resp" | jq -r '
+    (.current_scenario // "") as $cur |
+    (.scenarios // []) as $scens |
     ( if $cur == "" then ""
       else ( $scens[] | select( (.dataset + "-" + .label) == $cur ) | .label ) // $cur
       end ) as $label |
-    ([ $row.options._batch_metadata.scenario_status // {} | to_entries[] | select(.value == "completed") ] | length) as $done |
-    ([ $row.options._batch_metadata.scenario_status // {} | keys[] ] | length) as $total |
-    [ ($row.status // "unknown"), ($done|tostring), ($total|tostring), $label ] | join("|")
+    ([ .scenario_status // {} | to_entries[] | select(.value == "completed") ] | length) as $done |
+    ([ .scenario_status // {} | keys[] ] | length) as $total |
+    [ (.status // "unknown"), ($done|tostring), ($total|tostring), $label ] | join("|")
   ')
-
-  if [ -z "$summary" ]; then
-    echo "$now Waiting for job to appear..."
-    sleep 10
-    continue
-  fi
 
   IFS='|' read -r job_status completed total label <<< "$summary"
 
@@ -384,7 +377,7 @@ while true; do
     echo ""
 
     if [ "$job_status" = "completed" ]; then
-      RESULTS=$(curl -s "${API_URL}/api/v1/benchmark/${JOB_ID}/results")
+      RESULTS=$(curl -s "${API_URL}/api/v1/benchmark/${JOB_ID}/results?engine=${ENGINE}")
       echo "Results Summary:"
       echo "$RESULTS" | jq '{
         job_id,
@@ -411,7 +404,7 @@ echo "=========================================="
 echo "Done!"
 echo "=========================================="
 echo "Job ID: $JOB_ID"
-echo "View results at: ${API_URL}/results.html?job_id=${JOB_ID}"
+echo "View results at: ${API_URL}/results/${JOB_ID}?job_id=${JOB_ID}&engine=${ENGINE}"
 echo ""
 
 # Made with Bob

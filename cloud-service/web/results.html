@@ -604,9 +604,10 @@
     </div>
     
     <script>
-        // Get job ID from URL
+        // Get job ID and engine from URL
         const urlParams = new URLSearchParams(window.location.search);
         const jobId = urlParams.get('job_id');
+        const engineParam = urlParams.get('engine') ? `&engine=${urlParams.get('engine')}` : '';
         
         if (!jobId) {
             showError('No job ID specified in URL');
@@ -619,7 +620,7 @@
         async function loadResults(jobId) {
             try {
                 // First check job status
-                const statusResponse = await fetch(`/api/v1/benchmark/${jobId}`);
+                const statusResponse = await fetch(`/api/v1/benchmark/${jobId}?_=1${engineParam}`);
                 if (statusResponse.ok) {
                     const statusData = await statusResponse.json();
                     
@@ -638,7 +639,7 @@
                 }
                 
                 // For fully completed jobs, load full results
-                const response = await fetch(`/api/v1/benchmark/${jobId}/results`);
+                const response = await fetch(`/api/v1/benchmark/${jobId}/results?_=1${engineParam}`);
                 
                 if (!response.ok) {
                     const error = await response.json();
@@ -656,7 +657,7 @@
             if (!jobId) return;
             
             // Check if job completed successfully, if so load full results without a page reload
-            const statusResponse = await fetch(`/api/v1/benchmark/${jobId}`);
+            const statusResponse = await fetch(`/api/v1/benchmark/${jobId}?_=1${engineParam}`);
             if (statusResponse.ok) {
                 const statusData = await statusResponse.json();
                 if (statusData.status === 'completed') {
@@ -682,7 +683,7 @@
 
         async function displayLiveStatus(jobId, initialStatus = null) {
             try {
-                const response = await fetch(`/api/v1/benchmark/${jobId}/live-status`);
+                const response = await fetch(`/api/v1/benchmark/${jobId}/live-status?_=1${engineParam}`);
                 if (!response.ok) {
                     console.error('Failed to fetch live status');
                     return;

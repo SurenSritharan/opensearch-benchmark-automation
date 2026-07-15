@@ -1150,7 +1150,7 @@ def trigger_benchmark():
 def get_job_status(job_id: str):
     """Get status of a specific job"""
     if not _IS_WORKER:
-        engine = _engine_from_job_id(job_id)
+        engine = request.args.get('engine') or _engine_from_job_id(job_id)
         if not engine:
             return jsonify({'error': 'Job not found'}), 404
         return _proxy(engine, f'/api/v1/benchmark/{job_id}')
@@ -1179,7 +1179,7 @@ def get_job_status(job_id: str):
 def cancel_job(job_id: str):
     """Cancel a queued or running job"""
     if not _IS_WORKER:
-        engine = _engine_from_job_id(job_id)
+        engine = request.args.get('engine') or _engine_from_job_id(job_id)
         if not engine:
             return jsonify({'error': 'Job not found'}), 404
         return _proxy(engine, f'/api/v1/benchmark/{job_id}/cancel', method='POST')
@@ -1269,10 +1269,11 @@ def delete_job(job_id: str):
     Delete a job from the database and optionally clean up its results.
     
     Query parameters:
+    - engine: Target a specific engine worker directly (avoids worker race)
     - cleanup_results: If 'true', also delete the results directory (default: false)
     """
     if not _IS_WORKER:
-        engine = _engine_from_job_id(job_id)
+        engine = request.args.get('engine') or _engine_from_job_id(job_id)
         if not engine:
             return jsonify({'error': 'Job not found'}), 404
         return _proxy(engine, f'/api/v1/benchmark/{job_id}', method='DELETE',
@@ -1416,7 +1417,7 @@ def _parse_sweep_directory(
 def get_job_results(job_id: str):
     """Get results for a specific job by driving file resolution from job metadata."""
     if not _IS_WORKER:
-        engine = _engine_from_job_id(job_id)
+        engine = request.args.get('engine') or _engine_from_job_id(job_id)
         if not engine:
             return jsonify({'error': 'Job not found'}), 404
         return _proxy(engine, f'/api/v1/benchmark/{job_id}/results')
@@ -1561,7 +1562,7 @@ def get_live_status(job_id: str):
     For running jobs, it returns whatever data is available so far.
     """
     if not _IS_WORKER:
-        engine = _engine_from_job_id(job_id)
+        engine = request.args.get('engine') or _engine_from_job_id(job_id)
         if not engine:
             return jsonify({'error': 'Job not found'}), 404
         return _proxy(engine, f'/api/v1/benchmark/{job_id}/live-status')
