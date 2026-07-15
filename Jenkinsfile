@@ -224,16 +224,25 @@ pipeline {
                                     if [ -n "\$RECOVERY" ]; then
                                         echo "  [${ns}] status=\${STATUS:-unknown}  initializing=\${INIT}"
                                         echo "\$RECOVERY" | while read line; do echo "    \$line"; done
-                                        # Sum all percentage columns as a progress score (integer, drop decimals)
+                                        # Sum percentage columns as a progress score (integer, strip decimals)
                                         SCORE=\$(echo "\$RECOVERY" | awk '{sum += \$4 + \$5} END {printf "%d", sum}')
+                                        # Max possible score = 200 * number of recovering shards
+                                        MAX_SCORE=\$(echo "\$RECOVERY" | awk 'END {printf "%d", NR * 200}')
                                     else
                                         echo "  [${ns}] status=\${STATUS:-unknown}  initializing=\${INIT}"
                                         SCORE=0
+                                        MAX_SCORE=0
                                     fi
 
                                     if [ "\$SCORE" -gt "\$LAST_PROGRESS_SCORE" ]; then
                                         LAST_PROGRESS_SCORE=\$SCORE
                                         LAST_PROGRESS=\$SECONDS
+                                    fi
+                                    # Don't stall-check when all shards are at 100% — they're in
+                                    # final commit/cluster-state handoff, which can take a few minutes.
+                                    if [ "\$MAX_SCORE" -gt 0 ] && [ "\$SCORE" -ge "\$MAX_SCORE" ]; then
+                                        sleep 10
+                                        continue
                                     fi
                                     STALLED=\$((SECONDS - LAST_PROGRESS))
                                     if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
