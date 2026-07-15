@@ -335,190 +335,198 @@ pipeline {
                     def engineBranches = engines.collectEntries { engine ->
                         def ns = "os-${engine}"
                         [(engine): {
-                            // ── a) Wait for cluster health ─────────────────────
-                            if (params.SCALE_CLUSTERS || params.REDEPLOY_CLUSTERS) {
-                                sh """
-                                    echo "Waiting for OpenSearch cluster in ${ns} to be green or yellow..."
-                                    DEADLINE=\$((SECONDS + 300))
-                                    while [ \$SECONDS -lt \$DEADLINE ]; do
-                                        STATUS=\$(kubectl exec -n ${ns} opensearch-data-0 -- \
-                                            curl -sk -u admin:admin \
-                                            https://localhost:9200/_cluster/health 2>/dev/null \
-                                            | grep -oP '(?<="status":")[^"]+' || true)
-                                        echo "  [${ns}] cluster status: \${STATUS:-unknown}"
-                                        if [ "\$STATUS" = "green" ] || [ "\$STATUS" = "yellow" ]; then
-                                            echo "  ✅ ${ns} is ready (\${STATUS})"
-                                            break
-                                        fi
-                                        sleep 10
-                                    done
-                                    if [ "\$STATUS" != "green" ] && [ "\$STATUS" != "yellow" ]; then
-                                        echo "❌ ${ns} cluster did not reach green/yellow within 5 minutes"
-                                        exit 1
-                                    fi
-                                """
-                            }
-
-                            // ── b) Run benchmark ───────────────────────────────
-                            sh """
-                                ${datasetEnv} \
-                                API_URL=${params.API_URL} \
-                                TIME_PERIOD=300 \
-                                cloud-service/scripts/run-pipeline.sh \
-                                    ${params.PIPELINE} \
-                                    ${engine} \
-                                    ${corpusSize} \
-                                    2>&1 | tee benchmark-run-${engine}.log
-
-                                JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-${engine}.log | tail -1 || true)
-                                if [ -n "\$JOB_ID" ]; then
-                                    echo "\$JOB_ID" > job_id_${engine}.txt
-                                    echo "[${engine}] Job ID captured: \$JOB_ID"
-                                fi
-                            """
-
-                            // ── c) Fetch & save results ────────────────────────
-                            sh """
-                                cp benchmark-run-${engine}.log ${RESULTS_DIR}/ 2>/dev/null || true
-
-                                if [ -f job_id_${engine}.txt ]; then
-                                    JOB_ID=\$(cat job_id_${engine}.txt)
-                                    echo "=== ${engine} (job: \$JOB_ID) ==="
-
-                                    curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID" \
-                                        | jq '.' > ${RESULTS_DIR}/job-status-${engine}.json
-
-                                    RESULTS_JSON=\$(curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results")
-                                    echo "\$RESULTS_JSON" | jq '.' > ${RESULTS_DIR}/results-${engine}.json
-
-                                    jq '{job_id, status, scenarios_completed, scenarios_total}' \
-                                        ${RESULTS_DIR}/job-status-${engine}.json
-
-                                    SWEEP_COUNT=\$(echo "\$RESULTS_JSON" | jq '.sweeps | length')
-                                    echo "  Extracting artifacts for \$SWEEP_COUNT sweep(s)..."
-                                    for i in \$(seq 0 \$(( SWEEP_COUNT - 1 ))); do
-                                        SWEEP_NAME=\$(echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].sweep_name // \"sweep-\$(( i + 1 ))\"")
-                                        LABEL=\$(echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].scenario_label // \"\"")
-                                        SWEEP_DIR="${RESULTS_DIR}/test-runs/${engine}/\${LABEL}/\${SWEEP_NAME}"
-                                        mkdir -p "\$SWEEP_DIR"
-
-                                        echo "\$RESULTS_JSON" | jq ".sweeps[\$i].test_run // {}" \
-                                            > "\$SWEEP_DIR/test_run.json"
-                                        echo "\$RESULTS_JSON" | jq ".sweeps[\$i].workload_params // {}" \
-                                            > "\$SWEEP_DIR/workload-params.json"
-                                        K8S=\$(echo "\$RESULTS_JSON" | jq ".sweeps[\$i].k8s_metrics")
-                                        if [ "\$K8S" != "null" ]; then
-                                            echo "\$K8S" | jq '.' > "\$SWEEP_DIR/k8s_metrics.json"
-                                        fi
-                                        echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].benchmark_log // \"\"" \
-                                            > "\$SWEEP_DIR/benchmark.log"
-
-                                        echo "    [\$SWEEP_NAME] \${LABEL} -> \$SWEEP_DIR"
-                                    done
-
-                                    echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
-                                else
-                                    echo "WARNING: no job_id_${engine}.txt — ${engine} may not have submitted successfully"
-                                fi
-                            """
-
-                            // ── d) Collect server logs & telemetry ─────────────
-                            sh """
-                                LOG_DIR="${RESULTS_DIR}/server-logs/${ns}"
-                                mkdir -p "\$LOG_DIR"
-
-                                echo "Collecting logs from namespace: ${ns}"
-
-                                PODS=\$(kubectl get pods -n ${ns} \
-                                    --no-headers \
-                                    -o custom-columns=':metadata.name,:spec.nodeName' 2>/dev/null \
-                                    | while read POD NODE; do
-                                        POOL=\$(kubectl get node "\$NODE" \
-                                            -o jsonpath='{.metadata.labels.cloud\\.google\\.com/gke-nodepool}' \
-                                            2>/dev/null || true)
-                                        if [ "\$POOL" = "server-pool" ]; then echo "\$POD"; fi
-                                    done || true)
-
-                                if [ -z "\$PODS" ]; then
-                                    echo "  No server-pool pods found in ${ns} — skipping"
-                                else
-                                    for POD in \$PODS; do
-                                        CONTAINERS=\$(kubectl get pod "\$POD" -n ${ns} \
-                                            -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
-                                        for CONTAINER in \$CONTAINERS; do
-                                            LOGFILE="\$LOG_DIR/\${POD}-\${CONTAINER}.log"
-                                            kubectl logs "\$POD" -c "\$CONTAINER" -n ${ns} \
-                                                --tail=5000 2>&1 > "\$LOGFILE" || true
-                                            SIZE=\$(wc -l < "\$LOGFILE" 2>/dev/null || echo 0)
-                                            echo "  \$POD / \$CONTAINER: \${SIZE} lines -> \$LOGFILE"
-                                        done
-
-                                        GC_LOGFILE="\$LOG_DIR/\${POD}-gc.log"
-                                        kubectl exec "\$POD" -c opensearch -n ${ns} -- \
-                                            cat /usr/share/opensearch/logs/gc.log \
-                                            > "\$GC_LOGFILE" 2>/dev/null || true
-                                        if [ -s "\$GC_LOGFILE" ]; then
-                                            echo "  \$POD gc.log: \$(wc -l < \$GC_LOGFILE) lines"
-                                        else
-                                            rm -f "\$GC_LOGFILE"
-                                            echo "  \$POD gc.log: not found (skipping)"
-                                        fi
-
-                                        HPROF_FILES=\$(kubectl exec "\$POD" -c opensearch -n ${ns} -- \
-                                            sh -c 'ls /usr/share/opensearch/data/*.hprof 2>/dev/null || true')
-                                        for HPROF in \$HPROF_FILES; do
-                                            HPROF_NAME=\$(basename "\$HPROF")
-                                            LOCAL_HPROF="\$LOG_DIR/\${POD}-\${HPROF_NAME}"
-                                            echo "  Found heap dump: \$HPROF — copying..."
-                                            kubectl cp "${ns}/\${POD}:\${HPROF}" "\$LOCAL_HPROF" \
-                                                -c opensearch 2>/dev/null || true
-                                            if [ -s "\$LOCAL_HPROF" ]; then
-                                                echo "  Saved: \$LOCAL_HPROF (\$(du -sh \$LOCAL_HPROF | cut -f1))"
+                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                                try {
+                                    // ── a) Wait for cluster health ─────────────────────
+                                    if (params.SCALE_CLUSTERS || params.REDEPLOY_CLUSTERS) {
+                                        sh """
+                                            echo "Waiting for OpenSearch cluster in ${ns} to be green or yellow..."
+                                            DEADLINE=\$((SECONDS + 300))
+                                            while [ \$SECONDS -lt \$DEADLINE ]; do
+                                                STATUS=\$(kubectl exec -n ${ns} opensearch-data-0 -- \
+                                                    curl -sk -u admin:admin \
+                                                    https://localhost:9200/_cluster/health 2>/dev/null \
+                                                    | grep -oP '(?<="status":")[^"]+' || true)
+                                                echo "  [${ns}] cluster status: \${STATUS:-unknown}"
+                                                if [ "\$STATUS" = "green" ] || [ "\$STATUS" = "yellow" ]; then
+                                                    echo "  ✅ ${ns} is ready (\${STATUS})"
+                                                    break
+                                                fi
+                                                sleep 10
+                                            done
+                                            if [ "\$STATUS" != "green" ] && [ "\$STATUS" != "yellow" ]; then
+                                                echo "❌ ${ns} cluster did not reach green/yellow within 5 minutes"
+                                                exit 1
                                             fi
+                                        """
+                                    }
+
+                                    // ── b) Run benchmark ───────────────────────────────
+                                    sh """
+                                        set +e
+                                        ${datasetEnv} \
+                                        API_URL=${params.API_URL} \
+                                        TIME_PERIOD=300 \
+                                        cloud-service/scripts/run-pipeline.sh \
+                                            ${params.PIPELINE} \
+                                            ${engine} \
+                                            ${corpusSize} \
+                                            2>&1 | tee benchmark-run-${engine}.log
+                                        PIPE_RC=\${PIPESTATUS[0]}
+
+                                        JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-${engine}.log | tail -1 || true)
+                                        if [ -n "\$JOB_ID" ]; then
+                                            echo "\$JOB_ID" > job_id_${engine}.txt
+                                            echo "[${engine}] Job ID captured: \$JOB_ID"
+                                        fi
+
+                                        exit \$PIPE_RC
+                                    """
+                                } finally {
+                                    // ── c) Fetch & save results ────────────────────────
+                                    sh """
+                                        cp benchmark-run-${engine}.log ${RESULTS_DIR}/ 2>/dev/null || true
+
+                                        if [ -f job_id_${engine}.txt ]; then
+                                            JOB_ID=\$(cat job_id_${engine}.txt)
+                                            echo "=== ${engine} (job: \$JOB_ID) ==="
+
+                                            curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID" \
+                                                | jq '.' > ${RESULTS_DIR}/job-status-${engine}.json
+
+                                            RESULTS_JSON=\$(curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results")
+                                            echo "\$RESULTS_JSON" | jq '.' > ${RESULTS_DIR}/results-${engine}.json
+
+                                            jq '{job_id, status, scenarios_completed, scenarios_total}' \
+                                                ${RESULTS_DIR}/job-status-${engine}.json
+
+                                            SWEEP_COUNT=\$(echo "\$RESULTS_JSON" | jq '.sweeps | length')
+                                            echo "  Extracting artifacts for \$SWEEP_COUNT sweep(s)..."
+                                            for i in \$(seq 0 \$(( SWEEP_COUNT - 1 ))); do
+                                                SWEEP_NAME=\$(echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].sweep_name // \"sweep-\$(( i + 1 ))\"")
+                                                LABEL=\$(echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].scenario_label // \"\"")
+                                                SWEEP_DIR="${RESULTS_DIR}/test-runs/${engine}/\${LABEL}/\${SWEEP_NAME}"
+                                                mkdir -p "\$SWEEP_DIR"
+
+                                                echo "\$RESULTS_JSON" | jq ".sweeps[\$i].test_run // {}" \
+                                                    > "\$SWEEP_DIR/test_run.json"
+                                                echo "\$RESULTS_JSON" | jq ".sweeps[\$i].workload_params // {}" \
+                                                    > "\$SWEEP_DIR/workload-params.json"
+                                                K8S=\$(echo "\$RESULTS_JSON" | jq ".sweeps[\$i].k8s_metrics")
+                                                if [ "\$K8S" != "null" ]; then
+                                                    echo "\$K8S" | jq '.' > "\$SWEEP_DIR/k8s_metrics.json"
+                                                fi
+                                                echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].benchmark_log // \"\"" \
+                                                    > "\$SWEEP_DIR/benchmark.log"
+
+                                                echo "    [\$SWEEP_NAME] \${LABEL} -> \$SWEEP_DIR"
+                                            done
+
+                                            echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
+                                        else
+                                            echo "WARNING: no job_id_${engine}.txt — ${engine} may not have submitted successfully"
+                                        fi
+                                    """
+
+                                    // ── d) Collect server logs & telemetry ─────────────
+                                    sh """
+                                        LOG_DIR="${RESULTS_DIR}/server-logs/${ns}"
+                                        mkdir -p "\$LOG_DIR"
+
+                                        echo "Collecting logs from namespace: ${ns}"
+
+                                        PODS=\$(kubectl get pods -n ${ns} \
+                                            --no-headers \
+                                            -o custom-columns=':metadata.name,:spec.nodeName' 2>/dev/null \
+                                            | while read POD NODE; do
+                                                POOL=\$(kubectl get node "\$NODE" \
+                                                    -o jsonpath='{.metadata.labels.cloud\\.google\\.com/gke-nodepool}' \
+                                                    2>/dev/null || true)
+                                                if [ "\$POOL" = "server-pool" ]; then echo "\$POD"; fi
+                                            done || true)
+
+                                        if [ -z "\$PODS" ]; then
+                                            echo "  No server-pool pods found in ${ns} — skipping"
+                                        else
+                                            for POD in \$PODS; do
+                                                CONTAINERS=\$(kubectl get pod "\$POD" -n ${ns} \
+                                                    -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
+                                                for CONTAINER in \$CONTAINERS; do
+                                                    LOGFILE="\$LOG_DIR/\${POD}-\${CONTAINER}.log"
+                                                    kubectl logs "\$POD" -c "\$CONTAINER" -n ${ns} \
+                                                        --tail=5000 2>&1 > "\$LOGFILE" || true
+                                                    SIZE=\$(wc -l < "\$LOGFILE" 2>/dev/null || echo 0)
+                                                    echo "  \$POD / \$CONTAINER: \${SIZE} lines -> \$LOGFILE"
+                                                done
+
+                                                GC_LOGFILE="\$LOG_DIR/\${POD}-gc.log"
+                                                kubectl exec "\$POD" -c opensearch -n ${ns} -- \
+                                                    cat /usr/share/opensearch/logs/gc.log \
+                                                    > "\$GC_LOGFILE" 2>/dev/null || true
+                                                if [ -s "\$GC_LOGFILE" ]; then
+                                                    echo "  \$POD gc.log: \$(wc -l < \$GC_LOGFILE) lines"
+                                                else
+                                                    rm -f "\$GC_LOGFILE"
+                                                    echo "  \$POD gc.log: not found (skipping)"
+                                                fi
+
+                                                HPROF_FILES=\$(kubectl exec "\$POD" -c opensearch -n ${ns} -- \
+                                                    sh -c 'ls /usr/share/opensearch/data/*.hprof 2>/dev/null || true')
+                                                for HPROF in \$HPROF_FILES; do
+                                                    HPROF_NAME=\$(basename "\$HPROF")
+                                                    LOCAL_HPROF="\$LOG_DIR/\${POD}-\${HPROF_NAME}"
+                                                    echo "  Found heap dump: \$HPROF — copying..."
+                                                    kubectl cp "${ns}/\${POD}:\${HPROF}" "\$LOCAL_HPROF" \
+                                                        -c opensearch 2>/dev/null || true
+                                                    if [ -s "\$LOCAL_HPROF" ]; then
+                                                        echo "  Saved: \$LOCAL_HPROF (\$(du -sh \$LOCAL_HPROF | cut -f1))"
+                                                    fi
+                                                done
+                                            done
+
+                                            {
+                                                echo "Server Log Collection Summary"
+                                                echo "============================================================"
+                                                echo "Collection Time: \$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+                                                echo "Namespace:       ${ns}"
+                                                echo "Build ID:        ${BUILD_ID}"
+                                                echo ""
+                                                echo "Collected Logs:"
+                                                echo "------------------------------------------------------------"
+                                                ls -lh "\$LOG_DIR" 2>/dev/null | awk 'NR>1 {print "  " \$NF "  " \$5}' || true
+                                            } > "\$LOG_DIR/SUMMARY.txt"
+
+                                            echo "  Summary written: \$LOG_DIR/SUMMARY.txt"
+                                        fi
+
+                                        TEL_DIR="${RESULTS_DIR}/server-logs/${ns}/telemetry"
+                                        mkdir -p "\$TEL_DIR"
+                                        OS_HOST="opensearch-cluster.${ns}.svc.cluster.local:9200"
+                                        OS_CURL="kubectl exec -n benchmark-api opensearch-benchmark-worker-${engine}-0 -c worker -- curl -sk -u admin:admin https://\$OS_HOST"
+
+                                        for ENDPOINT_FILE in \
+                                            "/_cluster/health?pretty          cluster-health.json" \
+                                            "/_cluster/stats?pretty           cluster-stats.json" \
+                                            "/_cluster/settings?include_defaults=true&flat_settings=true&pretty  cluster-settings.json" \
+                                            "/_nodes/stats?pretty             nodes-stats.json" \
+                                            "/_cat/nodes?v&h=name,heap.percent,heap.current,heap.max,ram.percent,cpu,load_1m,load_5m  nodes.txt" \
+                                            "/_cat/thread_pool?v&h=node_name,name,active,queue,rejected,largest,completed  thread-pools.txt" \
+                                            "/_cat/tasks?v&detailed           tasks.txt" \
+                                            "/_cat/segments?v                 segments.txt"
+                                        do
+                                            ENDPOINT=\$(echo "\$ENDPOINT_FILE" | awk '{print \$1}')
+                                            FILENAME=\$(echo "\$ENDPOINT_FILE" | awk '{print \$2}')
+                                            \$OS_CURL "\$ENDPOINT" > "\$TEL_DIR/\$FILENAME" 2>/dev/null || true
+                                            echo "  telemetry: \$FILENAME"
                                         done
-                                    done
 
-                                    {
-                                        echo "Server Log Collection Summary"
-                                        echo "============================================================"
-                                        echo "Collection Time: \$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-                                        echo "Namespace:       ${ns}"
-                                        echo "Build ID:        ${BUILD_ID}"
-                                        echo ""
-                                        echo "Collected Logs:"
-                                        echo "------------------------------------------------------------"
-                                        ls -lh "\$LOG_DIR" 2>/dev/null | awk 'NR>1 {print "  " \$NF "  " \$5}' || true
-                                    } > "\$LOG_DIR/SUMMARY.txt"
-
-                                    echo "  Summary written: \$LOG_DIR/SUMMARY.txt"
-                                fi
-
-                                TEL_DIR="${RESULTS_DIR}/server-logs/${ns}/telemetry"
-                                mkdir -p "\$TEL_DIR"
-                                OS_HOST="opensearch-cluster.${ns}.svc.cluster.local:9200"
-                                OS_CURL="kubectl exec -n benchmark-api opensearch-benchmark-worker-${engine}-0 -c worker -- curl -sk -u admin:admin https://\$OS_HOST"
-
-                                for ENDPOINT_FILE in \
-                                    "/_cluster/health?pretty          cluster-health.json" \
-                                    "/_cluster/stats?pretty           cluster-stats.json" \
-                                    "/_cluster/settings?include_defaults=true&flat_settings=true&pretty  cluster-settings.json" \
-                                    "/_nodes/stats?pretty             nodes-stats.json" \
-                                    "/_cat/nodes?v&h=name,heap.percent,heap.current,heap.max,ram.percent,cpu,load_1m,load_5m  nodes.txt" \
-                                    "/_cat/thread_pool?v&h=node_name,name,active,queue,rejected,largest,completed  thread-pools.txt" \
-                                    "/_cat/tasks?v&detailed           tasks.txt" \
-                                    "/_cat/segments?v                 segments.txt"
-                                do
-                                    ENDPOINT=\$(echo "\$ENDPOINT_FILE" | awk '{print \$1}')
-                                    FILENAME=\$(echo "\$ENDPOINT_FILE" | awk '{print \$2}')
-                                    \$OS_CURL "\$ENDPOINT" > "\$TEL_DIR/\$FILENAME" 2>/dev/null || true
-                                    echo "  telemetry: \$FILENAME"
-                                done
-
-                                WORKER_LOG="${RESULTS_DIR}/server-logs/worker-${engine}.log"
-                                kubectl logs statefulset/opensearch-benchmark-worker-${engine} \
-                                    -n benchmark-api --tail=5000 2>&1 > "\$WORKER_LOG" || true
-                                echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
-                            """
+                                        WORKER_LOG="${RESULTS_DIR}/server-logs/worker-${engine}.log"
+                                        kubectl logs statefulset/opensearch-benchmark-worker-${engine} \
+                                            -n benchmark-api --tail=5000 2>&1 > "\$WORKER_LOG" || true
+                                        echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
+                                    """
+                                }
+                            }
                         }]
                     }
 
