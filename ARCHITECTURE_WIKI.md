@@ -34,7 +34,6 @@ The OpenSearch Benchmark Automation is a cloud-native REST API service that orch
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              USER / BROWSER                                 │
-│                         http://34.132.114.18/                               │
 └───────────────────────────────┬─────────────────────────────────────────────┘
                                 │  HTTP (LoadBalancer :80 → :8080)
 ┌───────────────────────────────▼─────────────────────────────────────────────┐
@@ -42,7 +41,7 @@ The OpenSearch Benchmark Automation is a cloud-native REST API service that orch
 │   opensearch-benchmark-api-server   namespace: benchmark-api                │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                             │
-│  app.py (Flask / Gunicorn, 2 workers × 4 threads)                          │
+│  app.py (Flask / Gunicorn, 2 workers × 4 threads)                           │
 │  ┌───────────────────────────────────────────────────────────────┐          │
 │  │  Web UI   GET /                  → web/index.html             │          │
 │  │  Discover GET /api/v1/discover   → fan-out to all workers     │          │
@@ -55,7 +54,7 @@ The OpenSearch Benchmark Automation is a cloud-native REST API service that orch
 │  │  Health   GET  /health           → local SQLite check         │          │
 │  └───────────────────────────────────────────────────────────────┘          │
 │                                                                             │
-│  Storage: benchmark-api-db-storage PVC  (/data/jobs.db + /data/results)    │
+│  Storage: benchmark-api-db-storage PVC  (/data/jobs.db + /data/results)     │
 │                                                                             │
 └──────────┬──────────────────────┬───────────────────────┬───────────────────┘
            │ in-cluster DNS       │                       │
@@ -114,18 +113,15 @@ For requests that include `?engine=<engine>`, routing is direct. For requests wi
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued : POST /api/v1/benchmark\nor /benchmark/batch
-
-    queued --> running : Queue processor picks up job\n(acquires engine FileLock)
-    queued --> cancelled : Cancel requested while waiting
-
+    [*] --> queued : Job submitted
+    queued --> running : Queue processor acquires engine lock
+    queued --> cancelled : Cancelled while waiting
     running --> completed : All scenarios pass
     running --> error : Unhandled exception
-    running --> failed : Benchmark exit code ≠ 0
+    running --> failed : Benchmark exit code != 0
     running --> partial : Some scenarios pass, some fail
-    running --> partial_failure : Batch job partially succeeds
-    running --> cancelled : Cancel signal received\n(threading.Event + SIGINT→SIGTERM→SIGKILL)
-
+    running --> partial_failure : Batch partially succeeds
+    running --> cancelled : Cancel signal (SIGINT/SIGTERM/SIGKILL)
     completed --> [*]
     cancelled --> [*]
     error --> [*]
@@ -330,7 +326,6 @@ datasets:
           target_index_space_type: "innerproduct"
           hnsw_ef_construction: 256
           hnsw_m: 32
-          # ...
         engine_params:              # procedure-level engine overrides
           jvector:
             method_name: "disk_ann"
