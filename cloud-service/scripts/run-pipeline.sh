@@ -324,50 +324,66 @@ echo "Job ID: $JOB_ID"
 echo ""
 
 # ── Poll for completion ────────────────────────────────────────────────────────
+# Prints a line only when a scenario completes — avoids flicker from polling
+# current_scenario mid-transition. Uses the list endpoint so scenario_status
+# and the clean label are available in one call.
 echo "Monitoring job status..."
 echo ""
 
+PREV_COMPLETED="-1"
 PREV_STATUS=""
-PREV_SCENARIO=""
+
 while true; do
-  STATUS_RESPONSE=$(curl -s "${API_URL}/api/v1/benchmark/${JOB_ID}")
-  if ! echo "$STATUS_RESPONSE" | jq '.' > /dev/null 2>&1; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Waiting for job to appear..."
+  now="[$(date '+%Y-%m-%d %H:%M:%S')]"
+  list_resp=$(curl -s "${API_URL}/api/v1/benchmark")
+  if ! echo "$list_resp" | jq '.' > /dev/null 2>&1; then
+    echo "$now Waiting for job to appear..."
     sleep 10
     continue
   fi
 
-  STATUS=$(echo "$STATUS_RESPONSE" | jq -r '.status // "unknown"')
-  CURRENT_SCENARIO=$(echo "$STATUS_RESPONSE" | jq -r '.current_scenario // ""')
+  # Extract status line for this engine's row in one jq pass: "status|completed|total|label"
+  summary=$(echo "$list_resp" | jq -r --arg jid "$JOB_ID" --arg eng "$ENGINE" '
+    (.jobs[] | select(.job_id == $jid and .engine == $eng)) as $row |
+    ($row.options._batch_metadata.current_scenario // "") as $cur |
+    ($row.options._batch_scenarios // []) as $scens |
+    ( if $cur == "" then ""
+      else ( $scens[] | select( (.dataset + "-" + .label) == $cur ) | .label ) // $cur
+      end ) as $label |
+    ([ $row.options._batch_metadata.scenario_status // {} | to_entries[] | select(.value == "completed") ] | length) as $done |
+    ([ $row.options._batch_metadata.scenario_status // {} | keys[] ] | length) as $total |
+    [ ($row.status // "unknown"), ($done|tostring), ($total|tostring), $label ] | join("|")
+  ')
 
-  if [ "$STATUS" != "$PREV_STATUS" ] || [ "$CURRENT_SCENARIO" != "$PREV_SCENARIO" ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Status: $STATUS"
-    if [ -n "$CURRENT_SCENARIO" ]; then
-      echo "  Current scenario: $CURRENT_SCENARIO"
-    fi
-    COMPLETED=$(echo "$STATUS_RESPONSE" | jq -r '.scenarios_completed // 0')
-    TOTAL=$(echo "$STATUS_RESPONSE" | jq -r '.scenarios_total // 0')
-    if [ "$TOTAL" != "0" ] && [ "$TOTAL" != "null" ]; then
-      echo "  Progress: $COMPLETED/$TOTAL scenarios"
-    fi
-    PREV_STATUS="$STATUS"
-    PREV_SCENARIO="$CURRENT_SCENARIO"
+  if [ -z "$summary" ]; then
+    echo "$now Waiting for job to appear..."
+    sleep 10
+    continue
   fi
 
-  if [ "$STATUS" = "completed" ] || [ "$STATUS" = "failed" ] || [ "$STATUS" = "error" ] || [ "$STATUS" = "cancelled" ]; then
+  IFS='|' read -r job_status completed total label <<< "$summary"
+
+  terminal=false
+  case "$job_status" in completed|failed|error|partial|cancelled) terminal=true ;; esac
+
+  if [ "$completed" != "$PREV_COMPLETED" ] || [ "$job_status" != "$PREV_STATUS" ]; then
+    if [ -n "$label" ]; then
+      printf "%s  %-9s  %2d/%d  (running: %s)\n" "$now" "$job_status" "$completed" "$total" "$label"
+    else
+      printf "%s  %-9s  %2d/%d\n" "$now" "$job_status" "$completed" "$total"
+    fi
+    PREV_COMPLETED="$completed"
+    PREV_STATUS="$job_status"
+  fi
+
+  if $terminal; then
     echo ""
     echo "=========================================="
-    echo "Job finished with status: $STATUS"
+    echo "Job finished with status: $job_status"
     echo "=========================================="
     echo ""
 
-    echo "Final job details:"
-    curl -s "${API_URL}/api/v1/benchmark/${JOB_ID}" | jq '{
-      job_id, status, scenarios_completed, scenarios_total
-    }'
-    echo ""
-
-    if [ "$STATUS" = "completed" ]; then
+    if [ "$job_status" = "completed" ]; then
       RESULTS=$(curl -s "${API_URL}/api/v1/benchmark/${JOB_ID}/results")
       echo "Results Summary:"
       echo "$RESULTS" | jq '{
@@ -375,7 +391,6 @@ while true; do
         total_sweeps: (.sweeps | length),
         by_scenario: (.sweeps | group_by(.scenario_label) | map({
           scenario: .[0].scenario_label,
-          engine:   .[0].engine,
           sweeps:   length
         }))
       }'
