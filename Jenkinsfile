@@ -311,7 +311,7 @@ pipeline {
                                         echo "[${engine}] ${fileName} already present — skipping"
                                     else
                                         echo "[${engine}] Copying ${fileName} from local cache ..."
-                                        kubectl exec -n benchmark-api \$POD -- mkdir -p '$(dirname ${targetPath})'
+                                        kubectl exec -n benchmark-api \$POD -- mkdir -p '\$(dirname ${targetPath})'
                                         kubectl cp '${localPath}' "benchmark-api/\$POD:${targetPath}"
                                         FINAL_SIZE=\$(kubectl exec -n benchmark-api \$POD -- \
                                             stat -c '%s' '${targetPath}' 2>/dev/null || echo 0)
