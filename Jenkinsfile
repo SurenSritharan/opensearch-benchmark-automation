@@ -202,9 +202,9 @@ pipeline {
                                 # recovering shards; fails only if that total hasn't increased in 5 min.
                                 echo "Waiting for ${ns} cluster health (shard recovery in progress)..."
                                 STATUS=""
-                                LAST_PROGRESS_SCORE="0"
+                                LAST_PROGRESS_SCORE="0.0"
                                 LAST_PROGRESS=\$SECONDS
-                                STALL_LIMIT=300
+                                STALL_LIMIT=600
                                 while true; do
                                     HEALTH=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
                                         curl -sk -u admin:admin \
@@ -224,23 +224,24 @@ pipeline {
                                     if [ -n "\$RECOVERY" ]; then
                                         echo "  [${ns}] status=\${STATUS:-unknown}  initializing=\${INIT}"
                                         echo "\$RECOVERY" | while read line; do echo "    \$line"; done
-                                        # Sum percentage columns as a progress score (integer, strip decimals)
-                                        SCORE=\$(echo "\$RECOVERY" | awk '{sum += \$4 + \$5} END {printf "%d", sum}')
-                                        # Max possible score = 200 * number of recovering shards
-                                        MAX_SCORE=\$(echo "\$RECOVERY" | awk 'END {printf "%d", NR * 200}')
+                                        # Sum percentage columns as a progress score (1 decimal place)
+                                        SCORE=\$(echo "\$RECOVERY" | awk '{sum += \$4 + \$5} END {printf "%.1f", sum}')
+                                        # Max possible score = 200.0 * number of recovering shards
+                                        MAX_SCORE=\$(echo "\$RECOVERY" | awk 'END {printf "%.1f", NR * 200}')
                                     else
                                         echo "  [${ns}] status=\${STATUS:-unknown}  initializing=\${INIT}"
                                         SCORE=0
                                         MAX_SCORE=0
                                     fi
 
-                                    if [ "\$SCORE" -gt "\$LAST_PROGRESS_SCORE" ]; then
+                                    if [ "\$(echo "\$SCORE \$LAST_PROGRESS_SCORE" | awk '{print (\$1 > \$2)}')" = "1" ]; then
                                         LAST_PROGRESS_SCORE=\$SCORE
                                         LAST_PROGRESS=\$SECONDS
                                     fi
                                     # Don't stall-check when all shards are at 100% — they're in
                                     # final commit/cluster-state handoff, which can take a few minutes.
-                                    if [ "\$MAX_SCORE" -gt 0 ] && [ "\$SCORE" -ge "\$MAX_SCORE" ]; then
+                                    if [ "\$(echo "\$MAX_SCORE" | awk '{print (\$1 > 0)}')" = "1" ] && \
+                                       [ "\$(echo "\$SCORE \$MAX_SCORE" | awk '{print (\$1 >= \$2)}')" = "1" ]; then
                                         sleep 10
                                         continue
                                     fi
