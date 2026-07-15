@@ -159,10 +159,89 @@ pipeline {
                                     gke-manifest/deploy-namespace-cluster.sh ${ns} \
                                         --version ${params.OPENSEARCH_VERSION} --force
                                 fi
+
+                                # Wait for manager pod to be Ready (fast — single pod, no shard recovery)
                                 kubectl rollout status statefulset/opensearch-cluster-manager \
                                     -n ${ns} --timeout=300s
-                                kubectl rollout status statefulset/opensearch-data \
-                                    -n ${ns} --timeout=600s
+
+                                # Wait for data pods to be Running (not Ready — readiness probe fails
+                                # while cluster is red during shard recovery, which is expected).
+                                # Uses a stall detector: fails only if the running count hasn't
+                                # increased for 5 minutes, so slow node provisioning doesn't time out
+                                # as long as GKE is making progress.
+                                echo "Waiting for opensearch-data pods to be Running in ${ns}..."
+                                RUNNING=0
+                                LAST_PROGRESS=\$SECONDS
+                                STALL_LIMIT=300
+                                while true; do
+                                    NEW_RUNNING=\$(kubectl get pods -n ${ns} -l app=opensearch-data \
+                                        --field-selector=status.phase=Running \
+                                        --no-headers 2>/dev/null | wc -l)
+                                    TOTAL=\$(kubectl get pods -n ${ns} -l app=opensearch-data \
+                                        --no-headers 2>/dev/null | wc -l)
+                                    echo "  [${ns}] data pods Running: \${NEW_RUNNING}/\${TOTAL}"
+                                    if [ "\$NEW_RUNNING" -ge 3 ] && [ "\$TOTAL" -ge 3 ]; then
+                                        echo "  ✅ [${ns}] all data pods Running"
+                                        RUNNING=\$NEW_RUNNING
+                                        break
+                                    fi
+                                    if [ "\$NEW_RUNNING" -gt "\$RUNNING" ]; then
+                                        RUNNING=\$NEW_RUNNING
+                                        LAST_PROGRESS=\$SECONDS
+                                    fi
+                                    STALLED=\$((SECONDS - LAST_PROGRESS))
+                                    if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
+                                        echo "❌ [${ns}] data pods stalled at \${RUNNING}/3 Running for \${STALL_LIMIT}s — giving up"
+                                        exit 1
+                                    fi
+                                    sleep 10
+                                done
+
+                                # Wait for cluster to reach green/yellow (shard recovery from PVCs).
+                                # Stall detector: sums bytes_percent + translog_ops_percent across all
+                                # recovering shards; fails only if that total hasn't increased in 5 min.
+                                echo "Waiting for ${ns} cluster health (shard recovery in progress)..."
+                                STATUS=""
+                                LAST_PROGRESS_SCORE="0"
+                                LAST_PROGRESS=\$SECONDS
+                                STALL_LIMIT=300
+                                while true; do
+                                    HEALTH=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                        curl -sk -u admin:admin \
+                                        'https://localhost:9200/_cluster/health' 2>/dev/null || true)
+                                    STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || true)
+                                    INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 0)
+
+                                    if [ "\$STATUS" = "green" ] || [ "\$STATUS" = "yellow" ]; then
+                                        echo "  ✅ [${ns}] cluster \${STATUS} — ready"
+                                        break
+                                    fi
+
+                                    RECOVERY=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                        curl -sk -u admin:admin \
+                                        'https://localhost:9200/_cat/recovery?h=index,shard,stage,bytes_percent,translog_ops_percent&active_only=true' \
+                                        2>/dev/null || true)
+                                    if [ -n "\$RECOVERY" ]; then
+                                        echo "  [${ns}] status=\${STATUS:-unknown}  initializing=\${INIT}"
+                                        echo "\$RECOVERY" | while read line; do echo "    \$line"; done
+                                        # Sum all percentage columns as a progress score (integer, drop decimals)
+                                        SCORE=\$(echo "\$RECOVERY" | awk '{sum += \$4 + \$5} END {printf "%d", sum}')
+                                    else
+                                        echo "  [${ns}] status=\${STATUS:-unknown}  initializing=\${INIT}"
+                                        SCORE=0
+                                    fi
+
+                                    if [ "\$SCORE" -gt "\$LAST_PROGRESS_SCORE" ]; then
+                                        LAST_PROGRESS_SCORE=\$SCORE
+                                        LAST_PROGRESS=\$SECONDS
+                                    fi
+                                    STALLED=\$((SECONDS - LAST_PROGRESS))
+                                    if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
+                                        echo "❌ [${ns}] shard recovery stalled (score=\${LAST_PROGRESS_SCORE}) for \${STALL_LIMIT}s — giving up"
+                                        exit 1
+                                    fi
+                                    sleep 10
+                                done
                             """
                         }
                     }
@@ -337,25 +416,16 @@ pipeline {
                         [(engine): {
                             catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                                 try {
-                                    // ── a) Wait for cluster health ─────────────────────
+                                    // ── a) Confirm cluster health (Scale Up already waited for green/yellow)
                                     if (params.SCALE_CLUSTERS || params.REDEPLOY_CLUSTERS) {
                                         sh """
-                                            echo "Waiting for OpenSearch cluster in ${ns} to be green or yellow..."
-                                            DEADLINE=\$((SECONDS + 300))
-                                            while [ \$SECONDS -lt \$DEADLINE ]; do
-                                                STATUS=\$(kubectl exec -n ${ns} opensearch-data-0 -- \
-                                                    curl -sk -u admin:admin \
-                                                    https://localhost:9200/_cluster/health 2>/dev/null \
-                                                    | grep -oP '(?<="status":")[^"]+' || true)
-                                                echo "  [${ns}] cluster status: \${STATUS:-unknown}"
-                                                if [ "\$STATUS" = "green" ] || [ "\$STATUS" = "yellow" ]; then
-                                                    echo "  ✅ ${ns} is ready (\${STATUS})"
-                                                    break
-                                                fi
-                                                sleep 10
-                                            done
+                                            STATUS=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                                curl -sk -u admin:admin \
+                                                'https://localhost:9200/_cluster/health' 2>/dev/null \
+                                                | grep -oP '(?<="status":")[^"]+' || true)
+                                            echo "  [${ns}] cluster status: \${STATUS:-unknown}"
                                             if [ "\$STATUS" != "green" ] && [ "\$STATUS" != "yellow" ]; then
-                                                echo "❌ ${ns} cluster did not reach green/yellow within 5 minutes"
+                                                echo "❌ [${ns}] cluster not green/yellow at benchmark start"
                                                 exit 1
                                             fi
                                         """
