@@ -303,7 +303,7 @@
                                 `<div style="margin-top: 8px;">
                                     <a href="/results/${job.job_id}?job_id=${job.job_id}&engine=${job.engine}" style="display: inline-block; padding: 6px 12px; background: #f59e0b; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em;">🔴 View Live Status</a>
                                     <a href="/api/v1/benchmark/${job.job_id}/live-status?engine=${job.engine}" target="_blank" style="display: inline-block; padding: 6px 12px; background: #10b981; color: white; text-decoration: none; border-radius: 4px; font-size: 0.9em; margin-left: 8px;">📊 Live JSON</a>
-                                    <button onclick="cancelJob('${job.job_id}')" style="padding: 6px 12px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; margin-left: 8px;">❌ Cancel Job</button>
+                                    <button onclick="cancelJob('${job.job_id}', '${job.engine}')" style="padding: 6px 12px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; margin-left: 8px;">❌ Cancel Job</button>
                                 </div>` : ''}
                             ${job.status === 'error' || job.status === 'failed' || job.status === 'partial_failure' || job.status === 'partial' ?
                                 `<div style="margin-top: 8px;">
@@ -447,13 +447,14 @@
             }
         }
 
-        async function cancelJob(jobId) {
+        async function cancelJob(jobId, engine) {
             if (!confirm('Are you sure you want to cancel this job?')) {
                 return;
             }
             
             try {
-                const res = await fetch(`${API_BASE}/api/v1/benchmark/${jobId}/cancel`, {
+                const engineParam = engine ? `?engine=${encodeURIComponent(engine)}` : '';
+                const res = await fetch(`${API_BASE}/api/v1/benchmark/${jobId}/cancel${engineParam}`, {
                     method: 'POST'
                 });
                 
