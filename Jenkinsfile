@@ -162,7 +162,7 @@ pipeline {
                                 kubectl rollout status statefulset/opensearch-cluster-manager \
                                     -n ${ns} --timeout=300s
                                 kubectl rollout status statefulset/opensearch-data \
-                                    -n ${ns} --timeout=300s
+                                    -n ${ns} --timeout=600s
                             """
                         }
                     }
