@@ -285,13 +285,21 @@ pipeline {
                         def gcsPath    = entry.gcs_path
                         def targetPath = entry.target_path
 
-                        def signedUrl = sh(
-                            script: "gsutil signurl -d 2h -u ${gcsPath} 2>&1 | tail -1 | awk '{print \$NF}'",
-                            returnStdout: true
-                        ).trim()
+                        def signedUrl = ''
+                        withCredentials([file(credentialsId: 'gcp-jenkins-key', variable: 'GCP_KEY_FILE')]) {
+                            def signUrlOutput = sh(
+                                script: """
+                                    set +x
+                                    gcloud auth activate-service-account --key-file=\"\$GCP_KEY_FILE\" 1>/dev/null
+                                    gcloud storage sign-url --duration=2h '${gcsPath}' 2>&1
+                                """,
+                                returnStdout: true
+                            ).trim()
+                            signedUrl = signUrlOutput.readLines().find { it.startsWith('https://') } ?: ''
 
-                        if (!signedUrl.startsWith('https://')) {
-                            error("Failed to generate signed URL for ${gcsPath}: ${signedUrl}")
+                            if (!signedUrl) {
+                                error("Failed to generate signed URL for ${gcsPath}: ${signUrlOutput}")
+                            }
                         }
 
                         def fileName = gcsPath.tokenize('/').last()
