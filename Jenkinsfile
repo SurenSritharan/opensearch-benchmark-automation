@@ -471,10 +471,10 @@ pipeline {
                                             JOB_ID=\$(cat job_id_${engine}.txt)
                                             echo "=== ${engine} (job: \$JOB_ID) ==="
 
-                                            curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID" \
+                                            curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${engine}" \
                                                 | jq '.' > ${RESULTS_DIR}/job-status-${engine}.json
 
-                                            RESULTS_JSON=\$(curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results")
+                                            RESULTS_JSON=\$(curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results?engine=${engine}")
                                             echo "\$RESULTS_JSON" | jq '.' > ${RESULTS_DIR}/results-${engine}.json
 
                                             jq '{job_id, status, scenarios_completed, scenarios_total}' \
