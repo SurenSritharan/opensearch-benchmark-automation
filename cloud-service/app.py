@@ -1747,7 +1747,13 @@ def view_results(job_id: str):
 
 @app.route('/api/v1/logs')
 def get_benchmark_logs():
-    """Get opensearch-benchmark logs"""
+    """Get opensearch-benchmark logs for a specific engine worker"""
+    engine = request.args.get('engine', '').strip()
+    if not _IS_WORKER:
+        if not engine:
+            return jsonify({'error': 'engine parameter is required'}), 400
+        lines = request.args.get('lines', '100')
+        return _proxy(engine, f'/api/v1/logs?lines={lines}')
     try:
         log_file = Path('/datasets/opensearch-benchmark/.osb/logs/benchmark.log')
         if not log_file.exists():
