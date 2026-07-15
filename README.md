@@ -1,132 +1,251 @@
 # OpenSearch Benchmark Automation
 
-A modular benchmark automation framework for testing OpenSearch vector search performance across multiple vector engines (FAISS, Lucene, JVector).
+A cloud-native benchmark automation framework for testing OpenSearch vector search performance across multiple vector engines (FAISS, Lucene, JVector) on Google Kubernetes Engine (GKE).
 
-## 🚀 Features
+## 🚀 Quick Start — Jenkins
 
-- **Multi-Engine Support**: Test FAISS, Lucene, and JVector engines in a single run
-- **Comprehensive Scenarios**: 
-  - Index creation and validation
-  - Bulk vector ingestion
-  - Force merge operations
-  - Search concurrency testing with multiple client configurations
-- **Organized Results**: All benchmark results stored in timestamped directories under `results/`
-- **Enhanced Output**: Clear visual separators and progress indicators for each scenario
-- **Profiling Support**: Automatic CPU flame graph generation using async-profiler
-- **Telemetry Collection**: Comprehensive cluster health, stats, and performance metrics
-- **Kubernetes Integration**: Designed to work with OpenSearch clusters deployed on GKE
+The primary way to run benchmarks is via the Jenkins pipeline:
 
-## 📋 Prerequisites
+**[http://os-perf-jenkins.dev.fyre.ibm.com:8080/job/benchmark-service-runner/](http://os-perf-jenkins.dev.fyre.ibm.com:8080/job/benchmark-service-runner/)**
 
-- Kubernetes cluster with OpenSearch deployments
-- `kubectl` configured with access to your cluster
-- `jq` for JSON parsing
-- Python 3 with PyYAML (for dataset configuration parsing)
-- Bash shell
+> Login with your **IBM ID credentials**.
 
-## 🎯 Usage
+The pipeline handles everything: scaling up OpenSearch clusters and benchmark workers, seeding dataset caches from GCS, running benchmarks in parallel across engines, collecting results and telemetry, and scaling everything back down.
 
-### Basic Usage
+A nightly run is triggered automatically at **07:00 UTC** every day.
 
-Run benchmarks for all engines:
-```bash
-./run-benchmark.sh
+---
+
+## 🏗️ Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  Jenkins (IBM VPN)                                                   │
+│  os-perf-jenkins.dev.fyre.ibm.com:8080                              │
+│  Jenkinsfile → orchestrates all stages                               │
+└────────────────────────┬─────────────────────────────────────────────┘
+                         │ kubectl + HTTP
+                         ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│  GKE Cluster                                                         │
+│                                                                      │
+│  namespace: benchmark-api                                            │
+│  ├── opensearch-benchmark-api-server  (Flask REST API + Web UI)      │
+│  ├── opensearch-benchmark-worker-jvector  (runs osb CLI)            │
+│  ├── opensearch-benchmark-worker-faiss    (runs osb CLI)            │
+│  └── opensearch-benchmark-worker-lucene   (runs osb CLI)            │
+│                                                                      │
+│  namespace: os-jvector   ──► 1 cluster-manager + 3 data nodes       │
+│  namespace: os-faiss     ──► 1 cluster-manager + 3 data nodes       │
+│  namespace: os-lucene    ──► 1 cluster-manager + 3 data nodes       │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-### Command-Line Options
+Each engine namespace contains a dedicated 4-node OpenSearch cluster (1 cluster manager + 3 data/ingest nodes). A single shared API server in `benchmark-api` receives job requests; engine-specific worker pods execute `opensearch-benchmark` against their respective cluster.
 
-```bash
-./run-benchmark.sh [OPTIONS]
+Clusters are **scaled to zero** between runs to save cost and scaled back up on demand by Jenkins.
 
-Options:
-  --engine <engine>       Specify engine(s): jvector, faiss, lucene, or all
-  --dataset <dataset>     Specify dataset: cohere-1m, msmarco (default: cohere-1m)
-  --list-datasets         List all available datasets and exit
-  --scenario <scenario>   Specify scenario(s): index, merge, search, or all
-  --help, -h              Show this help message
-```
+---
 
-## 📊 Benchmark Scenarios
+## 🎛️ Jenkins Pipeline Parameters
 
-### 1. Create Index
-- Creates target index with engine-specific configurations
-- Validates index mapping and field types
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `PIPELINE` | `complete` | `complete` (index → ingest → merge → search) or `search-only` (skip indexing) |
+| `CORPUS_SIZE` | `all` | `1m`, `5m`, or `all` (runs both sequentially) |
+| `DATASET` | `all` | `cohere-wiki-en-768`, `cohere-msmarco-1024`, or `all` |
+| `ENGINE_TARGET` | `all` | `os-jvector`, `os-faiss`, `os-lucene`, or `all` |
+| `API_URL` | `http://34.132.114.18` | Base URL of the benchmark cloud service API |
+| `SCALE_CLUSTERS` | `true` | Scale up clusters and workers before the run, scale down after |
+| `REDEPLOY_CLUSTERS` | `false` | Re-deploy OpenSearch clusters (applies `OPENSEARCH_VERSION`) |
+| `OPENSEARCH_VERSION` | `3.7.0` | OpenSearch version to deploy |
+| `DELETE_PVCS` | `false` | Delete PVCs during re-deploy (destroys all indexed data) |
+| `SKIP_SCALE_DOWN` | `false` | Keep clusters and workers running after the run for investigation |
 
-### 2. Bulk Ingestion
-- Loads vector data into the index
-- Measures ingestion throughput and performance
+---
 
-### 3. Force Merge
-- Performs force merge operation on the index
-- Optimizes segment structure
+## 📋 Pipeline Stages
 
-### 4. Search Sweep Matrix
-- Tests search performance with sweep configuratons
-  - [10 clients, 100 warm-up iterations, 10000 queries]
-  - [20 clients, 100 warm-up iterations, 50000 queries]
+1. **Prepare** — writes the GKE kubeconfig from the Jenkins credential
+2. **Re-deploy Clusters** *(optional)* — deploys fresh OpenSearch clusters at a specific version
+3. **Scale Up** — scales OpenSearch clusters and benchmark workers to 1 replica each (in parallel); waits for green/yellow cluster health
+4. **Verify Health** — checks pod status and API health endpoint
+5. **Seed Dataset Cache** — downloads required GCS corpus files to each worker PVC (skips if already present)
+6. **Per-Engine** *(parallel)* — for each engine: runs the benchmark pipeline, fetches results JSON, collects server logs and OpenSearch telemetry
+7. **Build Summary** — writes `results/<build_id>/BUILD_SUMMARY.txt`
+8. **Archive Results** — archives all result artifacts in Jenkins
+9. **Post / Scale Down** — scales all workers and clusters back to zero (unless `SKIP_SCALE_DOWN=true`)
 
-See for sweep configuration for details: ([config/datasets.yaml#L61-L77](https://github.com/SurenSritharan/opensearch-benchmark-automation/blob/main/config/datasets.yaml#L61-L77))
+---
+
+## 🌐 Cloud Service API
+
+The benchmark API server exposes a REST API and a Web UI accessible at the `API_URL`.
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Health check |
+| `GET` | `/api/v1/discover` | List available datasets and engines from `config/datasets.yaml` |
+| `POST` | `/api/v1/sync` | `git pull` both repos and reload configuration |
+| `POST` | `/api/v1/benchmark` | Submit a new benchmark job |
+| `GET` | `/api/v1/benchmark` | List all jobs |
+| `GET` | `/api/v1/benchmark/<job_id>` | Get job status and results |
+| `GET` | `/api/v1/benchmark/<job_id>/results` | Get structured results (sweeps, metrics) |
+| `POST` | `/api/v1/benchmark/<job_id>/cancel` | Cancel a queued or running job |
+| `DELETE` | `/api/v1/benchmark/<job_id>` | Delete a job (`?cleanup_results=true` also removes result files) |
+
+### Web UI
+
+Open the `API_URL` in a browser for the full Web UI: submit jobs, monitor status, view results, and sync configuration from Git.
+
+---
 
 ## 🔧 Configuration
 
-Edit `config/cluster.yaml` to modify default behavior:
+### Datasets — `config/datasets.yaml`
 
-## Dataset Configuration
+All dataset and workload configuration lives in [`config/datasets.yaml`](config/datasets.yaml). The API server reads this file at startup and on every `/api/v1/sync` call.
 
-Datasets are configured in `config/datasets.yaml`.
+Key fields per dataset:
 
-**Available Datasets:**
-- **cohere-1m**: 768-dimensional vectors (default) - Uses OpenSearch Benchmark's official vectorsearch workload with custom index templates
-- **msmarco**: 1024-dimensional vectors - Custom workload with automatic data download
+| Field | Description |
+|-------|-------------|
+| `workload_name` | Directory name in the workloads repository |
+| `dimension` | Vector dimension |
+| `format` | Data format (`hdf5`, `fvec`, etc.) |
+| `space_type` | Distance metric (`innerproduct`, `l2`, `cosinesimil`) |
+| `default_params` | Jinja2 template variable overrides |
+| `param_files` | Per-engine workload parameter file paths |
+| `test_procedures` | List of test procedures (supports parameter sweeps) |
+| `gcs_cache_files` | GCS objects to pre-seed to worker PVCs before each run |
 
+See [`config/ADDING_DATASETS.md`](config/ADDING_DATASETS.md) for a step-by-step guide and full field reference.
 
-## 🚢 Deployment
+### Updating Config Without Redeploying
 
-### GKE Deployment
-
-Use the provided manifest files to deploy OpenSearch clusters:
+Push changes to `config/datasets.yaml` or workload parameter files, then call the sync endpoint:
 
 ```bash
-# Deploy JVector cluster
-./gke-manifest/deploy-jvector-cluster.sh
+# Via API
+curl -X POST http://<API_URL>/api/v1/sync
 
-# Or apply manifests directly
-kubectl apply -f gke-manifest/opensearch-cluster-faiss.yaml
-kubectl apply -f gke-manifest/opensearch-cluster-lucene.yaml
-kubectl apply -f gke-manifest/opensearch-jvector-statefulset.yaml
+# Via Web UI — click the "🔄 Sync from Git" button
 ```
 
-## 📝 Output Format
+This performs `git pull` on both `opensearch-benchmark-automation` and `opensearch-benchmark-workloads`, then reloads configuration into memory. Changes are live within seconds.
 
-The benchmark runner provides clear, formatted output:
+---
+
+## 🚢 GKE Deployment
+
+### Cluster Namespaces
+
+| Namespace | Engine | Notes |
+|-----------|--------|-------|
+| `os-jvector` | JVector | Dedicated manifests |
+| `os-faiss` | FAISS | Shares manifests with `os-lucene` via `${NAMESPACE}` substitution |
+| `os-lucene` | Lucene | Shares manifests with `os-faiss` |
+| `benchmark-api` | — | API server + per-engine workers |
+
+### Deploy / Scale Scripts
+
+```bash
+# Deploy a single cluster namespace
+gke-manifest/deploy-namespace-cluster.sh os-jvector
+
+# Deploy all three engine clusters
+gke-manifest/deploy-all-clusters.sh
+
+# Scale up a single namespace
+gke-manifest/scale-up-clusters.sh os-faiss
+
+# Scale down all clusters
+gke-manifest/scale-down-clusters.sh all
+
+# Destroy a single namespace
+gke-manifest/destroy-namespace-cluster.sh os-jvector
+```
+
+### Deploy the Benchmark API Server
+
+```bash
+cd gke-manifest
+./deploy-benchmark-api.sh
+```
+
+### First-time Setup
+
+If a namespace has no StatefulSets yet, the Jenkins Scale Up stage automatically runs `deploy-namespace-cluster.sh` with the configured `OPENSEARCH_VERSION`.
+
+---
+
+## 🗂️ Repository Structure
 
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📦 SCENARIO: Create Index [faiss]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ▶ Running index creation...
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔍 SCENARIO: Search Concurrency Matrix Sweeps [faiss]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  ▶ Running search test with 10 concurrent clients...
-  ▶ Running search test with 20 concurrent clients...
+opensearch-benchmark-automation/
+├── Jenkinsfile                          # CI/CD pipeline definition
+├── config/
+│   ├── datasets.yaml                    # Dataset and workload configuration
+│   └── ADDING_DATASETS.md               # Guide for adding new datasets
+├── cloud-service/
+│   ├── app.py                           # Flask REST API
+│   ├── benchmark_runner.py              # Benchmark execution logic
+│   ├── config_loader.py                 # datasets.yaml parser
+│   ├── requirements.txt
+│   ├── Dockerfile
+│   ├── scripts/
+│   │   └── run-pipeline.sh             # Pipeline driver (called by Jenkins)
+│   └── web/
+│       └── index.html                  # Web UI
+├── gke-manifest/
+│   ├── opensearch-jvector-cluster-manager.yaml
+│   ├── opensearch-jvector-data-nodes.yaml
+│   ├── opensearch-standard-cluster-manager.yaml
+│   ├── opensearch-standard-data-nodes.yaml
+│   ├── opensearch-benchmark-api-server.yaml
+│   ├── opensearch-benchmark-worker-template.yaml
+│   ├── deploy-namespace-cluster.sh
+│   ├── deploy-all-clusters.sh
+│   ├── deploy-benchmark-api.sh
+│   ├── scale-up-clusters.sh
+│   ├── scale-down-clusters.sh
+│   ├── destroy-namespace-cluster.sh
+│   └── destroy-all-clusters.sh
 ```
+
+---
+
+## 📊 Benchmark Scenarios
+
+| Scenario | Pipeline steps | Description |
+|----------|---------------|-------------|
+| `create-index` | index | Creates the vector index with engine-specific settings |
+| `bulk-ingest` | index | Loads vector corpus data |
+| `refresh` | index | Triggers an index refresh |
+| `force-merge` | merge | Force-merges to 1 segment for stable search performance |
+| `search` | search | Runs search sweeps across configured client/query combinations |
+
+The `complete` pipeline runs all steps in order. The `search-only` pipeline skips to search (indexes must already exist on the clusters).
+
+---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit issues or pull requests.
+1. Make changes to workload parameters or dataset config
+2. `git push origin main`
+3. Click **"🔄 Sync from Git"** in the Web UI (or `POST /api/v1/sync`) — no pod restart needed
 
-## 📄 License
+For cluster manifest changes, run `gke-manifest/deploy-benchmark-api.sh` to redeploy the API server.
 
-This project is open source and available under the MIT License.
+---
 
 ## 👤 Author
 
 Suren Sritharan
 
-## 🔗 Repository
+## 🔗 Repositories
 
-https://github.com/SurenSritharan/opensearch-benchmark-automation
+- Automation: https://github.com/SurenSritharan/opensearch-benchmark-automation
+- Workloads: https://github.com/SurenSritharan/opensearch-benchmark-workloads
