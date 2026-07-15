@@ -241,9 +241,9 @@ pipeline {
         //    relevant dataset in config/datasets.yaml and upload the file to GCS.
         //
         //    Flow per file:
-        //      1. Jenkins generates a 2h signed URL (no credentials on the pod needed)
-        //      2. Each worker pod wgets the file directly from GCS in parallel
-        //      3. Skip if the file already exists
+        //      1. Jenkins downloads the file once into the workspace cache
+        //      2. Each worker pod receives the cached file via kubectl cp
+        //      3. Skip both the local download and pod copy when already present
         stage('Seed Dataset Cache') {
             steps {
                 script {
@@ -280,45 +280,41 @@ pipeline {
 
                     echo "Files to seed: ${filesToSeed.collect { it.gcs_path }.join(', ')}"
 
-                    // For each file: generate a signed URL once, then seed all engines in parallel
+                    // For each file: download once into the workspace, then copy to workers in parallel
                     filesToSeed.each { entry ->
                         def gcsPath    = entry.gcs_path
                         def targetPath = entry.target_path
+                        def fileName   = gcsPath.tokenize('/').last()
+                        def datasetDir = gcsPath.tokenize('/').size() > 3 ? gcsPath.tokenize('/')[3] : 'shared'
+                        def localDir   = "seed-cache/${datasetDir}/${entry.corpus_size}"
+                        def localPath  = "${localDir}/${fileName}"
 
-                        def signedUrl = ''
-                        withCredentials([file(credentialsId: 'gcp-jenkins-key', variable: 'GCP_KEY_FILE')]) {
-                            def signUrlOutput = sh(
-                                script: """
-                                    set +x
-                                    gcloud auth activate-service-account --key-file=\"\$GCP_KEY_FILE\" 1>/dev/null
-                                    gcloud storage sign-url --duration=2h '${gcsPath}' 2>&1
-                                """,
-                                returnStdout: true
-                            ).trim()
-                            signedUrl = signUrlOutput.readLines().find { it.startsWith('https://') } ?: ''
-
-                            if (!signedUrl) {
-                                error("Failed to generate signed URL for ${gcsPath}: ${signUrlOutput}")
+                        if (!fileExists(localPath)) {
+                            echo "Downloading ${fileName} from ${gcsPath} into ${localPath}"
+                            sh "mkdir -p '${localDir}'"
+                            dir(localDir) {
+                                step([$class: 'DownloadStep', credentialsId: 'gcp-jenkins-key', bucketUri: gcsPath, localDirectory: '.'])
                             }
+                        } else {
+                            echo "Local cache hit for ${fileName} at ${localPath} — skipping download"
                         }
 
-                        def fileName = gcsPath.tokenize('/').last()
                         echo "Seeding ${fileName} to ${engines.size()} worker(s)..."
 
                         def seedBranches = engines.collectEntries { engine ->
                             [(engine): {
                                 sh """
+                                    set -euo pipefail
                                     POD="opensearch-benchmark-worker-${engine}-0"
 
-                                    if kubectl exec -n benchmark-api \$POD -- test -f ${targetPath} 2>/dev/null; then
+                                    if kubectl exec -n benchmark-api \$POD -- test -f '${targetPath}' 2>/dev/null; then
                                         echo "[${engine}] ${fileName} already present — skipping"
                                     else
-                                        echo "[${engine}] Downloading ${fileName} ..."
-                                        kubectl exec -n benchmark-api \$POD -- sh -c \
-                                            "mkdir -p \$(dirname ${targetPath}) && \
-                                             wget -q --show-progress -O ${targetPath} '${signedUrl}'"
+                                        echo "[${engine}] Copying ${fileName} from local cache ..."
+                                        kubectl exec -n benchmark-api \$POD -- mkdir -p '$(dirname ${targetPath})'
+                                        kubectl cp '${localPath}' "benchmark-api/\$POD:${targetPath}"
                                         FINAL_SIZE=\$(kubectl exec -n benchmark-api \$POD -- \
-                                            stat -c '%s' ${targetPath} 2>/dev/null || echo 0)
+                                            stat -c '%s' '${targetPath}' 2>/dev/null || echo 0)
                                         echo "[${engine}] Done — \${FINAL_SIZE} bytes"
                                     fi
                                 """
