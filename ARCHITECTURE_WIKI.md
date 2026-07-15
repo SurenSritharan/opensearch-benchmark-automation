@@ -1,379 +1,253 @@
-# OpenSearch Benchmark Automation - Architecture Wiki
+# OpenSearch Benchmark Automation — Architecture Wiki
 
 ## Table of Contents
 1. [System Overview](#system-overview)
 2. [Architecture Diagram](#architecture-diagram)
-3. [Execution Flow State Diagram](#execution-flow-state-diagram)
+3. [Job Lifecycle State Diagram](#job-lifecycle-state-diagram)
 4. [Component Interactions](#component-interactions)
 5. [Data Flow](#data-flow)
 6. [Configuration System](#configuration-system)
-7. [Telemetry Collection Flow](#telemetry-collection-flow)
-8. [Directory Structure](#directory-structure)
+7. [Directory Structure](#directory-structure)
+8. [Quick Reference](#quick-reference)
 
 ---
 
 ## System Overview
 
-The OpenSearch Benchmark Automation is a comprehensive testing framework that orchestrates vector search engine benchmarks across multiple engines (FAISS, JVector, Lucene) with integrated profiling, metrics collection, and telemetry diagnostics.
+The OpenSearch Benchmark Automation is a cloud-native REST API service that orchestrates vector search benchmarks across three engines — **FAISS**, **JVector**, and **Lucene** — running as separate Kubernetes worker pods. A central API server pod handles all user interaction, routing, and job tracking. Each worker pod independently executes benchmarks against its dedicated OpenSearch cluster.
 
 ### Key Components
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Benchmark Automation System                  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
-│  │ Config       │  │ Dataset      │  │ Benchmark    │           │
-│  │ Manager      │──│ Manager      │──│ Executor     │           │
-│  └──────────────┘  └──────────────┘  └──────────────┘           │
-│         │                                   │                   │
-│         │                                   │                   │
-│  ┌──────▼──────┐  ┌──────────────┐  ┌───────▼──────┐            │
-│  │ Profiling   │  │ Metrics      │  │ Telemetry    │            │
-│  │ Manager     │  │ Collector    │  │ Collector    │            │
-│  └─────────────┘  └──────────────┘  └──────────────┘            │ 
-│         │                 │                   │                 │
-│         └─────────────────┴───────────────────┘                 │
-│                           │                                     │
-│                  ┌────────▼────────┐                            │
-│                  │ Dashboard       │                            │
-│                  │ Generator       │                            │
-│                  └─────────────────┘                            │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
+| Component | Pod | Responsibility |
+|---|---|---|
+| **API Server** | `opensearch-benchmark-api-server` | Web UI, job routing, job list, fan-out to workers |
+| **Worker — JVector** | `opensearch-benchmark-worker-jvector-0` | Queue processing and execution for JVector engine |
+| **Worker — FAISS** | `opensearch-benchmark-worker-faiss-0` | Queue processing and execution for FAISS engine |
+| **Worker — Lucene** | `opensearch-benchmark-worker-lucene-0` | Queue processing and execution for Lucene engine |
+| **BenchmarkRunner** | (in each worker) | Invokes `opensearch-benchmark` CLI, manages profiling and metrics |
+| **ConfigLoader** | (in each worker) | Reads `config/datasets.yaml`, resolves workload paths and params |
 
 ---
 
 ## Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           USER INTERFACE                                │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ./run-benchmark.sh  OR  ./run-benchmark-parallel.sh                    │
-│         │                           │                                   │
-│         └───────────┬───────────────┘                                   │
-│                     │                                                   │
-│              ┌──────▼──────┐                                            │
-│              │   CLI Args  │                                            │
-│              │  Parsing    │                                            │
-│              └──────┬──────┘                                            │
-│                     │                                                   │
-└─────────────────────┼───────────────────────────────────────────────────┘
-                      │
-┌─────────────────────▼─────────────────────────────────────────────────────┐
-│                      CONFIGURATION LAYER                                  │
-├───────────────────────────────────────────────────────────────────────────┤
-│                                                                           │
-│  ┌─────────────────┐         ┌─────────────────┐                          │
-│  │ cluster.yaml    │         │ datasets.yaml   │                          │
-│  ├─────────────────┤         ├─────────────────┤                          │
-│  │ • Endpoint      │         │ • Dataset specs │                          │
-│  │ • Auth          │         │ • Dimensions    │                          │
-│  │ • Profiling     │         │ • Formats       │                          │
-│  │ • Metrics       │         │ • Workloads     │                          │
-│  │ • Telemetry     │         │ • Parameters    │                          │
-│  └────────┬────────┘         └────────┬────────┘                          │
-│           │                           │                                   │
-│           └───────────┬───────────────┘                                   │
-│                       │                                                   │
-│                ┌──────▼──────┐                                            │
-│                │ Config      │                                            │
-│                │ Manager     │                                            │
-│                └──────┬──────┘                                            │
-│                       │                                                   │
-└───────────────────────┼───────────────────────────────────────────────────┘
-                        │
-┌───────────────────────▼────────────────────────────────────────────────────┐
-│                      EXECUTION LAYER                                       │
-├────────────────────────────────────────────────────────────────────────────┤
-│                                                                            │
-│  ┌──────────────────────────────────────────────────────────────────┐      │
-│  │                    Benchmark Executor                            │      │
-│  ├──────────────────────────────────────────────────────────────────┤      │
-│  │                                                                  │      │
-│  │  1. Initialize Components                                        │      │
-│  │     ├─ Telemetry Collector                                       │      │
-│  │     ├─ Profiling Manager                                         │      │
-│  │     ├─ Metrics Collector                                         │      │
-│  │     └─ Server Log Collector                                      │      │
-│  │                                                                  │      │
-│  │  2. Pre-Run Telemetry (if enabled)                               │      │
-│  │     ├─ Cluster state snapshot                                    │      │
-│  │     ├─ Server logs (1000 lines)                                  │      │
-│  │     └─ GKE metrics snapshot                                      │      │
-│  │                                                                  │      │
-│  │  3. Execute Scenarios                                            │      │
-│  │     ├─ Index Creation                                            │      │
-│  │     ├─ Bulk Ingest (with profiling & metrics)                    │      │
-│  │     ├─ Force Merge (with profiling & metrics)                    │      │
-│  │     └─ Search Tests (parameter sweeps)                           │      │
-│  │                                                                  │      │
-│  │  4. Post-Run Telemetry (if enabled)                              │      │
-│  │     ├─ Cluster state snapshot                                    │      │
-│  │     ├─ Server logs (5000 lines)                                  │      │
-│  │     └─ GKE metrics with time window                              │      │
-│  │                                                                  │      │
-│  │  5. Generate Dashboards                                          │      │
-│  │     ├─ Per-scenario HTML reports                                 │      │
-│  │     ├─ Comparison dashboards                                     │      │
-│  │     └─ Index page with summary                                   │      │
-│  │                                                                  │      │
-│  └──────────────────────────────────────────────────────────────────┘      │
-│                                                                            │
-└─────────────────────────────────────────────────────────────────────────-──┘
-                                    │
-┌───────────────────────────────────▼──────────────────────────────────────────┐
-│                         KUBERNETES LAYER                                     │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌────────────────────┐         ┌────────────────────┐                       │
-│  │ Benchmark Client   │         │ OpenSearch Cluster │                       │
-│  │ Pod                │────────▶│ (FAISS/JVector/    │                       │
-│  │                    │         │  Lucene)           │                       │
-│  │ • opensearch-      │         │                    │                       │
-│  │   benchmark CLI    │         │ • Data Nodes       │                       │
-│  │ • Workloads        │         │ • Cluster Managers │                       │
-│  │ • Test Data        │         │                    │                       │
-│  └────────────────────┘         └────────────────────┘                       │
-│           │                              │                                   │
-│           │                              │                                   │
-│  ┌────────▼──────────┐         ┌────────▼────────┐                           │
-│  │ kubectl exec      │         │ kubectl logs    │                           │
-│  │ (Run benchmarks)  │         │ (Collect logs)  │                           │
-│  └───────────────────┘         └─────────────────┘                           │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                    │
-┌───────────────────────────────────▼──────────────────────────────────────────┐
-│                         OUTPUT LAYER                                         │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  results/20260608-003727/                                                    │
-│  ├── telemetry-pre-run/                                                      │
-│  │   ├── cluster-health.json                                                 │
-│  │   ├── server-logs/                                                        │
-│  │   └── gke-metrics-snapshot.json                                           │
-│  │                                                                           │
-│  ├── msmarco-faiss/                                                          │
-│  │   ├── scenario-2-bulk-ingest/                                             │
-│  │   │   ├── test_run.json                                                   │
-│  │   │   ├── results.html                                                    │
-│  │   │   ├── gke_metrics.json                                                │
-│  │   │   └── profiles/                                                       │
-│  │   │       └── cpu_flame_graph_node-0.html                                 │
-│  │   └── scenario-3-force-merge/                                             │
-│  │                                                                           │
-│  ├── telemetry-post-run/                                                     │
-│  │   ├── cluster-health.json                                                 │
-│  │   ├── server-logs/                                                        │
-│  │   ├── gke-metrics.json                                                    │
-│  │   └── query-gke-metrics.sh                                                │
-│  │                                                                           │
-│  └── index.html (Summary Dashboard)                                          │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              USER / BROWSER                                 │
+│                         http://34.132.114.18/                               │
+└───────────────────────────────┬─────────────────────────────────────────────┘
+                                │  HTTP (LoadBalancer :80 → :8080)
+┌───────────────────────────────▼─────────────────────────────────────────────┐
+│                    API SERVER POD  (WORKER_ENGINES=none)                    │
+│   opensearch-benchmark-api-server   namespace: benchmark-api                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  app.py (Flask / Gunicorn, 2 workers × 4 threads)                          │
+│  ┌───────────────────────────────────────────────────────────────┐          │
+│  │  Web UI   GET /                  → web/index.html             │          │
+│  │  Discover GET /api/v1/discover   → fan-out to all workers     │          │
+│  │  Submit   POST /api/v1/benchmark → proxy to engine worker     │          │
+│  │  Batch    POST /api/v1/benchmark/batch → proxy to engine      │          │
+│  │  Status   GET  /api/v1/benchmark/<id>  → proxy to engine      │          │
+│  │  Cancel   POST /api/v1/benchmark/<id>/cancel?engine=<e>       │          │
+│  │  List     GET  /api/v1/benchmark → fan-out, merge & sort      │          │
+│  │  Sync     POST /api/v1/sync      → proxy to all workers       │          │
+│  │  Health   GET  /health           → local SQLite check         │          │
+│  └───────────────────────────────────────────────────────────────┘          │
+│                                                                             │
+│  Storage: benchmark-api-db-storage PVC  (/data/jobs.db + /data/results)    │
+│                                                                             │
+└──────────┬──────────────────────┬───────────────────────┬───────────────────┘
+           │ in-cluster DNS       │                       │
+           ▼                      ▼                       ▼
+ worker-jvector-0.…    worker-faiss-0.…       worker-lucene-0.…
+ :8080                 :8080                  :8080
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│  WORKER — JVEC   │  │  WORKER — FAISS  │  │  WORKER — LUCENE │
+│ WORKER_ENGINES=  │  │ WORKER_ENGINES=  │  │ WORKER_ENGINES=  │
+│   jvector        │  │   faiss          │  │   lucene         │
+├──────────────────┤  ├──────────────────┤  ├──────────────────┤
+│ app.py           │  │ app.py           │  │ app.py           │
+│ ┌──────────────┐ │  │ ┌──────────────┐ │  │ ┌──────────────┐ │
+│ │ SQLite DB    │ │  │ │ SQLite DB    │ │  │ │ SQLite DB    │ │
+│ │ jobs.db      │ │  │ │ jobs.db      │ │  │ │ jobs.db      │ │
+│ └──────────────┘ │  │ └──────────────┘ │  │ └──────────────┘ │
+│ ┌──────────────┐ │  │ ┌──────────────┐ │  │ ┌──────────────┐ │
+│ │Queue         │ │  │ │Queue         │ │  │ │Queue         │ │
+│ │Processor     │ │  │ │Processor     │ │  │ │Processor     │ │
+│ │(background   │ │  │ │(background   │ │  │ │(background   │ │
+│ │ thread)      │ │  │ │ thread)      │ │  │ │ thread)      │ │
+│ └──────────────┘ │  │ └──────────────┘ │  │ └──────────────┘ │
+│ ┌──────────────┐ │  │ ┌──────────────┐ │  │ ┌──────────────┐ │
+│ │Benchmark     │ │  │ │Benchmark     │ │  │ │Benchmark     │ │
+│ │Runner        │ │  │ │Runner        │ │  │ │Runner        │ │
+│ └──────────────┘ │  │ └──────────────┘ │  │ └──────────────┘ │
+│                  │  │                  │  │                  │
+│ PVC: worker-     │  │ PVC: worker-     │  │ PVC: worker-     │
+│ storage-jvector  │  │ storage-faiss    │  │ storage-lucene   │
+│ /datasets        │  │ /datasets        │  │ /datasets        │
+│ /results         │  │ /results         │  │ /results         │
+│ /workspace       │  │ /workspace       │  │ /workspace       │
+└────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘
+         │                     │                      │
+         ▼                     ▼                      ▼
+  OpenSearch                OpenSearch             OpenSearch
+  JVector Cluster           Standard Cluster       Standard Cluster
+  (jvector-data-nodes)      (standard-data-nodes)  (standard-data-nodes)
 ```
+
+### Routing Rules (API Server)
+
+The API server runs with `WORKER_ENGINES=none`, so it **never** processes jobs itself. Every job request is forwarded to the correct worker pod over in-cluster DNS:
+
+```
+http://opensearch-benchmark-worker-{engine}-0
+  .opensearch-benchmark-worker-{engine}
+  .benchmark-api.svc.cluster.local:8080
+```
+
+For requests that include `?engine=<engine>`, routing is direct. For requests without an engine param (legacy paths), the server probes all three workers in parallel via `_engine_from_job_id()` to find the owner.
 
 ---
 
-## Execution Flow State Diagram
-
+## Job Lifecycle State Diagram
 
 ```mermaid
-graph TD
-    %% Node Definitions and Flow Transitions
-    Start[Start] --> ParseCLI[Parse CLI Arguments]
-    ParseCLI --> LoadConfig[Load Config Files]
-    LoadConfig --> ValidateSettings[Validate Settings]
-    ValidateSettings --> DisplayConfig[Display Config & Confirm]
-    DisplayConfig --> InitComponents[Initialize Components]
-    InitComponents --> TelemetryCheck1{Telemetry Enabled?}
+stateDiagram-v2
+    [*] --> queued : POST /api/v1/benchmark\nor /benchmark/batch
 
-    TelemetryCheck1 -->|Yes| CollectPreRun[Collect Pre-Run Telemetry]
-    TelemetryCheck1 -->|No| ScenarioBranching{Scenario Type?}
-    CollectPreRun --> ScenarioBranching
+    queued --> running : Queue processor picks up job\n(acquires engine FileLock)
+    queued --> cancelled : Cancel requested while waiting
 
-    ScenarioBranching -->|Index Creation| IndexCreation[Index Creation]
-    ScenarioBranching -->|Bulk Ingest| BulkIngest[Bulk Ingest]
-    ScenarioBranching -->|Search Tests| SearchTests[Search Tests]
+    running --> completed : All scenarios pass
+    running --> error : Unhandled exception
+    running --> failed : Benchmark exit code ≠ 0
+    running --> partial : Some scenarios pass, some fail
+    running --> partial_failure : Batch job partially succeeds
+    running --> cancelled : Cancel signal received\n(threading.Event + SIGINT→SIGTERM→SIGKILL)
 
-    IndexCreation --> StartParallelExecution[Start Parallel Execution]
-    BulkIngest --> StartParallelExecution
-    SearchTests --> StartParallelExecution
+    completed --> [*]
+    cancelled --> [*]
+    error --> [*]
+    failed --> [*]
+    partial --> [*]
+    partial_failure --> [*]
+```
 
-    StartParallelExecution --> ExecuteBenchmark[Execute Benchmark]
-    StartParallelExecution --> StartProfiling[Start Profiling Thread]
-    StartParallelExecution --> StartMetrics[Start Metrics Collection]
+### Queue Processor Loop (per worker, per engine)
 
-    ExecuteBenchmark --> BenchmarkComplete[Benchmark Complete]
-    StartProfiling --> ProfilingComplete[Profiling Complete]
-    StartMetrics --> MetricsComplete[Metrics Complete]
+```
+startup
+  └─► _start_processors_for_pending_engines()
+        └─► executor.submit(process_engine_queue, engine)  ← background thread
 
-    BenchmarkComplete --> WaitForThreads[Wait for All Threads]
-    ProfilingComplete --> WaitForThreads
-    MetricsComplete --> WaitForThreads
+process_engine_queue(engine):
+  loop forever:
+    job = get_next_queued_job(engine)        # ORDER BY queue_position, created_at
+    if no job → sleep 5s, continue
 
-    WaitForThreads --> SuccessCheck{Success?}
+    skip if job already in TERMINAL_STATUSES  # cancelled while queued
 
-    SuccessCheck -->|Yes| DownloadArtifacts[Download Artifacts]
-    SuccessCheck -->|No| CaptureLogs[Capture Error Logs]
+    acquire FileLock(/workspace/locks/{engine}.lock)  # blocks until free
+      re-check if cancelled while waiting
+      update status → 'running'
+      create cancel_event, register in _cancel_events[job_id]
 
-    DownloadArtifacts --> GenHTMLReport[Generate HTML Report]
-    CaptureLogs --> GenHTMLReport
-    GenHTMLReport --> MoreScenariosCheck{More Scenarios?}
+      if batch job  → process_batch_job()
+      if single job → benchmark_runner.run_benchmark()
 
-    MoreScenariosCheck -->|Yes| ScenarioBranching
-    MoreScenariosCheck -->|No| MoreEnginesCheck{More Engines?}
+      save result, commit to git (if GIT_COMMIT_RESULTS=true)
+    release FileLock
+```
 
-    MoreEnginesCheck -->|Yes| ScenarioBranching
-    MoreEnginesCheck -->|No| TelemetryCheck2{Telemetry Enabled?}
+### Cancellation Flow
 
-    TelemetryCheck2 -->|Yes| CollectPostRun[Collect Post-Run Telemetry]
-    TelemetryCheck2 -->|No| GenComparison[Generate Comparison Dashboard]
-
-    CollectPostRun --> GenComparison
-    GenComparison --> GenIndexPage[Generate Index Page]
-    GenIndexPage --> Complete[Complete & END]
-
-    %% Styles for Visual Clarity and Palette Balance
-    style Start fill:#C8E6C9,stroke:#388E3C,stroke-width:2px,color:#1B5E20
-    style Complete fill:#C8E6C9,stroke:#388E3C,stroke-width:2px,color:#1B5E20
-
-    %% Decision Diamonds (Yellow)
-    style TelemetryCheck1 fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
-    style ScenarioBranching fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
-    style SuccessCheck fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
-    style MoreScenariosCheck fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
-    style MoreEnginesCheck fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
-    style TelemetryCheck2 fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#5D4037
-
-    %% CLI Setup Steps (Soft Blue)
-    style ParseCLI fill:#E3F2FD,stroke:#1976D2,stroke-width:1.5px,color:#0D47A1
-    style LoadConfig fill:#E3F2FD,stroke:#1976D2,stroke-width:1.5px,color:#0D47A1
-    style ValidateSettings fill:#E3F2FD,stroke:#1976D2,stroke-width:1.5px,color:#0D47A1
-    style DisplayConfig fill:#E3F2FD,stroke:#1976D2,stroke-width:1.5px,color:#0D47A1
-    style InitComponents fill:#E3F2FD,stroke:#1976D2,stroke-width:1.5px,color:#0D47A1
-
-    %% Execution Scenarios & Benchmarks (Teal)
-    style IndexCreation fill:#E0F7FA,stroke:#0097A7,stroke-width:1.5px,color:#006064
-    style BulkIngest fill:#E0F7FA,stroke:#0097A7,stroke-width:1.5px,color:#006064
-    style SearchTests fill:#E0F7FA,stroke:#0097A7,stroke-width:1.5px,color:#006064
-    style ExecuteBenchmark fill:#E0F7FA,stroke:#0097A7,stroke-width:2px,color:#006064
-
-    %% Failure Pipeline (Soft Red)
-    style CaptureLogs fill:#FFEBEE,stroke:#D32F2F,stroke-width:1.5px,color:#C62828
-
-    %% Reports / Outputs (Soft Purple)
-    style GenFlameGraphs fill:#F3E5F5,stroke:#7B1FA2,stroke-width:1.5px,color:#4A148C
-    style GenMetricsGraphs fill:#F3E5F5,stroke:#7B1FA2,stroke-width:1.5px,color:#4A148C
-    style GenHTMLReport fill:#F3E5F5,stroke:#7B1FA2,stroke-width:1.5px,color:#4A148C
-    style GenComparison fill:#F3E5F5,stroke:#7B1FA2,stroke-width:1.5px,color:#4A148C
-    style GenIndexPage fill:#F3E5F5,stroke:#7B1FA2,stroke-width:1.5px,color:#4A148C
+```
+UI: Cancel button  →  POST /api/v1/benchmark/{id}/cancel?engine={engine}
+                                │
+                                ▼
+                    cancel_job() on the worker pod
+                                │
+                    ┌───────────┴──────────────┐
+                    │ status == 'queued'        │ status == 'running'
+                    │ Mark cancelled in DB      │ Mark cancelled in DB
+                    │ (no process to kill)      │ Set cancel_event (threading.Event)
+                    └───────────────────────────┤ benchmark_runner.cancel(job_id)
+                                                │   → SIGINT → SIGTERM → SIGKILL
+                                                └─────────────────────────────────
 ```
 
 ---
 
 ## Component Interactions
 
-### 1. Configuration Flow
+### 1. Job Submission Flow
 
 ```
-┌──────────────┐
-│ cluster.yaml │
-└──────┬───────┘
-       │
-       ├─► cluster_endpoint
-       ├─► client_options
-       ├─► profiling.enabled
-       ├─► metrics.enabled
-       └─► telemetry.enabled
+Browser                 API Server              Worker Pod
+   │                        │                       │
+   │  POST /benchmark        │                       │
+   │  {dataset, engine,      │                       │
+   │   scenarios}            │                       │
+   │────────────────────────▶│                       │
+   │                         │  _proxy(engine, ...)  │
+   │                         │──────────────────────▶│
+   │                         │                       │ save_job() → jobs.db
+   │                         │                       │ ensure_processor_running()
+   │                         │   202 Accepted        │
+   │                         │◀──────────────────────│
+   │  {job_id, status}       │                       │
+   │◀────────────────────────│                       │
+   │                         │                       │
+   │  GET /benchmark/{id}    │                       │
+   │────────────────────────▶│                       │
+   │                         │  _proxy(engine, ...)  │
+   │                         │──────────────────────▶│
+   │                         │   job JSON            │
+   │                         │◀──────────────────────│
+   │  {status, result, ...}  │                       │
+   │◀────────────────────────│                       │
+```
+
+### 2. BenchmarkRunner Execution Flow
+
+```
+process_engine_queue
+    │
+    └─► benchmark_runner.run_benchmark(dataset, engine, scenario, ...)
               │
-       ┌──────▼──────┐
-       │ Config      │
-       │ Manager     │
-       └──────┬──────┘
+              ├─ config_loader.get_target_host(engine)     → OpenSearch endpoint
+              ├─ config_loader.get_workload_path(dataset)  → /datasets/workloads/...
+              ├─ build params: common_params + engine_params + procedure_params
               │
-       ┌──────▼──────────────────────┐
-       │ Provides configuration to:  │
-       ├─────────────────────────────┤
-       │ • BenchmarkExecutor         │
-       │ • ProfilingManager          │
-       │ • MetricsCollector          │
-       │ • TelemetryCollector        │
-       └─────────────────────────────┘
+              ├─ [if parameter sweep]
+              │    for each sweep value:
+              │      osb CLI → opensearch-benchmark execute-test \
+              │                  --workload-path=... \
+              │                  --test-procedure=... \
+              │                  --workload-params=...
+              │
+              ├─ [if single run]
+              │    osb CLI → opensearch-benchmark execute-test ...
+              │
+              ├─ collect GKE metrics (k8s_metrics_collector.py)
+              ├─ save index snapshot (index_snapshot.json)
+              └─ return result dict → saved to jobs.db
 ```
 
-### 2. Telemetry Collection Flow
+### 3. Git Commit-Back Flow
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  Telemetry Collection                       │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  PRE-RUN PHASE                                              │
-│  ┌──────────────────────────────────────────────────┐       │
-│  │ 1. Record test start time                        │       │
-│  │ 2. Collect cluster state                         │       │
-│  │    ├─ Health, stats, settings                    │       │
-│  │    ├─ Node information                           │       │
-│  │    └─ Index stats (if exists)                    │       │
-│  │ 3. Collect server logs (1000 lines)              │       │
-│  │ 4. Collect GKE metrics snapshot                  │       │
-│  │ 5. Create summary file                           │       │
-│  └──────────────────────────────────────────────────┘       │
-│                          │                                  │
-│                          ▼                                  │
-│                  [RUN BENCHMARK]                            |
-│                          ▼                                  │
-│  POST-RUN PHASE                                             │
-│  ┌──────────────────────────────────────────────────┐       │
-│  │ 1. Calculate test duration                       │       │
-│  │ 2. Collect cluster state                         │       │
-│  │    ├─ Health, stats, settings                    │       │
-│  │    ├─ Node information                           │       │
-│  │    └─ Index stats                                │       │
-│  │ 3. Collect server logs (5000 lines)              │       │
-│  │ 4. Collect GKE metrics with time window          │       │
-│  │ 5. Generate query helper script                  │       │
-│  │ 6. Create summary file                           │       │
-│  └──────────────────────────────────────────────────┘       │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 3. Profiling & Metrics Flow
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│              Profiling & Metrics Collection                 │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  BEFORE BENCHMARK                                           | 
-│  ┌──────────────────────────────────────────────────┐       │
-│  │ 1. Check if profiling enabled                    │       │
-│  │ 2. Discover OpenSearch pods                      │       │
-│  │ 3. Start async-profiler on each pod              │       │
-│  │ 4. Start metrics collection thread               │       │
-│  └──────────────────────────────────────────────────┘       │
-│                          │                                  │
-│                          ▼                                  │
-│                  [RUN BENCHMARK]                            |
-│                          │                                  │
-│                          ▼                                  │
-│  AFTER BENCHMARK                                            │
-│  ┌──────────────────────────────────────────────────┐       │
-│  │ 1. Stop async-profiler                           │       │
-│  │ 2. Download flame graph files                    │       │
-│  │ 3. Stop metrics collection                       │       │
-│  │ 4. Calculate metrics summary                     │       │
-│  │ 5. Generate metrics graphs                       │       │
-│  └──────────────────────────────────────────────────┘       │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+job completes
+    │
+    └─► executor.submit(_commit_results_to_git, job_id, status)
+              │  (background thread, controlled by GIT_COMMIT_RESULTS=true)
+              │
+              ├─ git reset HEAD          (clean staged index)
+              ├─ git pull --rebase       (sync remote if branch exists)
+              ├─ git add {job_id}/
+              ├─ git commit -m "results: add {job_id} [{status}]"
+              └─ git push origin main
 ```
 
 ---
@@ -381,125 +255,133 @@ graph TD
 ## Data Flow
 
 ```
-┌──────────────┐
-│ User Input   │
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐     ┌──────────────┐
-│ Config Files │────▶│ Config       │
-└──────────────┘     │ Manager      │
-                     └──────┬───────┘
-                            │
-                            ▼
-                     ┌──────────────┐
-                     │ Dataset      │
-                     │ Manager      │
-                     └──────┬───────┘
-                            │
-                            ▼
-                     ┌──────────────┐
-                     │ Benchmark    │
-                     │ Executor     │
-                     └──────┬───────┘
-                            │
-       ┌────────────────────┼────────────────────┐
-       │                    │                    │
-       ▼                    ▼                    ▼
-┌──────────────┐     ┌──────────────┐    ┌──────────────┐
-│ Telemetry    │     │ Profiling    │    │ Metrics      │
-│ Collector    │     │ Manager      │    │ Collector    │
-└──────┬───────┘     └──────┬───────┘    └──────┬───────┘
-       │                    │                    │
-       └────────────────────┼────────────────────┘
-                            │
-                            ▼
-                     ┌──────────────┐
-                     │ Dashboard    │
-                     │ Generator    │
-                     └──────┬───────┘
-                            │
-                            ▼
-                     ┌──────────────┐
-                     │ HTML Reports │
-                     │ & Artifacts  │
-                     └──────────────┘
+User submits job
+      │
+      ▼
+API Server (proxy) ──────────────────────────────────────────────┐
+      │                                                           │
+      ▼                                                           ▼
+Worker Pod                                             config/datasets.yaml
+      │                                                   (ConfigLoader)
+      ├─► jobs.db (SQLite)                                        │
+      │     status: queued → running → completed                  │
+      │                                                           │
+      ├─► BenchmarkRunner ◀──────────────────────────────────────┘
+      │     │
+      │     ├─► opensearch-benchmark CLI subprocess
+      │     │     writes → /results/{job_id}/{dataset}-{engine}/
+      │     │                ├── {sweep}/test_run.json
+      │     │                ├── {sweep}/gke_metrics.json
+      │     │                └── {sweep}/index_snapshot.json
+      │     │
+      │     └─► k8s_metrics_collector.py
+      │           polls GMP / kube-state-metrics
+      │
+      └─► git push → results repo (if GIT_COMMIT_RESULTS=true)
 ```
 
 ---
 
 ## Configuration System
 
-### Configuration Hierarchy
+### datasets.yaml Structure
 
-```
-Priority (Highest to Lowest):
-1. CLI Arguments (--enable-profiling, --enable-metrics)
-2. cluster.yaml settings
-3. Default values
+Each entry in `config/datasets.yaml` defines a dataset and all the information needed to run it across engines:
 
-Example:
-┌─────────────────────────────────────────────────────┐
-│ Profiling Enabled?                                  │
-├─────────────────────────────────────────────────────┤
-│ 1. Check: --enable-profiling flag?                  │
-│    └─ YES → Enable                                  │
-│    └─ NO  → Continue to step 2                      │
-│                                                     │
-│ 2. Check: cluster.yaml profiling.enabled?           │
-│    └─ true  → Enable                                │
-│    └─ false → Disable                               │
-│    └─ missing → Use default (false)                 │
-└─────────────────────────────────────────────────────┘
-```
-
-### Configuration Files
-
-**cluster.yaml Structure:**
 ```yaml
-cluster_endpoint: "opensearch-cluster:9200"
-client_options:
-  timeout: 300
-  use_ssl: true
-  verify_certs: false
-  basic_auth_user: "admin"
-  basic_auth_password: "admin"
-
-pod_label_selector: "app=opensearch-data"
-
-profiling:
-  enabled: true
-  warmup_seconds: 0
-  duration_seconds: 45
-
-metrics:
-  enabled: true
-  interval_seconds: 10
-  generate_graphs: true
-
-telemetry:
-  enabled: true
-  collect_per_scenario: false
-  pre_run_log_lines: 1000
-  post_run_log_lines: 5000
-  collect_on_failure: true
-```
-
-**datasets.yaml Structure:**
-```yaml
-default: "msmarco"
-
 datasets:
-  msmarco:
-    dimension: 1024
-    format: "fvec"
-    space_type: "cos"
-    workload_path: "/datasets/workloads/msmarco"
-    index_name: "msmarco_index"
-    default_params:
-      query_k: 10
-      query_count: 1000
+  cohere-wiki-en-768:
+    dimension: 768
+    format: hdf5
+    space_type: "innerproduct"
+    description: "..."
+    workload: "vectorsearch"         # must match folder name in opensearch-benchmark-workloads
+
+    supported_corpus_sizes: ["1m", "5m", "10m"]
+
+    # GCS-backed corpus files seeded onto worker PVCs by Jenkins
+    gcs_cache_files:
+      - corpus_size: "5m"
+        gcs_path: "gs://opensearch-benchmark-datasets/..."
+        target_path: "/datasets/opensearch-benchmark/.osb/benchmarks/data/cohere-5m/cohere-5m.hdf5"
+
+    # Parameters shared across all scenarios and engines
+    common_params:
+      target_index_name: "cohere-wiki-en-768-{{corpus_size}}"
+      target_field_name: "target_field"
+      id_field_name: "_id"
+      corpus_name: "cohere-{{corpus_size}}"
+
+    # Engine identity injected into every run for this engine
+    engine_params:
+      faiss:
+        engine: "faiss"
+      lucene:
+        engine: "lucene"
+      jvector:
+        engine: "jvector"
+
+    # Available test procedures (scenarios)
+    test_procedures:
+      - name: "create-index"
+        params:
+          target_index_body: "indices/index.json"
+          target_index_dimension: 768
+          target_index_space_type: "innerproduct"
+          hnsw_ef_construction: 256
+          hnsw_m: 32
+          # ...
+        engine_params:              # procedure-level engine overrides
+          jvector:
+            method_name: "disk_ann"
+            mode: "in_memory"
+          faiss:
+            method_name: "hnsw"
+          lucene:
+            method_name: "hnsw"
+
+      - name: "bulk-ingest-data"
+        params:
+          target_index_bulk_size: 500
+          target_index_bulk_index_data_set_format: "hdf5"
+          target_index_bulk_index_data_set_corpus: "{{corpus_name}}"
+          target_index_bulk_indexing_clients: 8
+
+      - name: "vector-search"
+        params:
+          query_data_set_format: "hdf5"
+          query_data_set_corpus: "{{corpus_name}}"
+          number_of_repetitions: 1000
+          warmup_time_period: 60
+          time_period: 300
+          hnsw_ef_search: 128
+        parameter_sweeps:           # runs once per entry, varying search_clients
+          - params: { search_clients: 4 }
+          - params: { search_clients: 8 }
+          - params: { search_clients: 10 }
+          - params: { search_clients: 12 }
+          - params: { search_clients: 16 }
 ```
+
+### Configuration Hierarchy (per run)
+
+```
+Priority (highest → lowest):
+1. Per-test params in batch job request  (test.params)
+2. Procedure-level params               (test_procedures[n].params)
+3. Engine-specific params               (engine_params.{engine})
+4. Common params                        (common_params)
+5. Workload defaults
+```
+
+### Key Config Files
+
+| File | Purpose |
+|---|---|
+| `config/datasets.yaml` | All dataset definitions, engine targets, test procedures |
+| `config/cluster.yaml` | Cluster endpoint, auth, profiling/metrics/telemetry flags |
+| `gke-manifest/opensearch-benchmark-worker-template.yaml` | StatefulSet template for worker pods |
+| `gke-manifest/opensearch-benchmark-api-server.yaml` | API server Deployment + LoadBalancer Service |
 
 ---
 
@@ -507,89 +389,112 @@ datasets:
 
 ```
 opensearch-benchmark-automation/
+│
+├── cloud-service/
+│   ├── app.py                    # Flask API — routing, job queue, cancel, proxy
+│   ├── benchmark_runner.py       # Executes opensearch-benchmark CLI subprocess
+│   ├── config_loader.py          # Reads datasets.yaml, resolves paths & params
+│   ├── k8s_metrics_collector.py  # Polls GKE / GMP metrics during runs
+│   ├── requirements.txt
+│   └── web/
+│       ├── index.html            # Job dashboard (submit, list, cancel)
+│       ├── results.html          # Per-job results viewer
+│       └── compare.html          # Cross-engine comparison UI
+│
 ├── config/
-│   ├── cluster.yaml          # Cluster configuration
-│   └── datasets.yaml         # Dataset specifications
-│
-├── lib/
-│   ├── benchmark_executor.py # Main benchmark orchestrator
-│   ├── config_manager.py     # Configuration management
-│   ├── dataset_manager.py    # Dataset handling
-│   ├── profiling_manager.py  # Async-profiler integration
-│   ├── metrics_collector.py  # GKE metrics collection
-│   ├── telemetry_collector.py# Comprehensive diagnostics
-│   ├── server_log_collector.py# Server log collection
-│   ├── dashboard_generator.py# HTML report generation
-│   └── kubectl_helper.py     # Kubernetes operations
-│
-├── results/
-│   └── YYYYMMDD-HHMMSS/      # Timestamped results
-│       ├── telemetry-pre-run/
-│       ├── telemetry-post-run/
-│       ├── msmarco-faiss/
-│       ├── msmarco-jvector/
-│       ├── msmarco-lucene/
-│       └── index.html
-│
-├── scripts/
-│   ├── collect-gke-metrics.sh
-│   └── check-async-profiler.sh
+│   ├── datasets.yaml             # Dataset definitions + engine targets
+│   └── cluster.yaml              # Cluster connection + feature flags
 │
 ├── gke-manifest/
-│   ├── opensearch-benchmark-client.yaml
-│   ├── opensearch-standard-data-nodes.yaml
-│   └── opensearch-jvector-data-nodes.yaml
+│   ├── opensearch-benchmark-api-server.yaml        # API server Deployment
+│   ├── opensearch-benchmark-worker-template.yaml   # Worker StatefulSet template
+│   ├── benchmark-worker-pvcs.yaml                  # PVCs per engine
+│   ├── opensearch-jvector-*.yaml                   # JVector OpenSearch cluster
+│   ├── opensearch-standard-*.yaml                  # Standard OpenSearch cluster
+│   └── deploy-all-clusters.sh                      # Deploy everything
 │
-├── run-benchmark.sh          # Single engine execution
-├── run-benchmark-parallel.sh # Parallel execution
-├── view_logs.py              # Log monitoring
+├── scripts/
+│   └── test/                     # Test scripts
 │
-└── Documentation/
-    ├── README.md
-    ├── ARCHITECTURE_WIKI.md  # This file
+└── ARCHITECTURE_WIKI.md          # This file
+```
 
+### Worker Pod Volume Layout
+
+Each worker mounts a single PVC (`benchmark-worker-storage-{engine}`) at three sub-paths:
+
+```
+/datasets     ← workload data, HDF5 files, opensearch-benchmark home
+/results      ← benchmark output (test_run.json, metrics, snapshots)
+/workspace    ← automation repo clone (config/, cloud-service/), jobs.db, FileLocks
 ```
 
 ---
 
 ## Quick Reference
 
-### Common Commands
+### API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Web UI |
+| `GET` | `/health` | Liveness / job counts |
+| `GET` | `/api/v1/discover` | List datasets, engines, procedures |
+| `POST` | `/api/v1/benchmark` | Submit a single-scenario job |
+| `POST` | `/api/v1/benchmark/batch` | Submit a multi-test batch job |
+| `GET` | `/api/v1/benchmark` | List all jobs (fan-out across workers) |
+| `GET` | `/api/v1/benchmark/{id}?engine={e}` | Get job status |
+| `POST` | `/api/v1/benchmark/{id}/cancel?engine={e}` | Cancel queued or running job |
+| `DELETE` | `/api/v1/benchmark/{id}?engine={e}` | Delete job record |
+| `GET` | `/api/v1/benchmark/{id}/results?engine={e}` | Fetch parsed result artifacts |
+| `GET` | `/api/v1/benchmark/{id}/live-status?engine={e}` | Live status during run |
+| `POST` | `/api/v1/sync` | Git pull + config reload on all workers |
+
+### Useful kubectl Commands
 
 ```bash
-# Interactive mode
-./run-benchmark.sh
+# View all benchmark pods
+kubectl get pods -n benchmark-api
 
-# Programmatic mode
-./run-benchmark.sh --engine faiss --dataset msmarco --scenario all
+# Tail API server logs
+kubectl logs -n benchmark-api -l component=api-server -f
 
-# Parallel execution
-./run-benchmark-parallel.sh --dataset msmarco
+# Tail a specific worker
+kubectl logs -n benchmark-api opensearch-benchmark-worker-jvector-0 -f
 
-# Monitor logs
-./view_logs.py
+# Shell into a worker
+kubectl exec -it -n benchmark-api opensearch-benchmark-worker-lucene-0 -- bash
 
-# Collect metrics manually
-python collect_metrics.py --namespace os-faiss --duration 300
+# Manually push updated web UI without pod restart
+kubectl cp cloud-service/web/index.html \
+  benchmark-api/<api-server-pod>:/app/web/index.html
+
+# Deploy all workers from template
+for ENGINE in jvector faiss lucene; do
+  ENGINE=$ENGINE envsubst < gke-manifest/opensearch-benchmark-worker-template.yaml \
+    | kubectl apply -n benchmark-api -f -
+done
 ```
 
-### Configuration Quick Start
-
-1. **Edit cluster.yaml** - Set cluster endpoint and enable features
-2. **Edit datasets.yaml** - Configure datasets and workloads
-3. **Run benchmark** - Execute with desired options
-4. **View results** - Open `results/TIMESTAMP/index.html`
-
-### Troubleshooting Flow
+### Troubleshooting
 
 ```
-Issue Detected
-     │
-     ├─► Check crash_error.log
-     ├─► Review telemetry-post-run/server-logs/
-     ├─► Examine telemetry-post-run/cluster-health.json
-     ├─► Query GKE metrics using query-gke-metrics.sh
-     └─► Compare pre/post telemetry states
-```
+Symptom: Job stuck in 'queued' for an engine
+  └─► kubectl get pods -n benchmark-api | grep <engine>
+      → Pod missing? Deploy it with the worker template.
+      → Pod CrashLooping? kubectl logs -n benchmark-api worker-<engine>-0
 
----
+Symptom: Cancel button returns 404
+  └─► Confirm ?engine= param is included in the cancel request
+  └─► Check that the worker pod for that engine is Running
+
+Symptom: Job shows 'running' but no progress
+  └─► kubectl exec into the worker pod
+  └─► Check ps aux for opensearch-benchmark process
+  └─► Check /workspace/locks/{engine}.lock — stale lock from crashed pod?
+      → rm /workspace/locks/{engine}.lock  (then let the queue processor retry)
+
+Symptom: Results not showing in UI after completion
+  └─► GET /api/v1/benchmark/{id}/results?engine={engine}
+  └─► Check /results/{job_id}/ on the worker PVC
+```
