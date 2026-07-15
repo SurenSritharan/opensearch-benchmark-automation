@@ -151,7 +151,7 @@ def _proxy(engine: str, path: str, method: str = 'GET', **kwargs):
     """Forward a request to a worker pod and return a Flask response."""
     url = _worker_url(engine) + path
     try:
-        resp = requests.request(method, url, timeout=30, **kwargs)
+        resp = requests.request(method, url, timeout=60, **kwargs)
         return Response(resp.content, status=resp.status_code,
                         content_type=resp.headers.get('Content-Type', 'application/json'))
     except requests.exceptions.ConnectionError:
@@ -160,15 +160,23 @@ def _proxy(engine: str, path: str, method: str = 'GET', **kwargs):
         return jsonify({'error': f'Worker for engine {engine!r} timed out'}), 504
 
 def _engine_from_job_id(job_id: str) -> Optional[str]:
-    """Ask each worker which one owns this job_id; return the engine or None."""
-    for engine in _KNOWN_ENGINES:
+    """Ask each worker in parallel which one owns this job_id; return the engine or None."""
+    result: Dict[str, Optional[str]] = {'engine': None}
+
+    def probe(engine: str) -> None:
         try:
             r = requests.get(_worker_url(engine) + f'/api/v1/benchmark/{job_id}', timeout=5)
             if r.status_code == 200:
-                return engine
+                result['engine'] = engine
         except Exception:
             pass
-    return None
+
+    threads = [threading.Thread(target=probe, args=(e,), daemon=True) for e in _KNOWN_ENGINES]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=6)
+    return result['engine']
 
 def ensure_processor_running(engine: str):
     """Ensure a queue processor is running for the given engine.
