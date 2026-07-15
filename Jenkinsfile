@@ -483,7 +483,8 @@ pipeline {
                                             SWEEP_COUNT=\$(echo "\$RESULTS_JSON" | jq '.sweeps | length')
                                             echo "  Extracting artifacts for \$SWEEP_COUNT sweep(s)..."
                                             for i in \$(seq 0 \$(( SWEEP_COUNT - 1 ))); do
-                                                SWEEP_NAME=\$(echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].sweep_name // \"sweep-\$(( i + 1 ))\"")
+                                                FALLBACK="sweep-\$(( i + 1 ))"
+                                                SWEEP_NAME=\$(echo "\$RESULTS_JSON" | jq -r --arg fb "\$FALLBACK" ".sweeps[\$i].sweep_name // \$fb")
                                                 LABEL=\$(echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].scenario_label // \"\"")
                                                 SWEEP_DIR="${RESULTS_DIR}/test-runs/${engine}/\${LABEL}/\${SWEEP_NAME}"
                                                 mkdir -p "\$SWEEP_DIR"
