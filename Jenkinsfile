@@ -241,9 +241,9 @@ pipeline {
         //    relevant dataset in config/datasets.yaml and upload the file to GCS.
         //
         //    Flow per file:
-        //      1. Jenkins downloads the file once into the workspace cache
-        //      2. Each worker pod receives the cached file via kubectl cp
-        //      3. Skip both the local download and pod copy when already present
+        //      1. Jenkins selects only the required GCS objects for this run
+        //      2. Each worker pod downloads its required file directly from GCS
+        //      3. Skip the download when the target file already exists in the pod
         stage('Seed Dataset Cache') {
             steps {
                 script {
@@ -280,24 +280,11 @@ pipeline {
 
                     echo "Files to seed: ${filesToSeed.collect { it.gcs_path }.join(', ')}"
 
-                    // For each file: download once into the workspace, then copy to workers in parallel
+                    // For each file: have each worker download directly from GCS when needed
                     filesToSeed.each { entry ->
                         def gcsPath    = entry.gcs_path
                         def targetPath = entry.target_path
                         def fileName   = gcsPath.tokenize('/').last()
-                        def datasetDir = gcsPath.tokenize('/').size() > 3 ? gcsPath.tokenize('/')[3] : 'shared'
-                        def localDir   = "seed-cache/${datasetDir}/${entry.corpus_size}"
-                        def localPath  = "${localDir}/${fileName}"
-
-                        if (!fileExists(localPath)) {
-                            echo "Downloading ${fileName} from ${gcsPath} into ${localPath}"
-                            sh "mkdir -p '${localDir}'"
-                            dir(localDir) {
-                                step([$class: 'DownloadStep', credentialsId: 'gcp-jenkins-key', bucketUri: gcsPath, localDirectory: '.'])
-                            }
-                        } else {
-                            echo "Local cache hit for ${fileName} at ${localPath} — skipping download"
-                        }
 
                         echo "Seeding ${fileName} to ${engines.size()} worker(s)..."
 
@@ -310,9 +297,9 @@ pipeline {
                                     if kubectl exec -n benchmark-api \$POD -- test -f '${targetPath}' 2>/dev/null; then
                                         echo "[${engine}] ${fileName} already present — skipping"
                                     else
-                                        echo "[${engine}] Copying ${fileName} from local cache ..."
-                                        kubectl exec -n benchmark-api \$POD -- mkdir -p '\$(dirname ${targetPath})'
-                                        kubectl cp '${localPath}' "benchmark-api/\$POD:${targetPath}"
+                                        echo "[${engine}] Downloading ${fileName} directly from GCS ..."
+                                        kubectl exec -n benchmark-api \$POD -- sh -c \
+                                            "mkdir -p \$(dirname '${targetPath}') && gcloud storage cp '${gcsPath}' '${targetPath}'"
                                         FINAL_SIZE=\$(kubectl exec -n benchmark-api \$POD -- \
                                             stat -c '%s' '${targetPath}' 2>/dev/null || echo 0)
                                         echo "[${engine}] Done — \${FINAL_SIZE} bytes"

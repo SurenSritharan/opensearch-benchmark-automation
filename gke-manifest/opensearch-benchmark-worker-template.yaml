@@ -78,7 +78,14 @@ spec:
             set -e
             echo "Installing dependencies..."
             apt-get update -y -qq
-            apt-get install -y -qq git curl wget vim libhdf5-dev gcc python3-dev jq nmon procps tini
+            apt-get install -y -qq git curl wget vim libhdf5-dev gcc python3-dev jq nmon procps tini apt-transport-https ca-certificates gnupg
+            
+            echo "Installing Google Cloud CLI..."
+            mkdir -p /etc/apt/keyrings
+            curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /etc/apt/keyrings/google-cloud-cli.gpg
+            echo "deb [signed-by=/etc/apt/keyrings/google-cloud-cli.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-cli.list
+            apt-get update -y -qq
+            apt-get install -y -qq google-cloud-cli
             
             echo "Installing Python packages..."
             pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn filelock
