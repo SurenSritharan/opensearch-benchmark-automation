@@ -55,7 +55,6 @@ Clusters are **scaled to zero** between runs to save cost and scaled back up on 
 | `CORPUS_SIZE` | `all` | `1m`, `5m`, or `all` (runs both sequentially) |
 | `DATASET` | `all` | `cohere-wiki-en-768`, `cohere-msmarco-1024`, or `all` |
 | `ENGINE_TARGET` | `all` | `os-jvector`, `os-faiss`, `os-lucene`, or `all` |
-| `API_URL` | `http://34.132.114.18` | Base URL of the benchmark cloud service API |
 | `SCALE_CLUSTERS` | `true` | Scale up clusters and workers before the run, scale down after |
 | `REDEPLOY_CLUSTERS` | `false` | Re-deploy OpenSearch clusters (applies `OPENSEARCH_VERSION`) |
 | `OPENSEARCH_VERSION` | `3.7.0` | OpenSearch version to deploy |
