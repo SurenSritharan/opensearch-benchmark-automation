@@ -682,10 +682,26 @@ EOF
     post {
         always {
             script {
+                def engines = params.ENGINE_TARGET == 'all'
+                    ? ['jvector', 'faiss', 'lucene']
+                    : [params.ENGINE_TARGET.replace('os-', '')]
+
+                // Cancel cloud service jobs first if the build was aborted,
+                // before scale-down kills the worker pods.
+                if (currentBuild.currentResult == 'ABORTED') {
+                    echo "Build aborted — cancelling any running cloud service jobs..."
+                    engines.each { engine ->
+                        sh """
+                            if [ -f job_id_${engine}.txt ]; then
+                                JOB_ID=\$(cat job_id_${engine}.txt)
+                                echo "Cancelling ${engine} job \$JOB_ID..."
+                                curl -s -X POST "${params.API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=${engine}" || true
+                            fi
+                        """
+                    }
+                }
+
                 if (params.SCALE_CLUSTERS && !params.SKIP_SCALE_DOWN) {
-                    def engines = params.ENGINE_TARGET == 'all'
-                        ? ['jvector', 'faiss', 'lucene']
-                        : [params.ENGINE_TARGET.replace('os-', '')]
 
                     // Scale down benchmark workers first
                     echo "Scaling down benchmark worker(s)..."
