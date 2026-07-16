@@ -485,8 +485,14 @@ pipeline {
                                             echo "  Extracting artifacts for \$SWEEP_COUNT sweep(s)..."
                                             for i in \$(seq 0 \$(( SWEEP_COUNT - 1 ))); do
                                                 FALLBACK="sweep-\$(( i + 1 ))"
-                                                SWEEP_NAME=\$(jq -r --arg fb "\$FALLBACK" "(.sweeps // [])[\$i].sweep_name // \$fb" "\$RESULTS_FILE")
-                                                LABEL=\$(jq -r "(.sweeps // [])[\$i].scenario_label // \"\"" "\$RESULTS_FILE")
+                                                SWEEP_NAME=\$(jq -r --argjson idx "\$i" --arg fb "\$FALLBACK" \
+                                                    '(.sweeps // [])[$idx].sweep_name // $fb' "\$RESULTS_FILE")
+                                                LABEL=\$(jq -r --argjson idx "\$i" \
+                                                    '(.sweeps // [])[$idx].scenario_label // ""' "\$RESULTS_FILE")
+                                                # Guard: use fallback dir name if label or sweep_name came back as literal "null"
+                                                [ "\$SWEEP_NAME" = "null" ] && SWEEP_NAME="\$FALLBACK"
+                                                [ "\$LABEL" = "null" ] && LABEL=""
+                                                LABEL=\${LABEL:-\$SWEEP_NAME}
                                                 SWEEP_DIR="${RESULTS_DIR}/test-runs/${engine}/\${LABEL}/\${SWEEP_NAME}"
                                                 mkdir -p "\$SWEEP_DIR"
 
