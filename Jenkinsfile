@@ -474,30 +474,31 @@ pipeline {
                                             curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${engine}" \
                                                 | jq '.' > ${RESULTS_DIR}/job-status-${engine}.json
 
-                                            RESULTS_JSON=\$(curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results?engine=${engine}")
-                                            echo "\$RESULTS_JSON" | jq '.' > ${RESULTS_DIR}/results-${engine}.json
+                                            RESULTS_FILE="${RESULTS_DIR}/results-${engine}.json"
+                                            curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results?engine=${engine}" \
+                                                | jq '.' > "\$RESULTS_FILE"
 
                                             jq '{job_id, status, scenarios_completed, scenarios_total}' \
                                                 ${RESULTS_DIR}/job-status-${engine}.json
 
-                                            SWEEP_COUNT=\$(echo "\$RESULTS_JSON" | jq '.sweeps | length')
+                                            SWEEP_COUNT=\$(jq -r '(.sweeps // []) | length' "\$RESULTS_FILE")
                                             echo "  Extracting artifacts for \$SWEEP_COUNT sweep(s)..."
                                             for i in \$(seq 0 \$(( SWEEP_COUNT - 1 ))); do
                                                 FALLBACK="sweep-\$(( i + 1 ))"
-                                                SWEEP_NAME=\$(echo "\$RESULTS_JSON" | jq -r --arg fb "\$FALLBACK" ".sweeps[\$i].sweep_name // \$fb")
-                                                LABEL=\$(echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].scenario_label // \"\"")
+                                                SWEEP_NAME=\$(jq -r --arg fb "\$FALLBACK" "(.sweeps // [])[\$i].sweep_name // \$fb" "\$RESULTS_FILE")
+                                                LABEL=\$(jq -r "(.sweeps // [])[\$i].scenario_label // \"\"" "\$RESULTS_FILE")
                                                 SWEEP_DIR="${RESULTS_DIR}/test-runs/${engine}/\${LABEL}/\${SWEEP_NAME}"
                                                 mkdir -p "\$SWEEP_DIR"
 
-                                                echo "\$RESULTS_JSON" | jq ".sweeps[\$i].test_run // {}" \
+                                                jq "(.sweeps // [])[\$i].test_run // {}" "\$RESULTS_FILE" \
                                                     > "\$SWEEP_DIR/test_run.json"
-                                                echo "\$RESULTS_JSON" | jq ".sweeps[\$i].workload_params // {}" \
+                                                jq "(.sweeps // [])[\$i].workload_params // {}" "\$RESULTS_FILE" \
                                                     > "\$SWEEP_DIR/workload-params.json"
-                                                K8S=\$(echo "\$RESULTS_JSON" | jq ".sweeps[\$i].k8s_metrics")
+                                                K8S=\$(jq "(.sweeps // [])[\$i].k8s_metrics" "\$RESULTS_FILE")
                                                 if [ "\$K8S" != "null" ]; then
                                                     echo "\$K8S" | jq '.' > "\$SWEEP_DIR/k8s_metrics.json"
                                                 fi
-                                                echo "\$RESULTS_JSON" | jq -r ".sweeps[\$i].benchmark_log // \"\"" \
+                                                jq -r "(.sweeps // [])[\$i].benchmark_log // \"\"" "\$RESULTS_FILE" \
                                                     > "\$SWEEP_DIR/benchmark.log"
 
                                                 echo "    [\$SWEEP_NAME] \${LABEL} -> \$SWEEP_DIR"

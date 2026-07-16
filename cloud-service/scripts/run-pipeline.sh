@@ -351,17 +351,19 @@ while true; do
       end ) as $label |
     ([ .scenario_status // {} | to_entries[] | select(.value == "completed") ] | length) as $done |
     ([ .scenario_status // {} | keys[] ] | length) as $total |
-    [ (.status // "unknown"), ($done|tostring), ($total|tostring), $label ] | join("|")
+    # display index: completed+1 while a scenario is actively running, else completed
+    ( if $label != "" then ($done + 1) else $done end ) as $display |
+    [ (.status // "unknown"), ($done|tostring), ($total|tostring), $label, ($display|tostring) ] | join("|")
   ')
 
-  IFS='|' read -r job_status completed total label <<< "$summary"
+  IFS='|' read -r job_status completed total label display <<< "$summary"
 
   terminal=false
   case "$job_status" in completed|failed|error|partial|cancelled) terminal=true ;; esac
 
   if [ "$completed" != "$PREV_COMPLETED" ] || [ "$job_status" != "$PREV_STATUS" ]; then
     if [ -n "$label" ]; then
-      printf "%s  %-9s  %2d/%d  (running: %s)\n" "$now" "$job_status" "$completed" "$total" "$label"
+      printf "%s  %-9s  %2d/%d  (running: %s)\n" "$now" "$job_status" "$display" "$total" "$label"
     else
       printf "%s  %-9s  %2d/%d\n" "$now" "$job_status" "$completed" "$total"
     fi
