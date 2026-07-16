@@ -464,51 +464,28 @@ pipeline {
                                     """
                                 } finally {
                                     // ── c) Fetch & save results ────────────────────────
+                                    // Copy result files directly from the worker PVC via kubectl cp.
+                                    // The worker writes all artifacts to /results/<job_id>/<engine>/<scenario>/
                                     sh """
                                         cp benchmark-run-${engine}.log ${RESULTS_DIR}/ 2>/dev/null || true
 
                                         if [ -f job_id_${engine}.txt ]; then
                                             JOB_ID=\$(cat job_id_${engine}.txt)
+                                            POD="opensearch-benchmark-worker-${engine}-0"
                                             echo "=== ${engine} (job: \$JOB_ID) ==="
 
+                                            # Job status summary
                                             curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${engine}" \
                                                 | jq '.' > ${RESULTS_DIR}/job-status-${engine}.json
-
-                                            RESULTS_FILE="${RESULTS_DIR}/results-${engine}.json"
-                                            curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID/results?engine=${engine}" \
-                                                | jq '.' > "\$RESULTS_FILE"
-
                                             jq '{job_id, status, scenarios_completed, scenarios_total}' \
                                                 ${RESULTS_DIR}/job-status-${engine}.json
 
-                                            SWEEP_COUNT=\$(jq -r '(.sweeps // []) | length' "\$RESULTS_FILE")
-                                            echo "  Extracting artifacts for \$SWEEP_COUNT sweep(s)..."
-                                            for i in \$(seq 0 \$(( SWEEP_COUNT - 1 ))); do
-                                                FALLBACK="sweep-\$(( i + 1 ))"
-                                                SWEEP_NAME=\$(jq -r --argjson idx "\$i" --arg fb "\$FALLBACK" \
-                                                    '(.sweeps // [])[\$idx].sweep_name // \$fb' "\$RESULTS_FILE")
-                                                LABEL=\$(jq -r --argjson idx "\$i" \
-                                                    '(.sweeps // [])[\$idx].scenario_label // ""' "\$RESULTS_FILE")
-                                                # Guard: use fallback dir name if label or sweep_name came back as literal "null"
-                                                [ "\$SWEEP_NAME" = "null" ] && SWEEP_NAME="\$FALLBACK"
-                                                [ "\$LABEL" = "null" ] && LABEL=""
-                                                LABEL=\${LABEL:-\$SWEEP_NAME}
-                                                SWEEP_DIR="${RESULTS_DIR}/test-runs/${engine}/\${LABEL}/\${SWEEP_NAME}"
-                                                mkdir -p "\$SWEEP_DIR"
-
-                                                jq --argjson idx "\$i" '(.sweeps // [])[$idx].test_run // {}' "\$RESULTS_FILE" \
-                                                    > "\$SWEEP_DIR/test_run.json"
-                                                jq --argjson idx "\$i" '(.sweeps // [])[$idx].workload_params // {}' "\$RESULTS_FILE" \
-                                                    > "\$SWEEP_DIR/workload-params.json"
-                                                K8S=\$(jq --argjson idx "\$i" '(.sweeps // [])[$idx].k8s_metrics' "\$RESULTS_FILE")
-                                                if [ "\$K8S" != "null" ]; then
-                                                    echo "\$K8S" | jq '.' > "\$SWEEP_DIR/k8s_metrics.json"
-                                                fi
-                                                jq -r --argjson idx "\$i" '(.sweeps // [])[$idx].benchmark_log // ""' "\$RESULTS_FILE" \
-                                                    > "\$SWEEP_DIR/benchmark.log"
-
-                                                echo "    [\$SWEEP_NAME] \${LABEL} -> \$SWEEP_DIR"
-                                            done
+                                            # Copy the results tree directly from the PVC
+                                            DEST="${RESULTS_DIR}/test-runs/${engine}"
+                                            mkdir -p "\$DEST"
+                                            kubectl cp benchmark-api/\$POD:/results/\$JOB_ID/${engine}/. "\$DEST/" 2>/dev/null \
+                                                && echo "  Copied results from \$POD:/results/\$JOB_ID/${engine}/ -> \$DEST/" \
+                                                || echo "WARNING: kubectl cp failed for ${engine} — worker pod may not be running"
 
                                             echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
                                         else
