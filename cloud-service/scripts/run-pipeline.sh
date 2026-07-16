@@ -349,7 +349,7 @@ while true; do
     ( if $cur == "" then ""
       else ( $scens[] | select( (.dataset + "-" + .label) == $cur ) | .label ) // $cur
       end ) as $label |
-    ([ .scenario_status // {} | to_entries[] | select(.value == "completed") ] | length) as $done |
+    ([ .scenario_status // {} | to_entries[] | select(.value | test("completed|failed|partial_failure|error|cancelled")) ] | length) as $done |
     ([ .scenario_status // {} | keys[] ] | length) as $total |
     # display index: completed+1 while a scenario is actively running, else completed
     ( if $label != "" then ($done + 1) else $done end ) as $display |
