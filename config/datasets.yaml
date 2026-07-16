@@ -103,10 +103,12 @@ datasets:
           warmup_time_period: 60
           time_period: 300
           hnsw_ef_search: 128
+          search_clients: 8
         parameter_sweeps:
-          - params: { search_clients: 8 }
-          - params: { search_clients: 10 }
-          - params: { search_clients: 12 }
+          - params: { }
+          - params: { oversample_factor: 5.0 }
+          - params: { oversample_factor: 8.0 }
+          - params: { oversample_factor: 12.0 }
 
         # synthetic make_blobs queries — no corpus file or ground truth, supports any scale
       - name: "vector-search-random"
@@ -210,10 +212,14 @@ datasets:
           warmup_time_period: 60
           time_period: 300
           hnsw_ef_search: 128
+          ef_search: 128
+          search_clients: 8
         parameter_sweeps:
-          - params: { search_clients: 8 }
-          - params: { search_clients: 10 }
-          - params: { search_clients: 12 }
+          - params: { }
+          - params: { oversample_factor: 5.0 }
+          - params: { oversample_factor: 8.0 }
+          - params: { oversample_factor: 12.0 }
+
 
     
 
