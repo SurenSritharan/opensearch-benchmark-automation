@@ -486,9 +486,9 @@ pipeline {
                                             for i in \$(seq 0 \$(( SWEEP_COUNT - 1 ))); do
                                                 FALLBACK="sweep-\$(( i + 1 ))"
                                                 SWEEP_NAME=\$(jq -r --argjson idx "\$i" --arg fb "\$FALLBACK" \
-                                                    '(.sweeps // [])[$idx].sweep_name // $fb' "\$RESULTS_FILE")
+                                                    '(.sweeps // [])[\$idx].sweep_name // \$fb' "\$RESULTS_FILE")
                                                 LABEL=\$(jq -r --argjson idx "\$i" \
-                                                    '(.sweeps // [])[$idx].scenario_label // ""' "\$RESULTS_FILE")
+                                                    '(.sweeps // [])[\$idx].scenario_label // ""' "\$RESULTS_FILE")
                                                 # Guard: use fallback dir name if label or sweep_name came back as literal "null"
                                                 [ "\$SWEEP_NAME" = "null" ] && SWEEP_NAME="\$FALLBACK"
                                                 [ "\$LABEL" = "null" ] && LABEL=""
@@ -590,7 +590,6 @@ pipeline {
                                         TEL_DIR="${RESULTS_DIR}/server-logs/${ns}/telemetry"
                                         mkdir -p "\$TEL_DIR"
                                         OS_HOST="opensearch-cluster.${ns}.svc.cluster.local:9200"
-                                        OS_CURL="kubectl exec -n benchmark-api opensearch-benchmark-worker-${engine}-0 -c worker -- curl -sk -u admin:admin https://\$OS_HOST"
 
                                         for ENDPOINT_FILE in \
                                             "/_cluster/health?pretty          cluster-health.json" \
@@ -604,7 +603,9 @@ pipeline {
                                         do
                                             ENDPOINT=\$(echo "\$ENDPOINT_FILE" | awk '{print \$1}')
                                             FILENAME=\$(echo "\$ENDPOINT_FILE" | awk '{print \$2}')
-                                            \$OS_CURL "\$ENDPOINT" > "\$TEL_DIR/\$FILENAME" 2>/dev/null || true
+                                            kubectl exec -n benchmark-api opensearch-benchmark-worker-${engine}-0 -c worker -- \
+                                                curl -sk -u admin:admin "https://\$OS_HOST\$ENDPOINT" \
+                                                > "\$TEL_DIR/\$FILENAME" 2>/dev/null || true
                                             echo "  telemetry: \$FILENAME"
                                         done
 
