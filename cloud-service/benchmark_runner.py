@@ -177,18 +177,22 @@ class BenchmarkRunner:
             procedure_config = None
             parameter_sweeps = []
             has_sweeps = False
-            
+
+            # Runtime sweeps supplied in the request body take precedence over
+            # datasets.yaml. Pop so they don't bleed into individual sweep params.
+            runtime_sweeps = workload_params.pop('parameter_sweeps', None) if workload_params else None
+
             for proc in procedures:
                 if isinstance(proc, dict):
                     proc_name = proc.get('name')
                     if proc_name == scenario:
                         procedure_config = proc
-                        # Found matching procedure, check for parameter sweeps
-                        sweeps = proc.get('parameter_sweeps', [])
+                        sweeps = runtime_sweeps if runtime_sweeps is not None else proc.get('parameter_sweeps', [])
                         if sweeps:
                             parameter_sweeps = sweeps
                             has_sweeps = True
-                            logger.info(f"Found {len(parameter_sweeps)} parameter sweeps for procedure '{scenario}'")
+                            source = "request" if runtime_sweeps is not None else "config"
+                            logger.info(f"Found {len(parameter_sweeps)} parameter sweeps for procedure '{scenario}' (source: {source})")
                         break
             
             # 3. Add procedure's base params (scenario-specific)
