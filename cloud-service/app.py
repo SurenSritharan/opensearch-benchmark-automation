@@ -1041,7 +1041,7 @@ def trigger_batch_benchmark():
             'queue_position': queue_position,
             'datasets': unique_datasets,
             'engine': engine,
-            'tests': [{'dataset': s['dataset'], 'scenario': s['label']} for s in scenarios],
+            'tests': [{'dataset': s['dataset'], 'label': s['label'], 'procedure': s['procedure_name']} for s in scenarios],
             'results_base': results_base,
             'status_url': f'/api/v1/benchmark/{batch_id}'
         }), 202
