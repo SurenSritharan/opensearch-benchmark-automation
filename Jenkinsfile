@@ -496,15 +496,15 @@ pipeline {
                                                 SWEEP_DIR="${RESULTS_DIR}/test-runs/${engine}/\${LABEL}/\${SWEEP_NAME}"
                                                 mkdir -p "\$SWEEP_DIR"
 
-                                                jq "(.sweeps // [])[\$i].test_run // {}" "\$RESULTS_FILE" \
+                                                jq --argjson idx "\$i" '(.sweeps // [])[$idx].test_run // {}' "\$RESULTS_FILE" \
                                                     > "\$SWEEP_DIR/test_run.json"
-                                                jq "(.sweeps // [])[\$i].workload_params // {}" "\$RESULTS_FILE" \
+                                                jq --argjson idx "\$i" '(.sweeps // [])[$idx].workload_params // {}' "\$RESULTS_FILE" \
                                                     > "\$SWEEP_DIR/workload-params.json"
-                                                K8S=\$(jq "(.sweeps // [])[\$i].k8s_metrics" "\$RESULTS_FILE")
+                                                K8S=\$(jq --argjson idx "\$i" '(.sweeps // [])[$idx].k8s_metrics' "\$RESULTS_FILE")
                                                 if [ "\$K8S" != "null" ]; then
                                                     echo "\$K8S" | jq '.' > "\$SWEEP_DIR/k8s_metrics.json"
                                                 fi
-                                                jq -r "(.sweeps // [])[\$i].benchmark_log // \"\"" "\$RESULTS_FILE" \
+                                                jq -r --argjson idx "\$i" '(.sweeps // [])[$idx].benchmark_log // ""' "\$RESULTS_FILE" \
                                                     > "\$SWEEP_DIR/benchmark.log"
 
                                                 echo "    [\$SWEEP_NAME] \${LABEL} -> \$SWEEP_DIR"
