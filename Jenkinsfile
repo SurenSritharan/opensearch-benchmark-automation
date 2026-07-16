@@ -696,6 +696,18 @@ EOF
                                 JOB_ID=\$(cat job_id_${engine}.txt)
                                 echo "Cancelling ${engine} job \$JOB_ID..."
                                 curl -s -X POST "${params.API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=${engine}" || true
+
+                                # Poll until the job reaches a terminal status (max 60s)
+                                echo "Waiting for ${engine} job \$JOB_ID to stop..."
+                                for attempt in \$(seq 1 12); do
+                                    STATUS=\$(curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${engine}" \
+                                        | jq -r '.status // "unknown"')
+                                    echo "  [${engine}] status: \$STATUS"
+                                    case "\$STATUS" in
+                                        completed|failed|partial|cancelled|error) break ;;
+                                    esac
+                                    sleep 5
+                                done
                             fi
                         """
                     }
