@@ -209,7 +209,7 @@ while true; do
       else ( $scens[] | select( (.dataset + "-" + .label) == $cur ) | .label ) // $cur
       end ) as $label |
     ([ .scenario_status // {} | to_entries[] | select(.value | test("completed|failed|partial_failure|error|cancelled")) ] | length) as $done |
-    ([ .scenario_status // {} | keys[] ] | length) as $total |
+    ([ .scenarios // [] | .[] ] | length) as $total |
     ( if $label != "" then ($done + 1) else $done end ) as $display |
     [ (.status // "unknown"), ($done|tostring), ($total|tostring), $label, ($display|tostring) ] | join("|")
   ')

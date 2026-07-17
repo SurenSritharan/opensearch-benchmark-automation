@@ -108,48 +108,13 @@ pipeline {
             }
         }
 
-        // ── 2. Re-deploy OpenSearch clusters (optional) ────────────────────────
-        // Triggered by REDEPLOY_CLUSTERS param OR "redeploy": true in the pipeline file.
-        stage('Re-deploy Clusters') {
+        // ── 2. Prepare Workers ─────────────────────────────────────────────────
+        //    Brings the API server and benchmark workers up before seeding and
+        //    benchmarking. OpenSearch cluster scale-up/deploy happens per-engine
+        //    inside the Per-Engine stage so each engine starts independently.
+        stage('Prepare Workers') {
             when {
-                expression {
-                    def pipeline = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
-                    def pipelineJson = readJSON file: "pipelines/${pipeline}.json"
-                    return params.REDEPLOY_CLUSTERS || pipelineJson.redeploy == true
-                }
-            }
-            steps {
-                script {
-                    def pipeline     = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
-                    def pipelineJson = readJSON file: "pipelines/${pipeline}.json"
-                    def nodeSize     = pipelineJson.node_size ?: 'small'
-
-                    def extraArgs = "--version ${params.OPENSEARCH_VERSION} --node-size ${nodeSize} --force"
-                    if (params.DELETE_PVCS) { extraArgs += " --delete-pvcs" }
-
-                    if (params.ENGINE_TARGET == 'all') {
-                        echo "Re-deploying all OpenSearch clusters (version ${params.OPENSEARCH_VERSION}, size ${nodeSize})..."
-                        sh "gke-manifest/deploy-all-clusters.sh ${extraArgs}"
-                    } else {
-                        echo "Re-deploying ${params.ENGINE_TARGET} (version ${params.OPENSEARCH_VERSION}, size ${nodeSize})..."
-                        sh "gke-manifest/deploy-namespace-cluster.sh ${params.ENGINE_TARGET} ${extraArgs}"
-                    }
-                }
-            }
-        }
-
-        // ── 3. Scale up OpenSearch clusters + benchmark workers ────────────────
-        //    Each engine (jvector/faiss/lucene) has:
-        //      - An OpenSearch cluster in its own namespace (os-<engine>)
-        //      - A dedicated benchmark worker pod in the benchmark-api namespace
-        //    The shared API server (benchmark-api/opensearch-benchmark-api-server)
-        //    is always scaled up alongside whichever workers are needed.
-        //    All readiness waits run in parallel so cluster pod startup doesn't
-        //    block worker pod startup and vice versa.
-        stage('Scale Up') {
-            when {
-                // Re-deploy already starts the pods, so skip pure scale-up in that case
-                expression { params.SCALE_CLUSTERS && !params.REDEPLOY_CLUSTERS }
+                expression { params.SCALE_CLUSTERS }
             }
             steps {
                 script {
@@ -157,125 +122,7 @@ pipeline {
                         ? ['jvector', 'faiss', 'lucene']
                         : [params.ENGINE_TARGET.replace('os-', '')]
 
-                    def pipeline     = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
-                    def pipelineJson = readJSON file: "pipelines/${pipeline}.json"
-                    def nodeSize     = pipelineJson.node_size ?: 'small'
-
-                    // Each branch scales up (or deploys) its component then waits for it to be
-                    // ready — all branches run fully in parallel so no component blocks another.
                     def waitBranches = [:]
-
-                    engines.each { engine ->
-                        def ns = "os-${engine}"
-                        waitBranches["opensearch-cluster-${engine}"] = {
-                            sh """
-                                STS_COUNT=\$(kubectl get statefulset -n ${ns} --no-headers 2>/dev/null | wc -l)
-                                if [ "\$STS_COUNT" -gt 0 ]; then
-                                    echo "Scaling up existing cluster in ${ns}..."
-                                    gke-manifest/scale-up-clusters.sh ${ns}
-                                else
-                                    echo "No StatefulSets found in ${ns} — running initial deploy (version ${params.OPENSEARCH_VERSION}, size ${nodeSize})..."
-                                    gke-manifest/deploy-namespace-cluster.sh ${ns} \
-                                        --version ${params.OPENSEARCH_VERSION} --node-size ${nodeSize} --force
-                                fi
-
-                                # Wait for manager pod to be Ready (fast — single pod, no shard recovery)
-                                kubectl rollout status statefulset/opensearch-cluster-manager \
-                                    -n ${ns} --timeout=300s
-
-                                # Wait for data pods to be Running (not Ready — readiness probe fails
-                                # while cluster is red during shard recovery, which is expected).
-                                # Uses a stall detector: fails only if the running count hasn't
-                                # increased for 5 minutes, so slow node provisioning doesn't time out
-                                # as long as GKE is making progress.
-                                echo "Waiting for opensearch-data pods to be Running in ${ns}..."
-                                RUNNING=0
-                                LAST_PROGRESS=\$SECONDS
-                                STALL_LIMIT=300
-                                while true; do
-                                    NEW_RUNNING=\$(kubectl get pods -n ${ns} -l app=opensearch-data \
-                                        --field-selector=status.phase=Running \
-                                        --no-headers 2>/dev/null | wc -l)
-                                    TOTAL=\$(kubectl get pods -n ${ns} -l app=opensearch-data \
-                                        --no-headers 2>/dev/null | wc -l)
-                                    echo "  [${ns}] data pods Running: \${NEW_RUNNING}/\${TOTAL}"
-                                    if [ "\$NEW_RUNNING" -ge 3 ] && [ "\$TOTAL" -ge 3 ]; then
-                                        echo "  ✅ [${ns}] all data pods Running"
-                                        RUNNING=\$NEW_RUNNING
-                                        break
-                                    fi
-                                    if [ "\$NEW_RUNNING" -gt "\$RUNNING" ]; then
-                                        RUNNING=\$NEW_RUNNING
-                                        LAST_PROGRESS=\$SECONDS
-                                    fi
-                                    STALLED=\$((SECONDS - LAST_PROGRESS))
-                                    if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
-                                        echo "❌ [${ns}] data pods stalled at \${RUNNING}/3 Running for \${STALL_LIMIT}s — giving up"
-                                        exit 1
-                                    fi
-                                    sleep 10
-                                done
-
-                                # Wait for cluster to reach green/yellow (shard recovery from PVCs).
-                                # Stall detector: sums bytes_percent + translog_ops_percent across all
-                                # recovering shards; fails only if that total hasn't increased in 5 min.
-                                echo "Waiting for ${ns} cluster health (shard recovery in progress)..."
-                                STATUS=""
-                                LAST_PROGRESS_SCORE="0.0"
-                                LAST_PROGRESS=\$SECONDS
-                                STALL_LIMIT=600
-                                while true; do
-                                    HEALTH=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
-                                        curl -sk -u admin:admin \
-                                        'https://localhost:9200/_cluster/health' 2>/dev/null || true)
-                                    STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || true)
-                                    INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 0)
-
-                                    if [ "\$STATUS" = "green" ] && [ "\${INIT:-1}" = "0" ]; then
-                                        echo "  ✅ [${ns}] cluster green — ready"
-                                        break
-                                    elif [ "\$STATUS" = "yellow" ] || [ "\$STATUS" = "green" ]; then
-                                        echo "  [${ns}] cluster \${STATUS} but \${INIT} shards still initializing — waiting..."
-                                    fi
-
-                                    RECOVERY=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
-                                        curl -sk -u admin:admin \
-                                        'https://localhost:9200/_cat/recovery?h=index,shard,stage,bytes_percent,translog_ops_percent&active_only=true' \
-                                        2>/dev/null || true)
-                                    if [ -n "\$RECOVERY" ]; then
-                                        echo "  [${ns}] status=\${STATUS:-unknown}  initializing=\${INIT}"
-                                        echo "\$RECOVERY" | while read line; do echo "    \$line"; done
-                                        # Sum percentage columns as a progress score (1 decimal place)
-                                        SCORE=\$(echo "\$RECOVERY" | awk '{sum += \$4 + \$5} END {printf "%.1f", sum}')
-                                        # Max possible score = 200.0 * number of recovering shards
-                                        MAX_SCORE=\$(echo "\$RECOVERY" | awk 'END {printf "%.1f", NR * 200}')
-                                    else
-                                        echo "  [${ns}] status=\${STATUS:-unknown}  initializing=\${INIT}"
-                                        SCORE=0
-                                        MAX_SCORE=0
-                                    fi
-
-                                    if [ "\$(echo "\$SCORE \$LAST_PROGRESS_SCORE" | awk '{print (\$1 > \$2)}')" = "1" ]; then
-                                        LAST_PROGRESS_SCORE=\$SCORE
-                                        LAST_PROGRESS=\$SECONDS
-                                    fi
-                                    # Don't stall-check when all shards are at 100% — they're in
-                                    # final commit/cluster-state handoff, which can take a few minutes.
-                                    if [ "\$(echo "\$MAX_SCORE" | awk '{print (\$1 > 0)}')" = "1" ] && \
-                                       [ "\$(echo "\$SCORE \$MAX_SCORE" | awk '{print (\$1 >= \$2)}')" = "1" ]; then
-                                        sleep 10
-                                        continue
-                                    fi
-                                    STALLED=\$((SECONDS - LAST_PROGRESS))
-                                    if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
-                                        echo "❌ [${ns}] shard recovery stalled (score=\${LAST_PROGRESS_SCORE}) for \${STALL_LIMIT}s — giving up"
-                                        exit 1
-                                    fi
-                                    sleep 10
-                                done
-                            """
-                        }
-                    }
 
                     waitBranches['benchmark-api-server'] = {
                         sh '''
@@ -455,31 +302,20 @@ pipeline {
 
                     sh "mkdir -p ${RESULTS_DIR}"
 
-                    def firstRun = true
+                    def redeploy = params.REDEPLOY_CLUSTERS || pipelineJson.redeploy == true
+                    def nodeSize = pipelineJson.node_size ?: 'small'
+                    def extraArgs = "--version ${params.OPENSEARCH_VERSION} --node-size ${nodeSize} --force"
+                    if (params.DELETE_PVCS) { extraArgs += " --delete-pvcs" }
+
                     runs.each { run ->
                         def version  = run.version
                         def nodeSize = run.nodeSize
                         def runKey   = "${version}/${nodeSize}"
 
-                        // Always redeploy between runs (cluster config changes each time).
-                        // Skip only on the very first run if Re-deploy Clusters already ran
-                        // with matching version+size.
-                        def alreadyDeployed = firstRun && (params.REDEPLOY_CLUSTERS || pipelineJson.redeploy) \
-                                              && !pipelineJson.versions && !pipelineJson.node_sizes
-                        firstRun = false
-
-                        if (!alreadyDeployed) {
-                            echo "════════════════════════════════════════"
-                            echo "Deploying OpenSearch ${version} (size ${nodeSize})"
-                            echo "════════════════════════════════════════"
-                            def extraArgs = "--version ${version} --node-size ${nodeSize} --force"
-                            if (params.DELETE_PVCS) { extraArgs += " --delete-pvcs" }
-                            if (params.ENGINE_TARGET == 'all') {
-                                sh "gke-manifest/deploy-all-clusters.sh ${extraArgs}"
-                            } else {
-                                sh "gke-manifest/deploy-namespace-cluster.sh ${params.ENGINE_TARGET} ${extraArgs}"
-                            }
-                        }
+                        // For multi-version/size pipelines each run needs a fresh deploy
+                        def multiRun = pipelineJson.versions || pipelineJson.node_sizes
+                        def runExtraArgs = "--version ${version} --node-size ${nodeSize} --force"
+                        if (params.DELETE_PVCS) { runExtraArgs += " --delete-pvcs" }
 
                         echo "════════════════════════════════════════"
                         echo "Benchmarking OpenSearch ${version} / ${nodeSize}"
@@ -490,27 +326,101 @@ pipeline {
                             [(engine): {
                                 catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                                     try {
-                                        // ── a) Wait for cluster health green/yellow (max 10 min) ──
-                                        sh """
-                                            echo "Waiting for [${ns}] cluster to be green/yellow with no initializing shards..."
-                                            for attempt in \$(seq 1 60); do
-                                                HEALTH=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
-                                                    curl -sk -u admin:admin \
-                                                    'https://localhost:9200/_cluster/health' 2>/dev/null || true)
-                                                STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || true)
-                                                INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 1)
-                                                echo "  [${ns}] attempt \${attempt}/60: status=\${STATUS:-unknown} initializing=\${INIT}"
-                                                if [ "\$STATUS" = "green" ] && [ "\$INIT" = "0" ]; then
-                                                    echo "✓ [${ns}] cluster is green with no initializing shards — ready"
-                                                    break
+                                        // ── a) Scale up or deploy this engine's cluster ────
+                                        if (params.SCALE_CLUSTERS) {
+                                            sh """
+                                                if [ "${multiRun}" = "true" ] || [ "${redeploy}" = "true" ]; then
+                                                    echo "Deploying ${ns} (version ${version}, size ${nodeSize})..."
+                                                    gke-manifest/deploy-namespace-cluster.sh ${ns} ${runExtraArgs}
+                                                else
+                                                    STS_COUNT=\$(kubectl get statefulset -n ${ns} --no-headers 2>/dev/null | wc -l)
+                                                    if [ "\$STS_COUNT" -gt 0 ]; then
+                                                        echo "Scaling up existing cluster in ${ns}..."
+                                                        gke-manifest/scale-up-clusters.sh ${ns}
+                                                    else
+                                                        echo "No StatefulSets in ${ns} — running initial deploy..."
+                                                        gke-manifest/deploy-namespace-cluster.sh ${ns} ${extraArgs}
+                                                    fi
                                                 fi
-                                                if [ "\$attempt" -eq 60 ]; then
-                                                    echo "❌ [${ns}] cluster did not become ready after 10 minutes"
-                                                    exit 1
-                                                fi
-                                                sleep 10
-                                            done
-                                        """
+
+                                                # Wait for manager pod
+                                                kubectl rollout status statefulset/opensearch-cluster-manager \
+                                                    -n ${ns} --timeout=300s
+
+                                                # Wait for all data pods to be Running
+                                                echo "Waiting for opensearch-data pods to be Running in ${ns}..."
+                                                RUNNING=0
+                                                LAST_PROGRESS=\$SECONDS
+                                                STALL_LIMIT=300
+                                                while true; do
+                                                    NEW_RUNNING=\$(kubectl get pods -n ${ns} -l app=opensearch-data \
+                                                        --field-selector=status.phase=Running \
+                                                        --no-headers 2>/dev/null | wc -l)
+                                                    TOTAL=\$(kubectl get pods -n ${ns} -l app=opensearch-data \
+                                                        --no-headers 2>/dev/null | wc -l)
+                                                    echo "  [${ns}] data pods Running: \${NEW_RUNNING}/\${TOTAL}"
+                                                    if [ "\$NEW_RUNNING" -ge 3 ] && [ "\$TOTAL" -ge 3 ]; then
+                                                        echo "  ✅ [${ns}] all data pods Running"
+                                                        break
+                                                    fi
+                                                    if [ "\$NEW_RUNNING" -gt "\$RUNNING" ]; then
+                                                        RUNNING=\$NEW_RUNNING
+                                                        LAST_PROGRESS=\$SECONDS
+                                                    fi
+                                                    STALLED=\$((SECONDS - LAST_PROGRESS))
+                                                    if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
+                                                        echo "❌ [${ns}] data pods stalled at \${RUNNING}/3 for \${STALL_LIMIT}s — giving up"
+                                                        exit 1
+                                                    fi
+                                                    sleep 10
+                                                done
+
+                                                # Wait for cluster to reach green with no initializing shards
+                                                echo "Waiting for ${ns} cluster health..."
+                                                LAST_PROGRESS_SCORE="0.0"
+                                                LAST_PROGRESS=\$SECONDS
+                                                STALL_LIMIT=600
+                                                while true; do
+                                                    HEALTH=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                                        curl -sk -u admin:admin \
+                                                        'https://localhost:9200/_cluster/health' 2>/dev/null || true)
+                                                    STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || true)
+                                                    INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 0)
+                                                    if [ "\$STATUS" = "green" ] && [ "\${INIT:-1}" = "0" ]; then
+                                                        echo "  ✅ [${ns}] cluster green — ready"
+                                                        break
+                                                    elif [ "\$STATUS" = "yellow" ] || [ "\$STATUS" = "green" ]; then
+                                                        echo "  [${ns}] cluster \${STATUS} but \${INIT} shards initializing — waiting..."
+                                                    fi
+                                                    RECOVERY=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                                        curl -sk -u admin:admin \
+                                                        'https://localhost:9200/_cat/recovery?h=index,shard,stage,bytes_percent,translog_ops_percent&active_only=true' \
+                                                        2>/dev/null || true)
+                                                    if [ -n "\$RECOVERY" ]; then
+                                                        echo "  [${ns}] status=\${STATUS:-unknown} initializing=\${INIT}"
+                                                        echo "\$RECOVERY" | while read line; do echo "    \$line"; done
+                                                        SCORE=\$(echo "\$RECOVERY" | awk '{sum += \$4 + \$5} END {printf "%.1f", sum}')
+                                                        MAX_SCORE=\$(echo "\$RECOVERY" | awk 'END {printf "%.1f", NR * 200}')
+                                                    else
+                                                        echo "  [${ns}] status=\${STATUS:-unknown} initializing=\${INIT}"
+                                                        SCORE=0; MAX_SCORE=0
+                                                    fi
+                                                    if [ "\$(echo "\$SCORE \$LAST_PROGRESS_SCORE" | awk '{print (\$1 > \$2)}')" = "1" ]; then
+                                                        LAST_PROGRESS_SCORE=\$SCORE; LAST_PROGRESS=\$SECONDS
+                                                    fi
+                                                    if [ "\$(echo "\$MAX_SCORE" | awk '{print (\$1 > 0)}')" = "1" ] && \
+                                                       [ "\$(echo "\$SCORE \$MAX_SCORE" | awk '{print (\$1 >= \$2)}')" = "1" ]; then
+                                                        sleep 10; continue
+                                                    fi
+                                                    STALLED=\$((SECONDS - LAST_PROGRESS))
+                                                    if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
+                                                        echo "❌ [${ns}] shard recovery stalled for \${STALL_LIMIT}s — giving up"
+                                                        exit 1
+                                                    fi
+                                                    sleep 10
+                                                done
+                                            """
+                                        }
 
                                         // ── b) Run benchmark ───────────────────────────────
                                         sh """
