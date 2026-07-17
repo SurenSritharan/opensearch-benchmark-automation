@@ -231,13 +231,11 @@ pipeline {
                                     STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || true)
                                     INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 0)
 
-                                    if [ "\$STATUS" = "green" ] || [ "\$STATUS" = "yellow" ]; then
-                                        if [ "\${INIT:-1}" = "0" ]; then
-                                            echo "  ✅ [${ns}] cluster \${STATUS} — ready"
-                                            break
-                                        else
-                                            echo "  [${ns}] cluster \${STATUS} but \${INIT} shards still initializing — waiting..."
-                                        fi
+                                    if [ "\$STATUS" = "green" ] && [ "\${INIT:-1}" = "0" ]; then
+                                        echo "  ✅ [${ns}] cluster green — ready"
+                                        break
+                                    elif [ "\$STATUS" = "yellow" ] || [ "\$STATUS" = "green" ]; then
+                                        echo "  [${ns}] cluster \${STATUS} but \${INIT} shards still initializing — waiting..."
                                     fi
 
                                     RECOVERY=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
@@ -502,8 +500,8 @@ pipeline {
                                                 STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || true)
                                                 INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 1)
                                                 echo "  [${ns}] attempt \${attempt}/60: status=\${STATUS:-unknown} initializing=\${INIT}"
-                                                if { [ "\$STATUS" = "green" ] || [ "\$STATUS" = "yellow" ]; } && [ "\$INIT" = "0" ]; then
-                                                    echo "✓ [${ns}] cluster is \$STATUS with no initializing shards — ready"
+                                                if [ "\$STATUS" = "green" ] && [ "\$INIT" = "0" ]; then
+                                                    echo "✓ [${ns}] cluster is green with no initializing shards — ready"
                                                     break
                                                 fi
                                                 if [ "\$attempt" -eq 60 ]; then
