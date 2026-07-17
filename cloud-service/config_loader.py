@@ -305,7 +305,18 @@ class ConfigLoader:
             
             base_url = dataset_config.get('base_url', '')
             corpus_size = dataset_config.get('corpus_size', '1m')
-            
+
+            # Resolve query_k with the same fallback used in _resolve_template_vars:
+            # if the exact k has no ground truth file, use the smallest supported k >= query_k.
+            query_k_raw = params.get('query_k', params.get('k', 100))
+            supported_k_values = dataset_config.get('supported_k_values', [100])
+            if query_k_raw in supported_k_values:
+                gt_k = query_k_raw
+            else:
+                gt_k = next((k for k in sorted(supported_k_values) if k >= query_k_raw), query_k_raw)
+                if gt_k != query_k_raw:
+                    logger.info(f"No ground truth file for k={query_k_raw}; using k={gt_k} file for download")
+
             if 'data_files' in dataset_config:
                 resolved_files = []
                 for file_info in dataset_config['data_files']:
@@ -314,7 +325,7 @@ class ConfigLoader:
                         if isinstance(value, str):
                             value = value.replace('{{base_url}}', base_url)
                             value = value.replace('{{corpus_size}}', corpus_size)
-                            value = value.replace('{{query_k}}', str(params.get('query_k', params.get('k', 100))))
+                            value = value.replace('{{query_k}}', str(gt_k))
                         resolved_file[key] = value
                     resolved_files.append(resolved_file)
                 
@@ -509,6 +520,16 @@ class ConfigLoader:
         supported_k_values = dataset_config.get('supported_k_values', [100])
         if query_k_value not in supported_k_values:
             logger.warning(f"query_k={query_k_value} not in supported_k_values {supported_k_values}. Ground truth may not be available.")
+
+        # Determine the ground truth k to use for file resolution.
+        # If the exact k isn't in supported_k_values, use the smallest supported k >= query_k
+        # so the file actually exists on disk (e.g. k=64 → use k=100 file, slice to 64).
+        gt_k_value = query_k_value
+        if query_k_value not in supported_k_values:
+            fallback = next((k for k in sorted(supported_k_values) if k >= query_k_value), None)
+            if fallback is not None:
+                gt_k_value = fallback
+                logger.info(f"No ground truth file for k={query_k_value}; using k={gt_k_value} file (will be sliced to {query_k_value})")
         
         template_vars = {
             'corpus_size': corpus_size,
@@ -516,7 +537,7 @@ class ConfigLoader:
             'num_vectors': num_vectors,
             'source_file': source_file,
             'base_url': base_url,
-            'query_k': query_k_value
+            'query_k': gt_k_value
         }
         
         def resolve_value(value: Any) -> Any:

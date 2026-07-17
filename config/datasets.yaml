@@ -141,8 +141,8 @@ datasets:
       "90m", "100m", "125m", "128m"
     ]
     
-    # Supported k values for ground truth
-    supported_k_values: [10, 100]  # k=100 ground truth available for all supported sizes
+    # Supported k values for ground truth (i.e. files that actually exist on S3)
+    supported_k_values: [10, 100]
     
     # Common parameters shared across all scenarios
     common_params:
