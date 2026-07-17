@@ -1,0 +1,34 @@
+{
+  "description": "Search the msmarco 1M HQ JVector index, sweeping ef_search (128/256/512)",
+  "engine": "__ENGINE__",
+  "params": {
+    "corpus_size": "1m",
+    "target_index_name": "cohere-msmarco-1024-1m-hq"
+  },
+  "steps": [
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "vector-search",
+      "params": {
+        "query_k": 100,
+        "parameter_sweeps": [
+          { "params": { "hnsw_ef_search": 128 } },
+          { "params": { "hnsw_ef_search": 256 } },
+          { "params": { "hnsw_ef_search": 512 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "vector-search",
+      "params": {
+        "query_k": 10,
+        "parameter_sweeps": [
+          { "params": { "hnsw_ef_search": 128 } },
+          { "params": { "hnsw_ef_search": 256 } },
+          { "params": { "hnsw_ef_search": 512 } }
+        ]
+      }
+    }
+  ]
+}

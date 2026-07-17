@@ -13,18 +13,22 @@ pipeline {
     parameters {
         choice(
             name: 'PIPELINE',
-            choices: ['complete', 'search-only'],
-            description: '"complete" runs create-index → bulk-ingest → refresh → force-merge → search for every selected engine. "search-only" runs search sweeps only (indexes must already exist).'
+            choices: [
+                'search-all',
+                'search-1m',
+                'search-5m',
+                'complete-1m',
+                'complete-5m',
+                'msmarco-jvector-hq-build',
+                'msmarco-jvector-hq-full',
+                'msmarco-jvector-hq-search',
+            ],
+            description: 'Pipeline to run. Corresponds to a file in the pipelines/ directory.'
         )
-        choice(
-            name: 'CORPUS_SIZE',
-            choices: ['all', '1m', '5m'],
-            description: 'Vector corpus size to benchmark. "all" runs 1m then 5m in a single job per engine.'
-        )
-        choice(
-            name: 'DATASET',
-            choices: ['all', 'cohere-wiki-en-768', 'cohere-msmarco-1024'],
-            description: 'Dataset to benchmark. "all" runs both datasets sequentially within each engine job.'
+        string(
+            name: 'PIPELINE_OVERRIDE',
+            defaultValue: '',
+            description: 'Optional: name of a custom pipeline in the pipelines/ directory (overrides the choice above). Must exist as pipelines/<name>.json.'
         )
         string(
             name: 'API_URL',
@@ -340,13 +344,13 @@ pipeline {
                         ? ['jvector', 'faiss', 'lucene']
                         : [params.ENGINE_TARGET.replace('os-', '')]
 
-                    def corpusSizes = params.CORPUS_SIZE == 'all'
-                        ? ['1m', '5m']
-                        : [params.CORPUS_SIZE]
-
-                    def datasets = params.DATASET == 'all'
-                        ? ['cohere-wiki-en-768', 'cohere-msmarco-1024']
-                        : [params.DATASET]
+                    def pipeline      = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
+                    // Derive datasets + corpus sizes directly from the pipeline.
+                    // steps[].dataset gives dataset names; params.corpus_size gives the size.
+                    def pipelineJson  = readJSON file: "pipelines/${pipeline}.json"
+                    def corpusSizeVal = pipelineJson.params?.corpus_size
+                    def corpusSizes   = corpusSizeVal ? [corpusSizeVal] : ['1m', '5m']
+                    def datasets      = (pipelineJson.steps ?: []).collect { it.dataset }.unique()
 
                     // Parse datasets.yaml to find all gcs_cache_files entries that
                     // match the selected datasets and corpus sizes.
@@ -363,7 +367,7 @@ pipeline {
                     }
 
                     if (filesToSeed.isEmpty()) {
-                        echo "No GCS cache files required for dataset=${params.DATASET} corpus=${params.CORPUS_SIZE} — skipping"
+                        echo "No GCS cache files required for ${pipeline} — skipping"
                         return
                     }
 
@@ -416,9 +420,6 @@ pipeline {
                         ? ['jvector', 'faiss', 'lucene']
                         : [params.ENGINE_TARGET.replace('os-', '')]
 
-                    def datasetEnv = params.DATASET == 'all' ? 'DATASET=' : "DATASET=${params.DATASET}"
-                    def corpusSize = params.CORPUS_SIZE
-
                     sh "mkdir -p ${RESULTS_DIR}"
 
                     def engineBranches = engines.collectEntries { engine ->
@@ -444,13 +445,10 @@ pipeline {
                                     // ── b) Run benchmark ───────────────────────────────
                                     sh """
                                         set +e
-                                        ${datasetEnv} \
                                         API_URL=${params.API_URL} \
-                                        TIME_PERIOD=300 \
                                         cloud-service/scripts/run-pipeline.sh \
-                                            ${params.PIPELINE} \
+                                            --pipeline ${params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE} \
                                             ${engine} \
-                                            ${corpusSize} \
                                             2>&1 | tee benchmark-run-${engine}.log
                                         PIPE_RC=\${PIPESTATUS[0]}
 
@@ -619,10 +617,8 @@ Build URL: ${BUILD_URL}
 Date:      \$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
 Parameters:
-  Pipeline:           ${params.PIPELINE}
+  Pipeline:           ${params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE}
   Engine Target:      ${params.ENGINE_TARGET}
-  Dataset:            ${params.DATASET}
-  Corpus Size:        ${params.CORPUS_SIZE}
   API URL:            ${params.API_URL}
   Scale Clusters:     ${params.SCALE_CLUSTERS}
   Redeploy Clusters:  ${params.REDEPLOY_CLUSTERS}

@@ -1,0 +1,21 @@
+{
+  "description": "Full run — wiki + msmarco at 1M (create, ingest, merge, search k=100 + k=10)",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "steps": [
+    { "dataset": "cohere-wiki-en-768",  "scenario": "create-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "force-merge" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",   "params": { "query_k": 100 } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",   "params": { "query_k": 10 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "create-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data","params": { "target_index_bulk_size": 5000 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",   "params": { "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",   "params": { "query_k": 10,  "hnsw_ef_search": 256 } }
+  ]
+}

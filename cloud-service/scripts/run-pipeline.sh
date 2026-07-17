@@ -1,304 +1,165 @@
 #!/bin/bash
-# Generic pipeline runner — builds and submits a batch job to the cloud service API.
+# OpenSearch Benchmark pipeline runner — submits a batch job to the cloud service API.
 #
 # Usage:
-#   run-pipeline.sh <pipeline> <engine> [<corpus_size>]
+#   run-pipeline.sh --pipeline <name> <engine>
 #
 # Arguments:
-#   pipeline     One of: complete, search-only
-#                  complete   — create-index → bulk-ingest → refresh → force-merge → search k=100 → search k=10
-#                  search-only — vector-search k=100 and k=10 only (indexes must exist)
-#   engine       One of: jvector, faiss, lucene
-#   corpus_size  One of: 1m, 5m (default: 1m)
-#                Pass "all" to run 1m and 5m sequentially in one job.
+#   --pipeline  Name of a pipeline under the pipelines/ directory (without .json extension).
+#               E.g. "complete-1m" resolves to pipelines/complete-1m.json.
+#               The pipeline lists scenario steps in order; __ENGINE__ is replaced with
+#               the engine argument before parsing.
+#   engine      One of: jvector, faiss, lucene
+#
+# Pipeline-level params (under top-level "params" key) are merged into every step.
+# Step-level params override pipeline-level params, which override scenario defaults.
+#
+# Corpus-size derived values computed automatically from "corpus_size" in params:
+#   target_index_name  →  <dataset>-<corpus_size>    (e.g. cohere-msmarco-1024-1m)
+#   num_vectors        →  numeric value (1m=1000000, 5m=5000000, etc.)
+#   label              →  <dataset-short>-<corpus_size>-<scenario>[-k<N>]
 #
 # Environment variables:
-#   API_URL      Base URL of the benchmark cloud service (default: http://34.132.114.18)
-#   DATASET      Dataset name: cohere-wiki-en-768 or cohere-msmarco-1024
-#                If not set, both datasets are run sequentially.
-#   TIME_PERIOD  Search time period in seconds per sweep (default: 300)
+#   API_URL   Base URL of the benchmark cloud service (default: http://34.132.114.18)
 #
 # Examples:
-#   ENGINE=jvector DATASET=cohere-wiki-en-768 ./run-pipeline.sh complete jvector 1m
-#   API_URL=http://1.2.3.4 ./run-pipeline.sh search-only faiss 5m
-#   ./run-pipeline.sh complete jvector all   # runs 1m then 5m in one job
+#   ./cloud-service/scripts/run-pipeline.sh --pipeline complete-1m jvector
+#   API_URL=http://1.2.3.4 ./cloud-service/scripts/run-pipeline.sh --pipeline msmarco-jvector-hq-build jvector
 
 set -euo pipefail
 
-# ── Arguments ─────────────────────────────────────────────────────────────────
-PIPELINE="${1:-complete}"
-ENGINE="${2:?Usage: $0 <pipeline> <engine> [<corpus_size>]}"
-CORPUS_ARG="${3:-1m}"
+# ── Parse arguments ────────────────────────────────────────────────────────────
+PIPELINE_FILE=""
+if [ "${1:-}" = "--pipeline" ]; then
+  PIPELINE_FILE="pipelines/${2:?--pipeline requires a name argument}.json"
+  shift 2
+fi
 
+ENGINE="${1:?Usage: $0 --pipeline <name> <engine>}"
 API_URL="${API_URL:-http://34.132.114.18}"
-TIME_PERIOD="${TIME_PERIOD:-300}"
 
 # ── Validate ───────────────────────────────────────────────────────────────────
-case "$PIPELINE" in
-  complete|search-only) ;;
-  *) echo "ERROR: pipeline must be 'complete' or 'search-only' (got: $PIPELINE)"; exit 1 ;;
-esac
-
 case "$ENGINE" in
   jvector|faiss|lucene) ;;
   *) echo "ERROR: engine must be jvector, faiss, or lucene (got: $ENGINE)"; exit 1 ;;
 esac
 
-# Resolve corpus sizes list
-if [ "$CORPUS_ARG" = "all" ]; then
-  CORPUS_SIZES="1m 5m"
-else
-  CORPUS_SIZES="$CORPUS_ARG"
+if [ -z "$PIPELINE_FILE" ]; then
+  echo "ERROR: --pipeline is required"
+  exit 1
 fi
 
-# Resolve datasets list — treat unset, empty, or "all" as "run both"
-if [ -z "${DATASET:-}" ] || [ "${DATASET:-}" = "all" ]; then
-  DATASETS="cohere-wiki-en-768 cohere-msmarco-1024"
-else
-  DATASETS="$DATASET"
+if [ ! -f "$PIPELINE_FILE" ]; then
+  echo "ERROR: pipeline not found: $PIPELINE_FILE"
+  exit 1
 fi
 
-# ── Engine-specific index config helpers ───────────────────────────────────────
-# Returns extra JSON fields (no leading/trailing comma) for create-index params
-create_index_engine_params() {
-  local engine="$1"
-  local dataset="$2"
-  case "$engine" in
-    jvector)
-      echo '"method_name": "disk_ann", "mode": "on_disk"'
-      ;;
-    faiss|lucene)
-      echo '"method_name": "hnsw"'
-      ;;
-  esac
-}
+# ── Load pipeline ──────────────────────────────────────────────────────────────
+PIPELINE_JSON=$(sed "s/__ENGINE__/${ENGINE}/g" "$PIPELINE_FILE")
 
-# Returns dataset-specific index config (dimension, space_type, field_name)
-dataset_index_params() {
-  local dataset="$1"
-  case "$dataset" in
-    cohere-wiki-en-768)
-      echo '"target_index_dimension": 768, "target_index_space_type": "innerproduct", "target_field_name": "target_field"'
-      ;;
-    cohere-msmarco-1024)
-      echo '"target_index_dimension": 1024, "target_index_space_type": "cosinesimil", "target_field_name": "vector"'
-      ;;
-  esac
-}
+DESCRIPTION=$(echo "$PIPELINE_JSON" | jq -r '.description // ""')
+NO_PROFILING=$(echo "$PIPELINE_JSON" | jq -r '.no_profiling // false')
+NO_METRICS=$(echo "$PIPELINE_JSON"  | jq -r '.no_metrics   // false')
 
-# Returns dataset-specific bulk ingest extras (data path for msmarco)
-dataset_ingest_params() {
-  local dataset="$1"
-  local corpus_size="$2"
-  case "$dataset" in
-    cohere-msmarco-1024)
-      echo ', "target_index_bulk_index_data_set_path": "/datasets/msmarco/cohere_msmarco_base_'"${corpus_size}"'.fvec"'
-      ;;
-    *)
-      echo ''
-      ;;
-  esac
-}
+# Top-level pipeline params merged into every step (later keys win)
+PIPELINE_PARAMS=$(echo "$PIPELINE_JSON" | jq '.params // {}')
 
-# Returns search extras (ef_search for msmarco)
-dataset_search_params() {
-  local dataset="$1"
-  case "$dataset" in
-    cohere-msmarco-1024)
-      echo ', "hnsw_ef_search": 256'
-      ;;
-    *)
-      echo ''
-      ;;
-  esac
-}
+STEP_COUNT=$(echo "$PIPELINE_JSON" | jq '.steps | length')
+if [ "$STEP_COUNT" -eq 0 ]; then
+  echo "ERROR: pipeline contains no steps: $PIPELINE_FILE"
+  exit 1
+fi
 
-# Returns num_vectors integer for a corpus size string
+# ── Helper: derive num_vectors from corpus_size string ────────────────────────
 num_vectors_for() {
-  case "$1" in
-    1m)  echo 1000000 ;;
-    5m)  echo 5000000 ;;
-    10m) echo 10000000 ;;
-    *)   echo "ERROR: unsupported corpus_size '$1'"; exit 1 ;;
-  esac
+  echo "$1" | awk '
+    /^[0-9]+m$/ { n=substr($0,1,length($0)-1)+0; print n*1000000; exit }
+    /^[0-9]+k$/ { n=substr($0,1,length($0)-1)+0; print n*1000;    exit }
+    { print "ERROR: unrecognised corpus_size: " $0 > "/dev/stderr"; exit 1 }
+  '
 }
 
-# ── Build tests array ──────────────────────────────────────────────────────────
-build_tests() {
-  local dataset="$1"
-  local engine="$2"
-  local corpus_size="$3"
-  local pipeline="$4"
+# ── Assemble tests[] from pipeline steps ──────────────────────────────────────
+# Each step: { "dataset", "scenario", "params" (optional) }
+# Merge order (later wins): pipeline params → step params
+# Auto-injected from corpus_size (unless already set):
+#   target_index_name, num_vectors (ingest/search only), label
 
-  local index_name="${dataset}-${corpus_size}"
-  local num_vectors
-  num_vectors=$(num_vectors_for "$corpus_size")
-  local label_prefix="${dataset##cohere-}-${corpus_size}"   # e.g. wiki-en-768-1m
+TESTS_JSON="[]"
 
-  local ds_idx_params
-  ds_idx_params=$(dataset_index_params "$dataset")
-  local eng_idx_params
-  eng_idx_params=$(create_index_engine_params "$engine" "$dataset")
-  local ingest_extras
-  ingest_extras=$(dataset_ingest_params "$dataset" "$corpus_size")
-  local search_extras
-  search_extras=$(dataset_search_params "$dataset")
+while IFS= read -r raw_step; do
+  dataset=$(echo  "$raw_step" | jq -r '.dataset')
+  procedure=$(echo "$raw_step" | jq -r '.scenario')
+  step_params=$(echo "$raw_step" | jq '.params // {}')
 
-  local tests=""
+  # Merge: pipeline-level params first, then step-level params override
+  merged_params=$(jq -n \
+    --argjson pipeline "$PIPELINE_PARAMS" \
+    --argjson step     "$step_params" \
+    '$pipeline + $step')
 
-  if [ "$pipeline" = "complete" ]; then
-    tests=$(cat <<ENDTESTS
-    {
-      "dataset": "${dataset}",
-      "engine": "${engine}",
-      "scenario": "create-index",
-      "label": "${label_prefix}-create-index",
-      "params": {
-        "target_index_name": "${index_name}",
-        "target_index_body": "indices/index.json",
-        "target_index_primary_shards": 3,
-        "target_index_replica_shards": 0,
-        "refresh_interval": "-1",
-        "translog_flush_threshold_size": "15gb",
-        "max_merged_segment": "25gb",
-        "hnsw_ef_construction": 256,
-        "hnsw_m": 32,
-        ${ds_idx_params},
-        ${eng_idx_params}
-      }
-    },
-    {
-      "dataset": "${dataset}",
-      "engine": "${engine}",
-      "scenario": "bulk-ingest-data",
-      "label": "${label_prefix}-bulk-ingest",
-      "params": {
-        "target_index_name": "${index_name}",
-        "target_index_bulk_size": 5000,
-        "target_index_bulk_indexing_clients": 8,
-        "num_vectors": ${num_vectors}${ingest_extras}
-      }
-    },
-    {
-      "dataset": "${dataset}",
-      "engine": "${engine}",
-      "scenario": "refresh-index",
-      "label": "${label_prefix}-refresh-after-ingest",
-      "params": { "target_index_name": "${index_name}" }
-    },
-    {
-      "dataset": "${dataset}",
-      "engine": "${engine}",
-      "scenario": "force-merge",
-      "label": "${label_prefix}-force-merge",
-      "params": {
-        "target_index_name": "${index_name}",
-        "target_index_max_num_segments": 1
-      }
-    },
-    {
-      "dataset": "${dataset}",
-      "engine": "${engine}",
-      "scenario": "refresh-index",
-      "label": "${label_prefix}-refresh-after-merge",
-      "params": { "target_index_name": "${index_name}" }
-    },
-    {
-      "dataset": "${dataset}",
-      "engine": "${engine}",
-      "scenario": "vector-search",
-      "label": "${label_prefix}-search-k100",
-      "params": {
-        "target_index_name": "${index_name}",
-        "num_vectors": ${num_vectors},
-        "query_k": 100,
-        "time_period": ${TIME_PERIOD}${search_extras}
-      }
-    },
-    {
-      "dataset": "${dataset}",
-      "engine": "${engine}",
-      "scenario": "vector-search",
-      "label": "${label_prefix}-search-k10",
-      "params": {
-        "target_index_name": "${index_name}",
-        "num_vectors": ${num_vectors},
-        "query_k": 10,
-        "time_period": ${TIME_PERIOD}${search_extras}
-      }
-    }
-ENDTESTS
-)
-  else
-    # search-only
-    tests=$(cat <<ENDTESTS
-    {
-      "dataset": "${dataset}",
-      "engine": "${engine}",
-      "scenario": "vector-search",
-      "label": "${label_prefix}-search-k100",
-      "params": {
-        "target_index_name": "${index_name}",
-        "num_vectors": ${num_vectors},
-        "query_k": 100,
-        "time_period": ${TIME_PERIOD}${search_extras}
-      }
-    },
-    {
-      "dataset": "${dataset}",
-      "engine": "${engine}",
-      "scenario": "vector-search",
-      "label": "${label_prefix}-search-k10",
-      "params": {
-        "target_index_name": "${index_name}",
-        "num_vectors": ${num_vectors},
-        "query_k": 10,
-        "time_period": ${TIME_PERIOD}${search_extras}
-      }
-    }
-ENDTESTS
-)
+  corpus_size=$(echo "$merged_params" | jq -r '.corpus_size // ""')
+
+  if [ -n "$corpus_size" ]; then
+    # Auto-inject target_index_name if not set
+    if [ "$(echo "$merged_params" | jq 'has("target_index_name")')" = "false" ]; then
+      merged_params=$(echo "$merged_params" | jq --arg v "${dataset}-${corpus_size}" '.target_index_name = $v')
+    fi
+    # Auto-inject num_vectors for ingest and search steps
+    if [ "$(echo "$merged_params" | jq 'has("num_vectors")')" = "false" ]; then
+      case "$procedure" in
+        bulk-ingest-data|vector-search)
+          merged_params=$(echo "$merged_params" | jq --argjson v "$(num_vectors_for "$corpus_size")" '.num_vectors = $v')
+          ;;
+      esac
+    fi
   fi
 
-  echo "$tests"
-}
+  # Build label from dataset (strip "cohere-"), corpus_size, and procedure
+  dataset_short="${dataset#cohere-}"
+  label="${dataset_short}-${corpus_size}-${procedure}"
+  # Append query_k to search labels so k=10 and k=100 are distinct
+  query_k=$(echo "$merged_params" | jq -r '.query_k // ""')
+  [ -n "$query_k" ] && label="${label}-k${query_k}"
 
-# ── Assemble full payload ──────────────────────────────────────────────────────
-all_tests=""
-first=true
-for dataset in $DATASETS; do
-  for corpus_size in $CORPUS_SIZES; do
-    tests=$(build_tests "$dataset" "$ENGINE" "$corpus_size" "$PIPELINE")
-    if [ "$first" = "true" ]; then
-      all_tests="$tests"
-      first=false
-    else
-      all_tests="${all_tests},
-${tests}"
-    fi
-  done
-done
+  test_entry=$(jq -n \
+    --arg     dataset   "$dataset" \
+    --arg     scenario  "$procedure" \
+    --arg     label     "$label" \
+    --argjson params    "$merged_params" \
+    '{ dataset: $dataset, scenario: $scenario, label: $label, params: $params }')
 
-PAYLOAD=$(cat <<EOF
-{
-  "engine": "${ENGINE}",
-  "tests": [
-${all_tests}
-  ]
-}
-EOF
-)
+  TESTS_JSON=$(echo "$TESTS_JSON" | jq --argjson t "$test_entry" '. + [$t]')
+
+done < <(echo "$PIPELINE_JSON" | jq -c '.steps[]')
+
+# ── Build final payload ────────────────────────────────────────────────────────
+PAYLOAD=$(jq -n \
+  --arg     engine       "$ENGINE" \
+  --argjson no_profiling "$NO_PROFILING" \
+  --argjson no_metrics   "$NO_METRICS" \
+  --argjson tests        "$TESTS_JSON" \
+  '{
+    engine: $engine,
+    no_profiling: $no_profiling,
+    no_metrics: $no_metrics,
+    tests: $tests
+  } | if .no_profiling == false then del(.no_profiling) else . end
+    | if .no_metrics   == false then del(.no_metrics)   else . end')
 
 # ── Print header ───────────────────────────────────────────────────────────────
 echo "=========================================="
 echo "OpenSearch Benchmark Pipeline"
 echo "=========================================="
-echo "Pipeline:    $PIPELINE"
+echo "Pipeline:    $(basename "$PIPELINE_FILE" .json)"
+[ -n "$DESCRIPTION" ] && echo "Description: $DESCRIPTION"
 echo "Engine:      $ENGINE"
-echo "Dataset(s):  $DATASETS"
-echo "Corpus:      $CORPUS_SIZES"
+echo "Scenarios:   $STEP_COUNT step(s)"
 echo "API URL:     $API_URL"
-echo "Time period: ${TIME_PERIOD}s per search sweep"
+echo ""
+echo "Steps (in order):"
+echo "$PIPELINE_JSON" | jq -r '.steps[] | .dataset + " / " + .scenario + (if .params then " (params: \(.params | keys | join(", ")))" else "" end)' \
+  | nl -ba -w3 -v1 | sed 's/^/  /'
 echo ""
 echo "Payload:"
 echo "$PAYLOAD" | jq '.'
@@ -324,8 +185,6 @@ echo "Job ID: $JOB_ID"
 echo ""
 
 # ── Poll for completion ────────────────────────────────────────────────────────
-# Prints a line only when a scenario completes — avoids flicker from
-# current_scenario mid-transition.
 echo "Monitoring job status..."
 echo ""
 
@@ -341,8 +200,6 @@ while true; do
     continue
   fi
 
-  # scenario_status and current_scenario are unpacked at the top level by the API.
-  # Resolve current_scenario key → label via the scenarios list.
   summary=$(echo "$resp" | jq -r '
     (.current_scenario // "") as $cur |
     (.scenarios // []) as $scens |
@@ -351,7 +208,6 @@ while true; do
       end ) as $label |
     ([ .scenario_status // {} | to_entries[] | select(.value | test("completed|failed|partial_failure|error|cancelled")) ] | length) as $done |
     ([ .scenario_status // {} | keys[] ] | length) as $total |
-    # display index: completed+1 while a scenario is actively running, else completed
     ( if $label != "" then ($done + 1) else $done end ) as $display |
     [ (.status // "unknown"), ($done|tostring), ($total|tostring), $label, ($display|tostring) ] | join("|")
   ')
@@ -390,7 +246,7 @@ while true; do
         }))
       }'
       echo ""
-      OUTFILE="${ENGINE}-${PIPELINE}-results.json"
+      OUTFILE="${ENGINE}-$(basename "$PIPELINE_FILE" .json)-results.json"
       echo "$RESULTS" | jq '.' > "$OUTFILE"
       echo "Full results saved to: $OUTFILE"
     fi
