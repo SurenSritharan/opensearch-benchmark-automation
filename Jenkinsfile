@@ -308,17 +308,17 @@ pipeline {
                     if (params.DELETE_PVCS) { extraArgs += " --delete-pvcs" }
 
                     runs.each { run ->
-                        def version  = run.version
-                        def nodeSize = run.nodeSize
-                        def runKey   = "${version}/${nodeSize}"
+                        def version    = run.version
+                        def runSize    = run.nodeSize
+                        def runKey     = "${version}/${runSize}"
 
                         // For multi-version/size pipelines each run needs a fresh deploy
                         def multiRun = pipelineJson.versions || pipelineJson.node_sizes
-                        def runExtraArgs = "--version ${version} --node-size ${nodeSize} --force"
+                        def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
                         if (params.DELETE_PVCS) { runExtraArgs += " --delete-pvcs" }
 
                         echo "════════════════════════════════════════"
-                        echo "Benchmarking OpenSearch ${version} / ${nodeSize}"
+                        echo "Benchmarking OpenSearch ${version} / ${runSize}"
                         echo "════════════════════════════════════════"
 
                         def engineBranches = engines.collectEntries { engine ->
@@ -330,7 +330,7 @@ pipeline {
                                         if (params.SCALE_CLUSTERS) {
                                             sh """
                                                 if [ "${multiRun}" = "true" ] || [ "${redeploy}" = "true" ]; then
-                                                    echo "Deploying ${ns} (version ${version}, size ${nodeSize})..."
+                                                    echo "Deploying ${ns} (version ${version}, size ${runSize})..."
                                                     gke-manifest/deploy-namespace-cluster.sh ${ns} ${runExtraArgs}
                                                 else
                                                     STS_COUNT=\$(kubectl get statefulset -n ${ns} --no-headers 2>/dev/null | wc -l)
@@ -429,12 +429,12 @@ pipeline {
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
                                                 ${engine} \
-                                                2>&1 | tee benchmark-run-${engine}-${version}-${nodeSize}.log
+                                                2>&1 | tee benchmark-run-${engine}-${version}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
 
-                                            JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-${engine}-${version}-${nodeSize}.log | tail -1 || true)
+                                            JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-${engine}-${version}-${runSize}.log | tail -1 || true)
                                             if [ -n "\$JOB_ID" ]; then
-                                                echo "\$JOB_ID" > job_id_${engine}-${version}-${nodeSize}.txt
+                                                echo "\$JOB_ID" > job_id_${engine}-${version}-${runSize}.txt
                                                 echo "[${engine}] Job ID captured: \$JOB_ID"
                                             fi
 
@@ -444,12 +444,12 @@ pipeline {
                                         // ── c) Fetch & save results ────────────────────────
                                         sh """
                                             mkdir -p ${RESULTS_DIR}/${runKey}
-                                            cp benchmark-run-${engine}-${version}-${nodeSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
+                                            cp benchmark-run-${engine}-${version}-${runSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
 
-                                            if [ -f job_id_${engine}-${version}-${nodeSize}.txt ]; then
-                                                JOB_ID=\$(cat job_id_${engine}-${version}-${nodeSize}.txt)
+                                            if [ -f job_id_${engine}-${version}-${runSize}.txt ]; then
+                                                JOB_ID=\$(cat job_id_${engine}-${version}-${runSize}.txt)
                                                 POD="opensearch-benchmark-worker-${engine}-0"
-                                                echo "=== ${engine} @ ${version}/${nodeSize} (job: \$JOB_ID) ==="
+                                                echo "=== ${engine} @ ${version}/${runSize} (job: \$JOB_ID) ==="
 
                                                 curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${engine}" \
                                                     | jq '.' > ${RESULTS_DIR}/${runKey}/job-status-${engine}.json
@@ -464,7 +464,7 @@ pipeline {
 
                                                 echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
                                             else
-                                                echo "WARNING: no job_id_${engine}-${version}-${nodeSize}.txt — ${engine} may not have submitted"
+                                                echo "WARNING: no job_id_${engine}-${version}-${runSize}.txt — ${engine} may not have submitted"
                                             fi
                                         """
 
