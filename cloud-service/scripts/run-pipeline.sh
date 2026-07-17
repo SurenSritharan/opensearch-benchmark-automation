@@ -190,6 +190,7 @@ echo ""
 
 PREV_COMPLETED="-1"
 PREV_STATUS=""
+PREV_LABEL=""
 
 while true; do
   now="[$(date '+%Y-%m-%d %H:%M:%S')]"
@@ -217,7 +218,7 @@ while true; do
   terminal=false
   case "$job_status" in completed|failed|error|partial|cancelled) terminal=true ;; esac
 
-  if [ "$completed" != "$PREV_COMPLETED" ] || [ "$job_status" != "$PREV_STATUS" ]; then
+  if [ "$label" != "$PREV_LABEL" ] || [ "$job_status" != "$PREV_STATUS" ]; then
     if [ -n "$label" ]; then
       printf "%s  %-9s  %2d/%d  (running: %s)\n" "$now" "$job_status" "$display" "$total" "$label"
     else
@@ -225,6 +226,7 @@ while true; do
     fi
     PREV_COMPLETED="$completed"
     PREV_STATUS="$job_status"
+    PREV_LABEL="$label"
   fi
 
   if $terminal; then
@@ -234,21 +236,24 @@ while true; do
     echo "=========================================="
     echo ""
 
-    if [ "$job_status" = "completed" ]; then
+    # Always print scenario-level outcomes so skipped/failed tests are visible
+    echo "Scenario status:"
+    echo "$resp" | jq -r '
+      .scenario_status // {} | to_entries[] |
+      "  \(if .value == "completed" then "✓" elif .value == "failed" or .value == "error" then "✗" else "?" end)  \(.key)  [\(.value)]"
+    '
+    echo ""
+
+    if [ "$job_status" = "completed" ] || [ "$job_status" = "partial" ]; then
       RESULTS=$(curl -s "${API_URL}/api/v1/benchmark/${JOB_ID}/results?engine=${ENGINE}")
-      echo "Results Summary:"
-      echo "$RESULTS" | jq '{
-        job_id,
-        total_sweeps: (.sweeps | length),
-        by_scenario: (.sweeps | group_by(.scenario_label) | map({
-          scenario: .[0].scenario_label,
-          sweeps:   length
-        }))
-      }'
-      echo ""
       OUTFILE="${ENGINE}-$(basename "$PIPELINE_FILE" .json)-results.json"
       echo "$RESULTS" | jq '.' > "$OUTFILE"
       echo "Full results saved to: $OUTFILE"
+    fi
+
+    if [ "$job_status" = "failed" ] || [ "$job_status" = "error" ] || [ "$job_status" = "cancelled" ]; then
+      echo "ERROR: job did not complete successfully (status: $job_status)" >&2
+      exit 1
     fi
 
     break
