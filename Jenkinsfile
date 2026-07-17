@@ -736,26 +736,44 @@ EOF
                 // before scale-down kills the worker pods.
                 if (currentBuild.currentResult == 'ABORTED') {
                     echo "Build aborted — cancelling any running cloud service jobs..."
-                    engines.each { engine ->
-                        sh """
-                            if [ -f job_id_${engine}.txt ]; then
-                                JOB_ID=\$(cat job_id_${engine}.txt)
-                                echo "Cancelling ${engine} job \$JOB_ID..."
-                                curl -s -X POST "${params.API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=${engine}" || true
 
-                                # Poll until the job reaches a terminal status (max 60s)
-                                echo "Waiting for ${engine} job \$JOB_ID to stop..."
-                                for attempt in \$(seq 1 12); do
-                                    STATUS=\$(curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${engine}" \
-                                        | jq -r '.status // "unknown"')
-                                    echo "  [${engine}] status: \$STATUS"
-                                    case "\$STATUS" in
-                                        completed|failed|partial|cancelled|error) break ;;
-                                    esac
-                                    sleep 5
-                                done
-                            fi
-                        """
+                    // Only send cancel requests if the API server pod is running.
+                    // If it's already down, the worker process is gone and there is nothing to cancel.
+                    // Note: on pod restart, init_db() resets any 'running' jobs back to 'queued' —
+                    // so skipping cancel here does not leave jobs permanently stuck in a running state.
+                    def apiRunning = sh(
+                        script: """
+                            PHASE=\$(kubectl get pods -n benchmark-api -l app=opensearch-benchmark-api \
+                                --no-headers 2>/dev/null | awk '{print \$3}' | head -1)
+                            [ "\$PHASE" = "Running" ]
+                        """,
+                        returnStatus: true
+                    ) == 0
+
+                    if (apiRunning) {
+                        engines.each { engine ->
+                            sh """
+                                if [ -f job_id_${engine}.txt ]; then
+                                    JOB_ID=\$(cat job_id_${engine}.txt)
+                                    echo "Cancelling ${engine} job \$JOB_ID..."
+                                    curl -s -X POST "${params.API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=${engine}" || true
+
+                                    # Poll until the job reaches a terminal status (max 60s)
+                                    echo "Waiting for ${engine} job \$JOB_ID to stop..."
+                                    for attempt in \$(seq 1 12); do
+                                        STATUS=\$(curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${engine}" \
+                                            | jq -r '.status // "unknown"')
+                                        echo "  [${engine}] status: \$STATUS"
+                                        case "\$STATUS" in
+                                            completed|failed|partial|cancelled|error) break ;;
+                                        esac
+                                        sleep 5
+                                    done
+                                fi
+                            """
+                        }
+                    } else {
+                        echo "API server pod is not running — skipping cancel"
                     }
                 }
 
