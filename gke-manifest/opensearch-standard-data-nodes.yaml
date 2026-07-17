@@ -191,18 +191,18 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             - name: OPENSEARCH_JAVA_OPTS
-              value: "-Xms13g -Xmx13g"
+              value: "-Xms${NODE_HEAP} -Xmx${NODE_HEAP}"
             - name: OPENSEARCH_INITIAL_ADMIN_PASSWORD
               value: "admin"
             - name: DISABLE_INSTALL_DEMO_CONFIG
               value: "true"
           resources:
             requests:
-              memory: "27Gi"
-              cpu: "7000m"
+              memory: "${NODE_MEM}"
+              cpu: "${NODE_CPU_REQ}"
             limits:
-              memory: "27Gi"
-              cpu: "8000m"
+              memory: "${NODE_MEM}"
+              cpu: "${NODE_CPU_LIM}"
           ports:
             - containerPort: 9200
               name: http

@@ -377,10 +377,8 @@ class ConfigLoader:
                     logger.info(f"✓ File already exists: {target_file_name} ({current_size / (1024**3):.2f} GB)")
                     continue
                 
-                logger.warning(f"File size mismatch for existing file {target_file_name}")
-                logger.warning(f"  Current: {current_size} bytes, Expected: {expected_size} bytes")
-                logger.warning("  Preserving existing file and skipping overwrite")
-                continue
+                logger.warning(f"File size mismatch for {target_file_name}: expected {expected_size} bytes, got {current_size} bytes — re-downloading")
+                file_path.unlink()
             
             logger.info(f"File not found: {target_file_name}, will download")
             logger.info(f"📥 Downloading {target_file_name}...")
@@ -549,15 +547,13 @@ class ConfigLoader:
             resolved_params['num_vectors'] = template_vars['num_vectors']
             logger.debug(f"Added num_vectors={template_vars['num_vectors']} based on corpus_size={corpus_size}")
         
-        # Clean up internal/template parameters that should not be passed to OpenSearch Benchmark
-        
-        # corpus_name is an internal helper used only for template resolution — not a workload param
-        # corpus_size is intentionally kept: workloads like vectorsearch use {{ corpus_size }} directly
-        if 'corpus_name' in resolved_params:
-            resolved_params.pop('corpus_name')
-            logger.debug("Removed internal 'corpus_name' from resolved workload params")
-        
-        
+        # Clean up internal/template parameters that should not be passed to OpenSearch Benchmark.
+        # Both are only used above for template resolution — no OSB workload has these as params.
+        for internal_key in ('corpus_name', 'corpus_size'):
+            if internal_key in resolved_params:
+                resolved_params.pop(internal_key)
+                logger.debug(f"Removed internal '{internal_key}' from resolved workload params")
+
         return resolved_params
     
     def _select_corpus_size_from_num_vectors(self, num_vectors: int, dataset_config: Dict[str, Any]) -> str:

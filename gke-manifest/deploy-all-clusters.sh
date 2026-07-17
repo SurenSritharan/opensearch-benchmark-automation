@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Deploy all OpenSearch clusters (os-jvector, os-faiss, os-lucene)
-# Usage: ./deploy-all-clusters.sh [--version VERSION] [--delete-pvcs]
-# Example: ./deploy-all-clusters.sh --version 3.7.0
+# Usage: ./deploy-all-clusters.sh [--version VERSION] [--node-size small|medium|large] [--delete-pvcs]
+# Example: ./deploy-all-clusters.sh --version 3.7.0 --node-size medium
 
 set -e
 
@@ -20,6 +20,10 @@ while [[ $# -gt 0 ]]; do
             EXTRA_ARGS="$EXTRA_ARGS --version $2"
             shift 2
             ;;
+        --node-size)
+            EXTRA_ARGS="$EXTRA_ARGS --node-size $2"
+            shift 2
+            ;;
         --delete-pvcs)
             EXTRA_ARGS="$EXTRA_ARGS --delete-pvcs"
             shift
@@ -30,7 +34,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Error: Unknown option '$1'"
-            echo "Usage: $0 [--version VERSION] [--delete-pvcs] [--force]"
+            echo "Usage: $0 [--version VERSION] [--node-size small|medium|large] [--delete-pvcs] [--force]"
             exit 1
             ;;
     esac

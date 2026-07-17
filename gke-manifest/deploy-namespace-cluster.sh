@@ -15,15 +15,17 @@ NAMESPACE=$1
 OPENSEARCH_VERSION="3.6.0"  # Default version
 FORCE_FLAG=""
 DELETE_PVCS=false
+NODE_SIZE="small"
 
 if [ -z "$NAMESPACE" ]; then
-    echo "Usage: $0 <namespace> [--version VERSION] [--force] [--delete-pvcs]"
+    echo "Usage: $0 <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs]"
     echo "Available namespaces: os-jvector, os-faiss, os-lucene"
     echo ""
     echo "Options:"
-    echo "  --version VER  OpenSearch version to deploy (default: 3.6.0)"
-    echo "  --force        Skip confirmation prompts"
-    echo "  --delete-pvcs  Delete PVCs (WARNING: destroys all indexed data and results)"
+    echo "  --version VER              OpenSearch version to deploy (default: 3.6.0)"
+    echo "  --node-size small|medium|large  Data node resource profile (default: small)"
+    echo "  --force                    Skip confirmation prompts"
+    echo "  --delete-pvcs              Delete PVCs (WARNING: destroys all indexed data and results)"
     exit 1
 fi
 
@@ -33,6 +35,10 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --version)
             OPENSEARCH_VERSION="$2"
+            shift 2
+            ;;
+        --node-size)
+            NODE_SIZE="$2"
             shift 2
             ;;
         --force)
@@ -45,11 +51,27 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             echo "Error: Unknown option '$1'"
-            echo "Usage: $0 <namespace> [--version VERSION] [--force] [--delete-pvcs]"
+            echo "Usage: $0 <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs]"
             exit 1
             ;;
     esac
 done
+
+# ── Node size table ─────────────────────────────────────────────────────────────
+# Each size doubles the previous: small = current baseline, medium = 2x, large = 4x
+# JVM heap is always ~half of RAM (standard OpenSearch recommendation).
+case "$NODE_SIZE" in
+    small)
+        NODE_CPU_REQ="7000m";  NODE_CPU_LIM="8000m";  NODE_MEM="27Gi";  NODE_HEAP="13g" ;;
+    medium)
+        NODE_CPU_REQ="14000m"; NODE_CPU_LIM="16000m"; NODE_MEM="54Gi";  NODE_HEAP="26g" ;;
+    large)
+        NODE_CPU_REQ="28000m"; NODE_CPU_LIM="32000m"; NODE_MEM="108Gi"; NODE_HEAP="52g" ;;
+    *)
+        echo "Error: --node-size must be small, medium, or large (got: $NODE_SIZE)"
+        exit 1
+        ;;
+esac
 
 # Validate namespace
 if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene)$ ]]; then
@@ -60,8 +82,9 @@ fi
 echo "=========================================="
 echo "Deploying OpenSearch cluster"
 echo "=========================================="
-echo "Namespace: $NAMESPACE"
+echo "Namespace:         $NAMESPACE"
 echo "OpenSearch Version: $OPENSEARCH_VERSION"
+echo "Node Size:         $NODE_SIZE  (cpu: $NODE_CPU_REQ/$NODE_CPU_LIM  mem: $NODE_MEM  heap: $NODE_HEAP)"
 echo "=========================================="
 
 # Create namespace if it doesn't exist
@@ -171,14 +194,18 @@ if [ "$NAMESPACE" == "os-jvector" ]; then
     echo ""
     echo "Deploying JVector cluster (with custom plugin)..."
     echo "1. Deploying cluster manager..."
-    sed "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+    sed -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
         "$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml" | kubectl apply -n $NAMESPACE -f -
     
     echo "2. Waiting for cluster manager to be ready..."
     kubectl wait --for=condition=ready pod -l app=opensearch-cluster-manager -n $NAMESPACE --timeout=300s || true
     
     echo "3. Deploying data nodes..."
-    sed "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+    sed -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+        -e "s/\${NODE_CPU_REQ}/$NODE_CPU_REQ/g" \
+        -e "s/\${NODE_CPU_LIM}/$NODE_CPU_LIM/g" \
+        -e "s/\${NODE_MEM}/$NODE_MEM/g" \
+        -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
         "$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml" | kubectl apply -n $NAMESPACE -f -
     
 else
@@ -186,7 +213,6 @@ else
     echo ""
     echo "Deploying standard OpenSearch cluster (FAISS/Lucene)..."
     
-    # Substitute both namespace and version
     echo "1. Deploying cluster manager..."
     sed -e "s/\${NAMESPACE}/$NAMESPACE/g" \
         -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
@@ -198,6 +224,10 @@ else
     echo "3. Deploying data nodes..."
     sed -e "s/\${NAMESPACE}/$NAMESPACE/g" \
         -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+        -e "s/\${NODE_CPU_REQ}/$NODE_CPU_REQ/g" \
+        -e "s/\${NODE_CPU_LIM}/$NODE_CPU_LIM/g" \
+        -e "s/\${NODE_MEM}/$NODE_MEM/g" \
+        -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
         "$SCRIPT_DIR/opensearch-standard-data-nodes.yaml" | kubectl apply -n $NAMESPACE -f -
 fi
 
