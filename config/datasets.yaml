@@ -104,11 +104,6 @@ datasets:
           time_period: 300
           hnsw_ef_search: 128
           search_clients: 8
-        parameter_sweeps:
-          - params: { }
-          - params: { oversample_factor: 5.0 }
-          - params: { oversample_factor: 8.0 }
-          - params: { oversample_factor: 12.0 }
 
         # synthetic make_blobs queries — no corpus file or ground truth, supports any scale
       - name: "vector-search-random"
@@ -121,10 +116,7 @@ datasets:
           time_period: 300
           hnsw_ef_search: 128
           # query_k and target_index_dimension should be passed at runtime
-        parameter_sweeps:
-          - params: { search_clients: 8 }
-          - params: { search_clients: 10 }
-          - params: { search_clients: 12 }
+        
   cohere-msmarco-1024:
     dimension: 1024
     format: fvec
@@ -213,16 +205,5 @@ datasets:
           time_period: 300
           hnsw_ef_search: 128
           search_clients: 8
-        parameter_sweeps:
-          - params: { }
-          - params: { oversample_factor: 5.0 }
-          - params: { oversample_factor: 8.0 }
-          - params: { oversample_factor: 12.0 }
-
-
-    
-
-# Default dataset to use if none specified
-default: msmarco
 
 # Made with Bob
