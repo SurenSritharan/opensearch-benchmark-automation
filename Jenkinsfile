@@ -232,8 +232,12 @@ pipeline {
                                     INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 0)
 
                                     if [ "\$STATUS" = "green" ] || [ "\$STATUS" = "yellow" ]; then
-                                        echo "  ✅ [${ns}] cluster \${STATUS} — ready"
-                                        break
+                                        if [ "\${INIT:-1}" = "0" ]; then
+                                            echo "  ✅ [${ns}] cluster \${STATUS} — ready"
+                                            break
+                                        else
+                                            echo "  [${ns}] cluster \${STATUS} but \${INIT} shards still initializing — waiting..."
+                                        fi
                                     fi
 
                                     RECOVERY=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
@@ -490,19 +494,20 @@ pipeline {
                                     try {
                                         // ── a) Wait for cluster health green/yellow (max 10 min) ──
                                         sh """
-                                            echo "Waiting for [${ns}] cluster to be green/yellow..."
+                                            echo "Waiting for [${ns}] cluster to be green/yellow with no initializing shards..."
                                             for attempt in \$(seq 1 60); do
-                                                STATUS=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                                HEALTH=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
                                                     curl -sk -u admin:admin \
-                                                    'https://localhost:9200/_cluster/health' 2>/dev/null \
-                                                    | grep -oP '(?<="status":")[^"]+' || true)
-                                                echo "  [${ns}] attempt \${attempt}/60: \${STATUS:-unknown}"
-                                                if [ "\$STATUS" = "green" ] || [ "\$STATUS" = "yellow" ]; then
-                                                    echo "✓ [${ns}] cluster is \$STATUS"
+                                                    'https://localhost:9200/_cluster/health' 2>/dev/null || true)
+                                                STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || true)
+                                                INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 1)
+                                                echo "  [${ns}] attempt \${attempt}/60: status=\${STATUS:-unknown} initializing=\${INIT}"
+                                                if { [ "\$STATUS" = "green" ] || [ "\$STATUS" = "yellow" ]; } && [ "\$INIT" = "0" ]; then
+                                                    echo "✓ [${ns}] cluster is \$STATUS with no initializing shards — ready"
                                                     break
                                                 fi
                                                 if [ "\$attempt" -eq 60 ]; then
-                                                    echo "❌ [${ns}] cluster did not reach green/yellow after 10 minutes"
+                                                    echo "❌ [${ns}] cluster did not become ready after 10 minutes"
                                                     exit 1
                                                 fi
                                                 sleep 10
