@@ -231,16 +231,6 @@ else
         "$SCRIPT_DIR/opensearch-standard-data-nodes.yaml" | kubectl apply -n $NAMESPACE -f -
 fi
 
-# Deploy benchmark client
-echo ""
-echo "4. Deploying benchmark client..."
-if kubectl get statefulset opensearch-benchmark-client -n $NAMESPACE &> /dev/null; then
-    echo "Benchmark client StatefulSet already exists in $NAMESPACE, skipping..."
-else
-    kubectl apply -f "$SCRIPT_DIR/opensearch-benchmark-client.yaml" -n $NAMESPACE
-    echo "Benchmark client StatefulSet deployed to $NAMESPACE"
-fi
-
 echo ""
 echo "=========================================="
 echo "Deployment initiated for $NAMESPACE"
@@ -252,13 +242,9 @@ echo ""
 echo "Check cluster health:"
 echo "  kubectl exec -n $NAMESPACE opensearch-data-0 -- curl -k -u admin:admin https://localhost:9200/_cluster/health?pretty"
 echo ""
-echo "Access benchmark client:"
-echo "  kubectl exec -it -n $NAMESPACE opensearch-benchmark-client-0 -- bash"
-echo ""
 echo "View logs:"
 echo "  kubectl logs -n $NAMESPACE -l app=opensearch-cluster-manager -f"
 echo "  kubectl logs -n $NAMESPACE -l app=opensearch-data -f"
-echo "  kubectl logs -n $NAMESPACE opensearch-benchmark-client-0 -f"
 echo ""
 
 # Made with Bob

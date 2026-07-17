@@ -132,11 +132,6 @@ else
     kubectl delete configmap opensearch-cluster-manager-config -n "$NAMESPACE" --ignore-not-found=true 2>/dev/null || true
 fi
 
-# Delete benchmark client resources (StatefulSet and Service - but not PVCs)
-echo "Deleting benchmark client..."
-kubectl delete statefulset opensearch-benchmark-client -n "$NAMESPACE" --ignore-not-found=true 2>/dev/null || true
-kubectl delete service opensearch-benchmark-client -n "$NAMESPACE" --ignore-not-found=true 2>/dev/null || true
-
 echo -e "  ${GREEN}✓ Resources deleted from $NAMESPACE${NC}"
 echo ""
 
