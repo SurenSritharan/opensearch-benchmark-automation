@@ -191,13 +191,14 @@ echo ""
 PREV_COMPLETED="-1"
 PREV_STATUS=""
 PREV_LABEL=""
+PREV_FAILURES=""
 
 while true; do
   now="[$(date '+%Y-%m-%d %H:%M:%S')]"
   resp=$(curl -s "${API_URL}/api/v1/benchmark/${JOB_ID}?engine=${ENGINE}")
   if ! echo "$resp" | jq '.' > /dev/null 2>&1; then
     echo "$now Waiting for job to appear..."
-    sleep 10
+    sleep 4
     continue
   fi
 
@@ -217,6 +218,23 @@ while true; do
 
   terminal=false
   case "$job_status" in completed|failed|error|partial|cancelled) terminal=true ;; esac
+
+  # Print any newly failed scenarios — runs every poll, not just on label change,
+  # so failures from scenarios that complete between polls are never silently dropped.
+  FAILURES=$(echo "$resp" | jq -r '
+    .scenario_status // {} | to_entries[] |
+    select(.value == "failed" or .value == "error") |
+    "  ✗  \(.key)  [\(.value)]"
+  ')
+  if [ "$FAILURES" != "$PREV_FAILURES" ]; then
+    while IFS= read -r line; do
+      case "$PREV_FAILURES" in
+        *"$line"*) ;;
+        *) echo "$line" ;;
+      esac
+    done <<< "$FAILURES"
+    PREV_FAILURES="$FAILURES"
+  fi
 
   if [ "$label" != "$PREV_LABEL" ] || [ "$job_status" != "$PREV_STATUS" ]; then
     if [ -n "$label" ]; then
@@ -259,7 +277,7 @@ while true; do
     break
   fi
 
-  sleep 10
+  sleep 2
 done
 
 echo ""
