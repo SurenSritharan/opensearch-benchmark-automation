@@ -51,9 +51,9 @@ Clusters are **scaled to zero** between runs to save cost and scaled back up on 
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `PIPELINE` | `complete` | `complete` (index → ingest → merge → search) or `search-only` (skip indexing) |
-| `CORPUS_SIZE` | `all` | `1m`, `5m`, or `all` (runs both sequentially) |
-| `DATASET` | `all` | `cohere-wiki-en-768`, `cohere-msmarco-1024`, or `all` |
+| `PIPELINE` | `search-all` | Pipeline to run — corresponds to a file in `pipelines/`. Choices: `search-all`, `search-1m`, `search-5m`, `search-compare`, `complete-1m`, `complete-5m`, `complete`, `msmarco-jvector-hq-build`, `msmarco-jvector-hq-full`, `msmarco-jvector-hq-search` |
+| `PIPELINE_OVERRIDE` | *(empty)* | Optional: name of a custom pipeline in `pipelines/` — overrides the `PIPELINE` choice above |
+| `API_URL` | `http://1.2.3.4` | Base URL of the benchmark cloud service API |
 | `ENGINE_TARGET` | `all` | `os-jvector`, `os-faiss`, `os-lucene`, or `all` |
 | `SCALE_CLUSTERS` | `true` | Scale up clusters and workers before the run, scale down after |
 | `REDEPLOY_CLUSTERS` | `false` | Re-deploy OpenSearch clusters (applies `OPENSEARCH_VERSION`) |
