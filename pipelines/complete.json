@@ -8,6 +8,7 @@
     { "dataset": "cohere-wiki-en-768",  "scenario": "force-merge",        "params": { "corpus_size": "1m" } },
     { "dataset": "cohere-wiki-en-768",  "scenario": "refresh-index",      "params": { "corpus_size": "1m" } },
     { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",      "params": { "corpus_size": "1m", "query_k": 100 } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",      "params": { "corpus_size": "1m", "query_k": 64 } },
     { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",      "params": { "corpus_size": "1m", "query_k": 10 } },
     { "dataset": "cohere-msmarco-1024", "scenario": "create-index",       "params": { "corpus_size": "1m" } },
     { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data",   "params": { "corpus_size": "1m", "target_index_bulk_size": 5000 } },
@@ -15,6 +16,7 @@
     { "dataset": "cohere-msmarco-1024", "scenario": "force-merge",        "params": { "corpus_size": "1m" } },
     { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index",      "params": { "corpus_size": "1m" } },
     { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",      "params": { "corpus_size": "1m", "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",      "params": { "corpus_size": "1m", "query_k": 64,  "hnsw_ef_search": 256 } },
     { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",      "params": { "corpus_size": "1m", "query_k": 10,  "hnsw_ef_search": 256 } },
 
     { "dataset": "cohere-wiki-en-768",  "scenario": "create-index",      "params": { "corpus_size": "5m" } },
@@ -23,6 +25,7 @@
     { "dataset": "cohere-wiki-en-768",  "scenario": "force-merge",        "params": { "corpus_size": "5m" } },
     { "dataset": "cohere-wiki-en-768",  "scenario": "refresh-index",      "params": { "corpus_size": "5m" } },
     { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",      "params": { "corpus_size": "5m", "query_k": 100 } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",      "params": { "corpus_size": "5m", "query_k": 64 } },
     { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",      "params": { "corpus_size": "5m", "query_k": 10 } },
     { "dataset": "cohere-msmarco-1024", "scenario": "create-index",       "params": { "corpus_size": "5m" } },
     { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data",   "params": { "corpus_size": "5m", "target_index_bulk_size": 5000 } },
@@ -30,6 +33,7 @@
     { "dataset": "cohere-msmarco-1024", "scenario": "force-merge",        "params": { "corpus_size": "5m" } },
     { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index",      "params": { "corpus_size": "5m" } },
     { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",      "params": { "corpus_size": "5m", "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",      "params": { "corpus_size": "5m", "query_k": 64,  "hnsw_ef_search": 256 } },
     { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",      "params": { "corpus_size": "5m", "query_k": 10,  "hnsw_ef_search": 256 } }
   ]
 }
