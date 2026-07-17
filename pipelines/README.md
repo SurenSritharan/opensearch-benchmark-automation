@@ -12,7 +12,7 @@ Each file here defines a complete benchmark run — an ordered list of steps wit
   "engine":      "__ENGINE__",    // replaced at submit time: jvector | faiss | lucene
   "no_profiling": false,          // optional — omit to keep async-profiler enabled
   "no_metrics":   false,          // optional — omit to keep GKE metrics collection enabled
-  "params": {                     // pipeline-level params merged into every step
+  "params": {                     // optional — pipeline-level params merged into every step
     "corpus_size": "1m"           // drives auto-derivation of target_index_name + num_vectors
   },
   "steps": [
@@ -20,6 +20,7 @@ Each file here defines a complete benchmark run — an ordered list of steps wit
       "dataset":  "cohere-msmarco-1024",  // must match a key in config/datasets.yaml
       "scenario": "vector-search",         // must match a test_procedure name in datasets.yaml
       "params": {                          // optional — only the overrides you need
+        "corpus_size": "1m",
         "query_k": 100,
         "hnsw_ef_search": 256
       }
@@ -39,7 +40,7 @@ Each file here defines a complete benchmark run — an ordered list of steps wit
 | `bulk-ingest-data` | Bulk-loads vectors into the index |
 | `refresh-index` | Forces a refresh so all documents are searchable |
 | `force-merge` | Merges segments (run after ingest for clean benchmarks) |
-| `vector-search` | Runs k-NN search sweeps; use `query_k` to set k |
+| `vector-search` | Runs k-NN search sweeps; use `query_k` to set k (10, 64, 100) |
 
 ---
 
@@ -54,18 +55,25 @@ Each file here defines a complete benchmark run — an ordered list of steps wit
 | `target_index_name` | `cohere-msmarco-1024-1m` |
 | `num_vectors` | `1000000` (on `bulk-ingest-data` and `vector-search` steps) |
 
-To target a different index (e.g. HQ), set `target_index_name` in `pipeline.params` — it overrides the auto-derived name for all steps.
+`corpus_size` can be set at the pipeline level (applied to all steps) or per-step (when mixing sizes in one pipeline, e.g. `complete.json`). It is stripped before being forwarded to OSB — it's only used internally to derive the above fields.
+
+To target a custom index (e.g. HQ), set `target_index_name` in `pipeline.params` — it overrides the auto-derived name for all steps.
+
+**Ground truth file fallback for `query_k`:**
+msmarco ground truth files only exist for k=10 and k=100. When `query_k=64` is used, the config loader automatically resolves the ground truth path to the k=100 file (which contains 100 neighbors per query) and OSB slices it to the first 64 when computing recall. No per-step override is needed.
 
 ---
 
 ## Usage
 
 ### Jenkins
-Set `PIPELINE_FILE` to the pipeline path and `ENGINE_TARGET` to the engine cluster(s).
+Select the pipeline from the `PIPELINE` dropdown, or set `PIPELINE_OVERRIDE` to any pipeline name for ad-hoc runs.
 
 ### Command line
 ```bash
-./cloud-service/scripts/run-pipeline.sh --pipeline-file pipelines/complete-1m.json jvector
+./cloud-service/scripts/run-pipeline.sh --pipeline complete-1m jvector
+./cloud-service/scripts/run-pipeline.sh --pipeline search-all faiss
+API_URL=http://1.2.3.4 ./cloud-service/scripts/run-pipeline.sh --pipeline msmarco-jvector-hq-build jvector
 ```
 
 ---
@@ -73,10 +81,11 @@ Set `PIPELINE_FILE` to the pipeline path and `ENGINE_TARGET` to the engine clust
 ## Adding a new pipeline
 
 1. Create `pipelines/<name>.json`
-2. Set `"params": { "corpus_size": "..." }` (or any other shared params)
-3. List the steps — only include params that differ from `datasets.yaml` defaults
+2. Add it to the `PIPELINE` choices in `Jenkinsfile`
+3. Set `corpus_size` at the pipeline level (shared) or per step (mixed sizes)
+4. List the steps — only include params that differ from `datasets.yaml` defaults
 
-**Example: msmarco-only search at 10M**
+**Example: msmarco-only search at 10M with k=100, 64, 10**
 ```json
 {
   "description": "msmarco search-only at 10M",
@@ -84,6 +93,7 @@ Set `PIPELINE_FILE` to the pipeline path and `ENGINE_TARGET` to the engine clust
   "params": { "corpus_size": "10m" },
   "steps": [
     { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 64,  "hnsw_ef_search": 256 } },
     { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 10,  "hnsw_ef_search": 256 } }
   ]
 }
@@ -95,10 +105,13 @@ Set `PIPELINE_FILE` to the pipeline path and `ENGINE_TARGET` to the engine clust
 
 | File | Corpus | Datasets | Description |
 |---|---|---|---|
-| `complete-1m.json` | 1M | wiki + msmarco | Full run: create → ingest → merge → search k=100 + k=10 |
-| `complete-5m.json` | 5M | wiki + msmarco | Same at 5M |
-| `search-only-1m.json` | 1M | wiki + msmarco | Search only (indexes must exist) |
-| `search-only-5m.json` | 5M | wiki + msmarco | Same at 5M |
+| `complete.json` | 1M + 5M | wiki + msmarco | Full run at 1M then 5M in a single job: create → ingest → merge → search k=100, 64, 10 |
+| `search-all.json` | 1M + 5M | wiki + msmarco | Search only at both 1M and 5M, k=100, 64, 10 (indexes must exist) |
+| `complete-1m.json` | 1M | wiki + msmarco | Full run at 1M only |
+| `complete-5m.json` | 5M | wiki + msmarco | Full run at 5M only |
+| `search-1m.json` | 1M | wiki + msmarco | Search only at 1M (indexes must exist) |
+| `search-5m.json` | 5M | wiki + msmarco | Search only at 5M (indexes must exist) |
+| `search-compare.json` | 1M + 5M | wiki + msmarco | Version comparison across two OpenSearch versions and two node sizes |
 | `msmarco-jvector-hq-build.json` | 1M | msmarco | Build HQ index (ef_construction=512, M=64) |
-| `msmarco-jvector-hq-search.json` | 1M | msmarco | Search HQ index, sweep ef_search 128/256/512 |
-| `msmarco-jvector-hq-full.json` | 1M | msmarco | HQ build + ef_search sweep in one job |
+| `msmarco-jvector-hq-search.json` | 1M | msmarco | Search HQ index, sweep ef_search 128/256/512, k=100, 64, 10 |
+| `msmarco-jvector-hq-full.json` | 1M | msmarco | HQ build + ef_search sweep in one job, k=100, 64, 10 |
