@@ -20,6 +20,7 @@ pipeline {
                 'search-compare',
                 'complete-1m',
                 'complete-5m',
+                'complete',
                 'msmarco-jvector-hq-build',
                 'msmarco-jvector-hq-full',
                 'msmarco-jvector-hq-search',
