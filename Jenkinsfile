@@ -488,17 +488,25 @@ pipeline {
                             [(engine): {
                                 catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                                     try {
-                                        // ── a) Confirm cluster health ──────────────────────
+                                        // ── a) Wait for cluster health green/yellow (max 10 min) ──
                                         sh """
-                                            STATUS=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
-                                                curl -sk -u admin:admin \
-                                                'https://localhost:9200/_cluster/health' 2>/dev/null \
-                                                | grep -oP '(?<="status":")[^"]+' || true)
-                                            echo "  [${ns}] cluster status: \${STATUS:-unknown}"
-                                            if [ "\$STATUS" != "green" ] && [ "\$STATUS" != "yellow" ]; then
-                                                echo "❌ [${ns}] cluster not green/yellow at benchmark start"
-                                                exit 1
-                                            fi
+                                            echo "Waiting for [${ns}] cluster to be green/yellow..."
+                                            for attempt in \$(seq 1 60); do
+                                                STATUS=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                                    curl -sk -u admin:admin \
+                                                    'https://localhost:9200/_cluster/health' 2>/dev/null \
+                                                    | grep -oP '(?<="status":")[^"]+' || true)
+                                                echo "  [${ns}] attempt \${attempt}/60: \${STATUS:-unknown}"
+                                                if [ "\$STATUS" = "green" ] || [ "\$STATUS" = "yellow" ]; then
+                                                    echo "✓ [${ns}] cluster is \$STATUS"
+                                                    break
+                                                fi
+                                                if [ "\$attempt" -eq 60 ]; then
+                                                    echo "❌ [${ns}] cluster did not reach green/yellow after 10 minutes"
+                                                    exit 1
+                                                fi
+                                                sleep 10
+                                            done
                                         """
 
                                         // ── b) Run benchmark ───────────────────────────────
