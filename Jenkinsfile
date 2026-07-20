@@ -124,7 +124,7 @@ print(json.dumps(s))
             }
             steps {
                 parallel(
-                    'benchmark-api-server-develop': {
+                    'benchmark-api-server': {
                         sh '''
                             # Apply the develop-specific API server (benchmark-api-develop namespace)
                             kubectl apply -f gke-manifest/opensearch-benchmark-api-server-develop.yaml
@@ -169,9 +169,37 @@ print(json.dumps(s))
                     echo "=== Benchmark API develop (benchmark-api-develop namespace) ==="
                     kubectl get pods -n benchmark-api-develop
                 '''
+                // Wait for API server to be reachable
                 sh """
-                    curl -sf ${env.DEVELOP_API_URL}/health || \
-                        (echo "WARNING: API health check failed — service may still be starting" && true)
+                    echo "Waiting for develop API server to be ready..."
+                    for i in \$(seq 1 30); do
+                        if curl -sf --max-time 5 ${env.DEVELOP_API_URL}/health > /dev/null 2>&1; then
+                            echo "✅ API server is ready"
+                            break
+                        fi
+                        echo "  [\$i/30] API server not ready yet — waiting 10s..."
+                        sleep 10
+                        if [ \$i -eq 30 ]; then
+                            echo "❌ API server did not become ready in time"
+                            exit 1
+                        fi
+                    done
+                """
+                // Wait for the jvector worker to be reachable via the API server proxy
+                sh """
+                    echo "Waiting for jvector worker to be ready..."
+                    for i in \$(seq 1 60); do
+                        STATUS=\$(curl -sf --max-time 5 ${env.DEVELOP_API_URL}/health 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('workers',{}).get('jvector','unknown'))" 2>/dev/null || echo "unknown")
+                        if [ "\$STATUS" = "ready" ] || [ "\$STATUS" = "idle" ]; then
+                            echo "✅ jvector worker is ready (status: \$STATUS)"
+                            break
+                        fi
+                        echo "  [\$i/60] worker status: \$STATUS — waiting 10s..."
+                        sleep 10
+                        if [ \$i -eq 60 ]; then
+                            echo "⚠️  Worker did not report ready after 10 minutes — proceeding anyway"
+                        fi
+                    done
                 """
             }
         }
