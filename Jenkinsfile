@@ -399,7 +399,7 @@ print(json.dumps(s))
                                         jq '{job_id, status, scenarios_completed, scenarios_total}' \
                                             ${RESULTS_DIR}/${runKey}/job-status-develop.json
 
-                                        DEST="${RESULTS_DIR}/${runKey}/test-runs/develop"
+                                        DEST="${RESULTS_DIR}/${runKey}/test-runs/${params.ENGINE}"
                                         mkdir -p "\$DEST"
                                         kubectl cp benchmark-api-develop/opensearch-benchmark-worker-${params.ENGINE}-0:/results/\$JOB_ID/${params.ENGINE}/. "\$DEST/" 2>/dev/null \
                                             && echo "  Copied results -> \$DEST/" \
