@@ -24,8 +24,8 @@ pipeline {
         )
         string(
             name: 'API_URL',
-            defaultValue: 'http://34.132.114.18',
-            description: 'Base URL of the benchmark cloud service API.'
+            defaultValue: 'http://136.116.200.202',
+            description: 'Base URL of the develop benchmark cloud service API.'
         )
         booleanParam(
             name: 'SCALE_CLUSTERS',
@@ -60,6 +60,7 @@ pipeline {
         ENGINE         = "develop"
         NS             = "os-develop"
         WORKER_NS      = "benchmark-api-develop"
+        DEVELOP_API_URL = "${params.API_URL}"
     }
 
     // triggers {
@@ -91,7 +92,7 @@ pipeline {
             }
         }
 
-        // ── 2a. Seed Certs ─────────────────────────────────────────────────────
+        // ── 2. Seed Certs ──────────────────────────────────────────────────────
         //     Must complete before worker pods start — they mount this secret.
         stage('Copy Certs') {
             when {
@@ -169,7 +170,7 @@ print(json.dumps(s))
                     kubectl get pods -n benchmark-api-develop
                 '''
                 sh """
-                    curl -sf ${params.API_URL}/health || \
+                    curl -sf ${env.DEVELOP_API_URL}/health || \
                         (echo "WARNING: API health check failed — service may still be starting" && true)
                 """
             }
@@ -363,7 +364,7 @@ print(json.dumps(s))
                                 // ── b) Run benchmark ──────────────────────────────
                                 sh """
                                     set +e
-                                    API_URL=${params.API_URL} \
+                                    API_URL=${env.DEVELOP_API_URL} \
                                     cloud-service/scripts/run-pipeline.sh \
                                         --pipeline ${pipeline} \
                                         develop \
@@ -388,7 +389,7 @@ print(json.dumps(s))
                                         JOB_ID=\$(cat job_id_develop-${version}-${runSize}.txt)
                                         echo "=== develop @ ${version}/${runSize} (job: \$JOB_ID) ==="
 
-                                        curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=develop" \
+                                        curl -s "${env.DEVELOP_API_URL}/api/v1/benchmark/\$JOB_ID?engine=develop" \
                                             | jq '.' > ${RESULTS_DIR}/${runKey}/job-status-develop.json
                                         jq '{job_id, status, scenarios_completed, scenarios_total}' \
                                             ${RESULTS_DIR}/${runKey}/job-status-develop.json
@@ -399,7 +400,7 @@ print(json.dumps(s))
                                             && echo "  Copied results -> \$DEST/" \
                                             || echo "WARNING: kubectl cp failed — worker pod may not be running"
 
-                                        echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
+                                        echo "  View: ${env.DEVELOP_API_URL}/results.html?job_id=\$JOB_ID"
                                     else
                                         echo "WARNING: no job_id for ${version}/${runSize} — benchmark may not have submitted"
                                     fi
@@ -531,7 +532,7 @@ Date:      \$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 Parameters:
   Pipeline:           ${pipeline}
   Cluster:            os-develop (JVector)
-  API URL:            ${params.API_URL}
+  API URL:            ${env.DEVELOP_API_URL}
   Scale Clusters:     ${params.SCALE_CLUSTERS}
   Redeploy Clusters:  ${params.REDEPLOY_CLUSTERS}
   OpenSearch Version: ${params.OPENSEARCH_VERSION}
@@ -546,7 +547,7 @@ EOF
                                 JOB_FILE="job_id_develop-\${version}-\${size}.txt"
                                 if [ -f "\$JOB_FILE" ]; then
                                     JOB_ID=\$(cat "\$JOB_FILE")
-                                    echo "    develop: ${params.API_URL}/results.html?job_id=\${JOB_ID}" \
+                                    echo "    develop: ${env.DEVELOP_API_URL}/results.html?job_id=\${JOB_ID}" \
                                         >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
                                 else
                                     echo "    develop: no job submitted" \
@@ -590,7 +591,7 @@ EOF
                                 if [ -f "\$JOB_FILE" ]; then
                                     JOB_ID=\$(cat "\$JOB_FILE")
                                     echo "Cancelling develop job \$JOB_ID..."
-                                    curl -s -X POST "${params.API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=develop" || true
+                                    curl -s -X POST "${env.DEVELOP_API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=develop" || true
                                 fi
                             done
                         """
