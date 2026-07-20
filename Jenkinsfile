@@ -1,5 +1,5 @@
 pipeline {
-    // Develop branch pipeline — JVector only, os-develop cluster, develop worker.
+    // Develop branch pipeline — JVector only, os-develop-jvector cluster, develop worker.
     // This IS the primary Jenkinsfile on the develop branch.
     // The production multi-engine pipeline lives in Jenkinsfile.main (main branch).
     //
@@ -30,12 +30,12 @@ pipeline {
         booleanParam(
             name: 'SCALE_CLUSTERS',
             defaultValue: true,
-            description: 'Scale up the os-develop cluster + develop worker before benchmarking and scale them down afterwards.'
+            description: 'Scale up the os-develop-jvector cluster + develop worker before benchmarking and scale them down afterwards.'
         )
         booleanParam(
             name: 'REDEPLOY_CLUSTERS',
             defaultValue: false,
-            description: 'Re-deploy the os-develop cluster before benchmarking (applies OPENSEARCH_VERSION). Implies scale-up.'
+            description: 'Re-deploy the os-develop-jvector cluster before benchmarking (applies OPENSEARCH_VERSION). Implies scale-up.'
         )
         string(
             name: 'OPENSEARCH_VERSION',
@@ -123,7 +123,7 @@ print(json.dumps(s))
                     'benchmark-api-server': {
                         sh '''
                             # Apply the develop-specific API server (benchmark-api-develop namespace)
-                            kubectl apply -f gke-manifest/opensearch-benchmark-api-server-develop.yaml
+                            kubectl apply -f gke-manifest/opensearch-benchmark-api-server.yaml
                             kubectl scale deployment opensearch-benchmark-api-server \
                                 --replicas=0 -n benchmark-api-develop
                             kubectl wait --for=delete pod \
@@ -137,7 +137,7 @@ print(json.dumps(s))
                     },
                     'benchmark-worker-jvector': {
                         sh """
-                            cat gke-manifest/opensearch-benchmark-worker-develop-template.yaml | \
+                            cat gke-manifest/opensearch-benchmark-worker-template.yaml | \
                                 sed 's/\\\${ENGINE}/jvector/g' | \
                                 kubectl apply -f -
                             kubectl scale statefulset opensearch-benchmark-worker-jvector \
@@ -159,8 +159,8 @@ print(json.dumps(s))
         stage('Verify Health') {
             steps {
                 sh '''
-                    echo "=== os-develop cluster ==="
-                    kubectl get pods -n os-develop 2>/dev/null || echo "(not deployed)"
+                    echo "=== os-develop-jvector cluster ==="
+                    kubectl get pods -n os-develop-jvector 2>/dev/null || echo "(not deployed)"
                     echo ""
                     echo "=== Benchmark API develop (benchmark-api-develop namespace) ==="
                     kubectl get pods -n benchmark-api-develop
@@ -266,37 +266,37 @@ print(json.dumps(s))
                                 if (params.SCALE_CLUSTERS) {
                                     sh """
                                         if [ "${multiRun}" = "true" ] || [ "${redeploy}" = "true" ]; then
-                                            echo "Deploying os-develop (version ${version}, size ${runSize})..."
-                                            gke-manifest/deploy-namespace-cluster.sh os-develop ${runExtraArgs}
+                                            echo "Deploying os-develop-jvector (version ${version}, size ${runSize})..."
+                                            gke-manifest/deploy-namespace-cluster.sh os-develop-jvector ${runExtraArgs}
                                         else
-                                            STS_COUNT=\$(kubectl get statefulset -n os-develop --no-headers 2>/dev/null | wc -l)
+                                            STS_COUNT=\$(kubectl get statefulset -n os-develop-jvector --no-headers 2>/dev/null | wc -l)
                                             if [ "\$STS_COUNT" -gt 0 ]; then
-                                                echo "Scaling up existing os-develop cluster..."
-                                                gke-manifest/scale-up-clusters.sh os-develop
+                                                echo "Scaling up existing os-develop-jvector cluster..."
+                                                gke-manifest/scale-up-clusters.sh os-develop-jvector
                                             else
-                                                echo "No StatefulSets in os-develop — running initial deploy..."
-                                                gke-manifest/deploy-namespace-cluster.sh os-develop ${runExtraArgs}
+                                                echo "No StatefulSets in os-develop-jvector — running initial deploy..."
+                                                gke-manifest/deploy-namespace-cluster.sh os-develop-jvector ${runExtraArgs}
                                             fi
                                         fi
 
                                         # Wait for manager pod
                                         kubectl rollout status statefulset/opensearch-cluster-manager \
-                                            -n os-develop --timeout=300s
+                                            -n os-develop-jvector --timeout=300s
 
                                         # Wait for all data pods to be Running
-                                        echo "Waiting for opensearch-data pods to be Running in os-develop..."
+                                        echo "Waiting for opensearch-data pods to be Running in os-develop-jvector..."
                                         RUNNING=0
                                         LAST_PROGRESS=\$SECONDS
                                         STALL_LIMIT=300
                                         while true; do
-                                            NEW_RUNNING=\$(kubectl get pods -n os-develop -l app=opensearch-data \
+                                            NEW_RUNNING=\$(kubectl get pods -n os-develop-jvector -l app=opensearch-data \
                                                 --field-selector=status.phase=Running \
                                                 --no-headers 2>/dev/null | wc -l)
-                                            TOTAL=\$(kubectl get pods -n os-develop -l app=opensearch-data \
+                                            TOTAL=\$(kubectl get pods -n os-develop-jvector -l app=opensearch-data \
                                                 --no-headers 2>/dev/null | wc -l)
-                                            echo "  [os-develop] data pods Running: \${NEW_RUNNING}/\${TOTAL}"
+                                            echo "  [os-develop-jvector] data pods Running: \${NEW_RUNNING}/\${TOTAL}"
                                             if [ "\$NEW_RUNNING" -ge 3 ] && [ "\$TOTAL" -ge 3 ]; then
-                                                echo "  ✅ [os-develop] all data pods Running"
+                                                echo "  ✅ [os-develop-jvector] all data pods Running"
                                                 break
                                             fi
                                             if [ "\$NEW_RUNNING" -gt "\$RUNNING" ]; then
@@ -304,40 +304,40 @@ print(json.dumps(s))
                                             fi
                                             STALLED=\$((SECONDS - LAST_PROGRESS))
                                             if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
-                                                echo "❌ [os-develop] data pods stalled at \${RUNNING}/3 for \${STALL_LIMIT}s — giving up"
+                                                echo "❌ [os-develop-jvector] data pods stalled at \${RUNNING}/3 for \${STALL_LIMIT}s — giving up"
                                                 exit 1
                                             fi
                                             sleep 10
                                         done
 
                                         # Wait for cluster to reach green with no initializing shards
-                                        echo "Waiting for os-develop cluster health..."
+                                        echo "Waiting for os-develop-jvector cluster health..."
                                         LAST_PROGRESS_SCORE="0.0"
                                         LAST_PROGRESS=\$SECONDS
                                         STALL_LIMIT=600
                                         while true; do
-                                            HEALTH=\$(kubectl exec -n os-develop opensearch-data-0 -c opensearch -- \
+                                            HEALTH=\$(kubectl exec -n os-develop-jvector opensearch-data-0 -c opensearch -- \
                                                 curl -sk -u admin:admin \
                                                 'https://localhost:9200/_cluster/health' 2>/dev/null || true)
                                             STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || true)
                                             INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 0)
                                             if [ "\$STATUS" = "green" ] && [ "\${INIT:-1}" = "0" ]; then
-                                                echo "  ✅ [os-develop] cluster green — ready"
+                                                echo "  ✅ [os-develop-jvector] cluster green — ready"
                                                 break
                                             elif [ "\$STATUS" = "yellow" ] || [ "\$STATUS" = "green" ]; then
-                                                echo "  [os-develop] cluster \${STATUS} but \${INIT} shards initializing — waiting..."
+                                                echo "  [os-develop-jvector] cluster \${STATUS} but \${INIT} shards initializing — waiting..."
                                             fi
-                                            RECOVERY=\$(kubectl exec -n os-develop opensearch-data-0 -c opensearch -- \
+                                            RECOVERY=\$(kubectl exec -n os-develop-jvector opensearch-data-0 -c opensearch -- \
                                                 curl -sk -u admin:admin \
                                                 'https://localhost:9200/_cat/recovery?h=index,shard,stage,bytes_percent,translog_ops_percent&active_only=true' \
                                                 2>/dev/null || true)
                                             if [ -n "\$RECOVERY" ]; then
-                                                echo "  [os-develop] status=\${STATUS:-unknown} initializing=\${INIT}"
+                                                echo "  [os-develop-jvector] status=\${STATUS:-unknown} initializing=\${INIT}"
                                                 echo "\$RECOVERY" | while read line; do echo "    \$line"; done
                                                 SCORE=\$(echo "\$RECOVERY" | awk '{sum += \$4 + \$5} END {printf "%.1f", sum}')
                                                 MAX_SCORE=\$(echo "\$RECOVERY" | awk 'END {printf "%.1f", NR * 200}')
                                             else
-                                                echo "  [os-develop] status=\${STATUS:-unknown} initializing=\${INIT}"
+                                                echo "  [os-develop-jvector] status=\${STATUS:-unknown} initializing=\${INIT}"
                                                 SCORE=0; MAX_SCORE=0
                                             fi
                                             if [ "\$(echo "\$SCORE \$LAST_PROGRESS_SCORE" | awk '{print (\$1 > \$2)}')" = "1" ]; then
@@ -349,7 +349,7 @@ print(json.dumps(s))
                                             fi
                                             STALLED=\$((SECONDS - LAST_PROGRESS))
                                             if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
-                                                echo "❌ [os-develop] shard recovery stalled for \${STALL_LIMIT}s — giving up"
+                                                echo "❌ [os-develop-jvector] shard recovery stalled for \${STALL_LIMIT}s — giving up"
                                                 exit 1
                                             fi
                                             sleep 10
@@ -402,12 +402,12 @@ print(json.dumps(s))
                                     fi
 
                                     # ── Server logs ────────────────────────────────
-                                    LOG_DIR="${RESULTS_DIR}/${runKey}/server-logs/os-develop"
+                                    LOG_DIR="${RESULTS_DIR}/${runKey}/server-logs/os-develop-jvector"
                                     mkdir -p "\$LOG_DIR"
 
-                                    echo "Collecting logs from namespace: os-develop"
+                                    echo "Collecting logs from namespace: os-develop-jvector"
 
-                                    PODS=\$(kubectl get pods -n os-develop \
+                                    PODS=\$(kubectl get pods -n os-develop-jvector \
                                         --no-headers \
                                         -o custom-columns=':metadata.name,:spec.nodeName' 2>/dev/null \
                                         | while read POD NODE; do
@@ -418,21 +418,21 @@ print(json.dumps(s))
                                         done || true)
 
                                     if [ -z "\$PODS" ]; then
-                                        echo "  No server-pool pods found in os-develop — skipping"
+                                        echo "  No server-pool pods found in os-develop-jvector — skipping"
                                     else
                                         for POD in \$PODS; do
-                                            CONTAINERS=\$(kubectl get pod "\$POD" -n os-develop \
+                                            CONTAINERS=\$(kubectl get pod "\$POD" -n os-develop-jvector \
                                                 -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
                                             for CONTAINER in \$CONTAINERS; do
                                                 LOGFILE="\$LOG_DIR/\${POD}-\${CONTAINER}.log"
-                                                kubectl logs "\$POD" -c "\$CONTAINER" -n os-develop \
+                                                kubectl logs "\$POD" -c "\$CONTAINER" -n os-develop-jvector \
                                                     --tail=5000 2>&1 > "\$LOGFILE" || true
                                                 SIZE=\$(wc -l < "\$LOGFILE" 2>/dev/null || echo 0)
                                                 echo "  \$POD / \$CONTAINER: \${SIZE} lines -> \$LOGFILE"
                                             done
 
                                             GC_LOGFILE="\$LOG_DIR/\${POD}-gc.log"
-                                            kubectl exec "\$POD" -c opensearch -n os-develop -- \
+                                            kubectl exec "\$POD" -c opensearch -n os-develop-jvector -- \
                                                 cat /usr/share/opensearch/logs/gc.log \
                                                 > "\$GC_LOGFILE" 2>/dev/null || true
                                             if [ -s "\$GC_LOGFILE" ]; then
@@ -442,13 +442,13 @@ print(json.dumps(s))
                                                 echo "  \$POD gc.log: not found (skipping)"
                                             fi
 
-                                            HPROF_FILES=\$(kubectl exec "\$POD" -c opensearch -n os-develop -- \
+                                            HPROF_FILES=\$(kubectl exec "\$POD" -c opensearch -n os-develop-jvector -- \
                                                 sh -c 'ls /usr/share/opensearch/data/*.hprof 2>/dev/null || true')
                                             for HPROF in \$HPROF_FILES; do
                                                 HPROF_NAME=\$(basename "\$HPROF")
                                                 LOCAL_HPROF="\$LOG_DIR/\${POD}-\${HPROF_NAME}"
                                                 echo "  Found heap dump: \$HPROF — copying..."
-                                                kubectl cp "os-develop/\${POD}:\${HPROF}" "\$LOCAL_HPROF" \
+                                                kubectl cp "os-develop-jvector/\${POD}:\${HPROF}" "\$LOCAL_HPROF" \
                                                     -c opensearch 2>/dev/null || true
                                                 if [ -s "\$LOCAL_HPROF" ]; then
                                                     echo "  Saved: \$LOCAL_HPROF (\$(du -sh \$LOCAL_HPROF | cut -f1))"
@@ -460,7 +460,7 @@ print(json.dumps(s))
                                             echo "Server Log Collection Summary"
                                             echo "============================================================"
                                             echo "Collection Time: \$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-                                            echo "Namespace:       os-develop"
+                                            echo "Namespace:       os-develop-jvector"
                                             echo "Build ID:        ${BUILD_ID}"
                                             echo ""
                                             echo "Collected Logs:"
@@ -472,9 +472,9 @@ print(json.dumps(s))
                                     fi
 
                                     # ── Telemetry ──────────────────────────────────
-                                    TEL_DIR="${RESULTS_DIR}/${runKey}/server-logs/os-develop/telemetry"
+                                    TEL_DIR="${RESULTS_DIR}/${runKey}/server-logs/os-develop-jvector/telemetry"
                                     mkdir -p "\$TEL_DIR"
-                                    OS_HOST="opensearch-cluster.os-develop.svc.cluster.local:9200"
+                                    OS_HOST="opensearch-cluster.os-develop-jvector.svc.cluster.local:9200"
 
                                     for ENDPOINT_FILE in \
                                         "/_cluster/health?pretty          cluster-health.json" \
@@ -527,7 +527,7 @@ Date:      \$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
 Parameters:
   Pipeline:           ${pipeline}
-  Cluster:            os-develop (JVector)
+  Cluster:            os-develop-jvector
   API URL:            ${params.API_URL}
   Scale Clusters:     ${params.SCALE_CLUSTERS}
   Redeploy Clusters:  ${params.REDEPLOY_CLUSTERS}
@@ -602,8 +602,8 @@ EOF
                         kubectl scale deployment opensearch-benchmark-api-server \
                             --replicas=0 -n benchmark-api-develop || true
                     '''
-                    echo "Scaling down os-develop cluster..."
-                    sh "gke-manifest/scale-down-clusters.sh os-develop || true"
+                    echo "Scaling down os-develop-jvector cluster..."
+                    sh "gke-manifest/scale-down-clusters.sh os-develop-jvector || true"
                 }
 
                 sh """

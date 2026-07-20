@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: opensearch-data-config
-  namespace: os-jvector
+  namespace: os-develop-jvector
 data:
   opensearch.yml: |
     cluster.name: opensearch-cluster
@@ -11,11 +11,10 @@ data:
     node.roles: [data, ingest]
     
     discovery.seed_hosts:
-      - opensearch-cluster-manager-0.opensearch-cluster-manager.os-jvector.svc.cluster.local
-      - opensearch-data-0.opensearch-data.os-jvector.svc.cluster.local
-      - opensearch-data-1.opensearch-data.os-jvector.svc.cluster.local
-      - opensearch-data-2.opensearch-data.os-jvector.svc.cluster.local
-    
+      - opensearch-cluster-manager-0.opensearch-cluster-manager.os-develop-jvector.svc.cluster.local
+      - opensearch-data-0.opensearch-data.os-develop-jvector.svc.cluster.local
+      - opensearch-data-1.opensearch-data.os-develop-jvector.svc.cluster.local
+      - opensearch-data-2.opensearch-data.os-develop-jvector.svc.cluster.local
     
     discovery.seed_resolver.timeout: 10s
     discovery.seed_resolver.max_concurrent_resolvers: 3
@@ -64,7 +63,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-data
-  namespace: os-jvector
+  namespace: os-develop-jvector
   labels:
     app: opensearch-data
 spec:
@@ -83,7 +82,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-cluster
-  namespace: os-jvector
+  namespace: os-develop-jvector
   labels:
     app: opensearch-data
 spec:
@@ -99,7 +98,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: opensearch-data
-  namespace: os-jvector
+  namespace: os-develop-jvector
 spec:
   serviceName: opensearch-data
   replicas: 3
@@ -118,7 +117,6 @@ spec:
       
       affinity:
         podAntiAffinity:
-          # REQUIRED: Never schedule two data nodes on same physical node
           requiredDuringSchedulingIgnoredDuringExecution:
             - labelSelector:
                 matchExpressions:
@@ -127,8 +125,6 @@ spec:
                     values:
                       - opensearch-data
               topologyKey: kubernetes.io/hostname
-          
-          # PREFERRED: Avoid co-locating with metrics store
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:
@@ -160,12 +156,8 @@ spec:
               
               echo "Downloading and installing JVector Plugin..."
               curl -sL "https://repo1.maven.org/maven2/org/opensearch/plugin/opensearch-jvector-plugin/${JVECTOR_PLUGIN_VERSION}/opensearch-jvector-plugin-${JVECTOR_PLUGIN_VERSION}.zip" -o /tmp/jvector.zip
-              
-              # Remove conflicting plugins
               rm -rf /mnt/plugins/opensearch-neural-search
               rm -rf /mnt/plugins/opensearch-knn
-              
-              # Install JVector plugin
               mkdir -p /mnt/plugins/opensearch-jvector
               cd /mnt/plugins/opensearch-jvector
               jar xf /tmp/jvector.zip
@@ -173,7 +165,6 @@ spec:
 
               echo "Downloading and installing Prometheus Exporter..."
               curl -sL "https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/${PROMETHEUS_PLUGIN_VERSION}/prometheus-exporter-${PROMETHEUS_PLUGIN_VERSION}.zip" -o /tmp/prometheus-exporter.zip
-              
               mkdir -p /mnt/plugins/prometheus-exporter
               cd /mnt/plugins/prometheus-exporter
               jar xf /tmp/prometheus-exporter.zip
@@ -181,12 +172,10 @@ spec:
 
               echo "Downloading and installing Repository GCS Plugin..."
               curl -sL "https://artifacts.opensearch.org/releases/plugins/repository-gcs/${GCS_PLUGIN_VERSION}/repository-gcs-${GCS_PLUGIN_VERSION}.zip" -o /tmp/repository-gcs.zip
-              
               mkdir -p /mnt/plugins/repository-gcs
               cd /mnt/plugins/repository-gcs
               jar xf /tmp/repository-gcs.zip
               echo "Repository GCS plugin installed successfully!"
-              
           volumeMounts:
             - name: plugins
               mountPath: /mnt/plugins
@@ -198,20 +187,14 @@ spec:
             - -c
             - |
               set -e
-              echo "Installing async-profiler..."
-              
-              # Detect architecture
               ARCH=$(uname -m)
               if [ "$ARCH" = "x86_64" ]; then
                 PROFILER_ARCH="linux-x64"
               elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
                 PROFILER_ARCH="linux-arm64"
               else
-                echo "Unsupported architecture: $ARCH"
-                exit 1
+                echo "Unsupported architecture: $ARCH"; exit 1
               fi
-              
-              # Download and install async-profiler
               cd /tmp
               wget -q https://github.com/async-profiler/async-profiler/releases/download/v4.4/async-profiler-4.4-${PROFILER_ARCH}.tar.gz
               tar -xzf async-profiler-4.4-${PROFILER_ARCH}.tar.gz
@@ -233,10 +216,7 @@ spec:
             - -c
             - |
               set -ex
-              # Required for OpenSearch memory locking
               sysctl -w vm.max_map_count=262144
-              
-              # Required for async-profiler to read kernel space events without crashing
               sysctl -w kernel.perf_event_paranoid=1
           securityContext:
             privileged: true
@@ -253,12 +233,8 @@ spec:
           image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
           securityContext:
             capabilities:
-              drop:
-                - ALL
-              add:
-                - CHOWN
-                - SETGID
-                - SETUID
+              drop: [ALL]
+              add: [CHOWN, SETGID, SETUID]
             runAsUser: 1000
             runAsNonRoot: true
           env:
@@ -304,25 +280,19 @@ spec:
                 - sh
                 - -c
                 - |
-                  # Check the API endpoint. We don't care if it's green/yellow yet; 
-                  # we just need to know the HTTPS server is awake and accepting credentials.
                   curl --fail -s -k \
                     --cert /usr/share/opensearch/config/certs/admin.pem \
                     --key /usr/share/opensearch/config/certs/admin-key.pem \
                     https://localhost:9200/_cluster/health?local=true
-            # 30 tries * 10 seconds = Gives OpenSearch up to 5 full minutes to boot up completely
             failureThreshold: 30
             periodSeconds: 10
             timeoutSeconds: 5
-
           readinessProbe:
             exec:
               command:
                 - sh
                 - -c
                 - |
-                  # Check if OpenSearch is responding (don't check cluster status)
-                  # This allows StatefulSet to create subsequent pods even if cluster is red
                   curl --fail -s -k \
                     --cert /usr/share/opensearch/config/certs/admin.pem \
                     --key /usr/share/opensearch/config/certs/admin-key.pem \

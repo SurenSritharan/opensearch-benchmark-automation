@@ -285,7 +285,7 @@ class BenchmarkRunner:
                 sweep_results_dir.mkdir(parents=True, exist_ok=True)
                 
                 if enable_metrics:
-                    namespace = f"os-{engine}"
+                    namespace = f"os-develop-{engine}"
                     logger.info(f"📊 Initializing metrics collection for namespace: {namespace}")
                     try:
                         self.metrics_collector = K8sMetricsCollector(
