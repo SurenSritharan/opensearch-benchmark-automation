@@ -179,7 +179,7 @@ print(json.dumps(s))
                     def pipeline      = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
                     def pipelineJson  = readJSON file: "pipelines/${pipeline}.json"
                     def corpusSizeVal = pipelineJson.params?.corpus_size
-                    def corpusSizes   = corpusSizeVal ? [corpusSizeVal] : ['1m']
+                    def corpusSizes   = corpusSizeVal ? [corpusSizeVal] : ['1m', '5m']
                     def datasets      = (pipelineJson.steps ?: []).collect { it.dataset }.unique()
 
                     def filesToSeed = []
