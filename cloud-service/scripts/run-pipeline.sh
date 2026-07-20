@@ -195,10 +195,10 @@ PREV_FAILURES=""
 
 while true; do
   now="[$(date '+%Y-%m-%d %H:%M:%S')]"
-  resp=$(curl -s "${API_URL}/api/v1/benchmark/${JOB_ID}?engine=${ENGINE}")
+  resp=$(curl -s --max-time 30 "${API_URL}/api/v1/benchmark/${JOB_ID}?engine=${ENGINE}")
   if ! echo "$resp" | jq '.' > /dev/null 2>&1; then
-    echo "$now Waiting for job to appear..."
-    sleep 4
+    echo "$now  (waiting for job to appear or API busy — retrying...)"
+    sleep 6
     continue
   fi
 
