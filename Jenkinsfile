@@ -39,8 +39,8 @@ pipeline {
         )
         string(
             name: 'OPENSEARCH_VERSION',
-            defaultValue: '3.6.0',
-            description: 'OpenSearch version to deploy (used when REDEPLOY_CLUSTERS is true, or on first-time deploy). Use 3.5.0.2 for baseline, 3.6.0 for Derived Source, 3.8.0 for NVQ.'
+            defaultValue: '3.7.0',
+            description: 'OpenSearch version to deploy (used when REDEPLOY_CLUSTERS is true, or on first-time deploy). Use 3.5.0.2 for baseline, 3.6.0 for Derived Source, 3.7.0 for latest, 3.8.0 for NVQ.'
         )
         booleanParam(
             name: 'DELETE_PVCS',

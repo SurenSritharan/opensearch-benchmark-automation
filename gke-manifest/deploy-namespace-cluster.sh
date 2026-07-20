@@ -12,7 +12,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NAMESPACE=$1
-OPENSEARCH_VERSION="3.6.0"  # Default version
+OPENSEARCH_VERSION="3.7.0"  # Default version
 FORCE_FLAG=""
 DELETE_PVCS=false
 NODE_SIZE="small"
