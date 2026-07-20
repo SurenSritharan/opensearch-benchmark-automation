@@ -1,5 +1,5 @@
 pipeline {
-    // Develop branch pipeline — JVector only, os-develop-jvector cluster, develop worker.
+    // Develop branch pipeline — targets os-develop-<engine> clusters in benchmark-api-develop namespace.
     // This IS the primary Jenkinsfile on the develop branch.
     // The production multi-engine pipeline lives in Jenkinsfile.main (main branch).
     //
@@ -22,6 +22,11 @@ pipeline {
             defaultValue: '',
             description: 'Optional: name of any pipeline in pipelines/ (overrides the choice above).'
         )
+        choice(
+            name: 'ENGINE',
+            choices: ['jvector', 'faiss', 'lucene'],
+            description: 'Engine to benchmark against. Targets the os-develop-<engine> cluster.'
+        )
         string(
             name: 'API_URL',
             defaultValue: 'http://136.116.139.175',
@@ -30,12 +35,12 @@ pipeline {
         booleanParam(
             name: 'SCALE_CLUSTERS',
             defaultValue: true,
-            description: 'Scale up the os-develop-jvector cluster + develop worker before benchmarking and scale them down afterwards.'
+            description: 'Scale up the os-develop-<engine> cluster + develop worker before benchmarking and scale them down afterwards.'
         )
         booleanParam(
             name: 'REDEPLOY_CLUSTERS',
             defaultValue: false,
-            description: 'Re-deploy the os-develop-jvector cluster before benchmarking (applies OPENSEARCH_VERSION). Implies scale-up.'
+            description: 'Re-deploy the os-develop-<engine> cluster before benchmarking (applies OPENSEARCH_VERSION). Implies scale-up.'
         )
         string(
             name: 'OPENSEARCH_VERSION',
@@ -135,19 +140,19 @@ print(json.dumps(s))
                                 -n benchmark-api-develop --timeout=300s
                         '''
                     },
-                    'benchmark-worker-jvector': {
+                    "benchmark-worker-${params.ENGINE}": {
                         sh """
                             cat gke-manifest/opensearch-benchmark-worker-template.yaml | \
-                                sed 's/\\\${ENGINE}/jvector/g' | \
+                                sed 's/\\\${ENGINE}/${params.ENGINE}/g' | \
                                 kubectl apply -f -
-                            kubectl scale statefulset opensearch-benchmark-worker-jvector \
+                            kubectl scale statefulset opensearch-benchmark-worker-${params.ENGINE} \
                                 --replicas=0 -n benchmark-api-develop
                             kubectl wait --for=delete pod \
-                                -l app=opensearch-benchmark-develop,component=worker,engine=jvector \
+                                -l app=opensearch-benchmark-develop,component=worker,engine=${params.ENGINE} \
                                 -n benchmark-api-develop --timeout=120s || true
-                            kubectl scale statefulset opensearch-benchmark-worker-jvector \
+                            kubectl scale statefulset opensearch-benchmark-worker-${params.ENGINE} \
                                 --replicas=1 -n benchmark-api-develop
-                            kubectl rollout status statefulset/opensearch-benchmark-worker-jvector \
+                            kubectl rollout status statefulset/opensearch-benchmark-worker-${params.ENGINE} \
                                 -n benchmark-api-develop --timeout=1200s
                         """
                     }
@@ -158,13 +163,13 @@ print(json.dumps(s))
         // ── 4. Verify Health ───────────────────────────────────────────────────
         stage('Verify Health') {
             steps {
-                sh '''
-                    echo "=== os-develop-jvector cluster ==="
-                    kubectl get pods -n os-develop-jvector 2>/dev/null || echo "(not deployed)"
+                sh """
+                    echo "=== os-develop-${params.ENGINE} cluster ==="
+                    kubectl get pods -n os-develop-${params.ENGINE} 2>/dev/null || echo "(not deployed)"
                     echo ""
                     echo "=== Benchmark API develop (benchmark-api-develop namespace) ==="
                     kubectl get pods -n benchmark-api-develop
-                '''
+                """
                 sh """
                     curl -sf ${params.API_URL}/health || \
                         (echo "WARNING: API health check failed — service may still be starting" && true)
@@ -207,7 +212,7 @@ print(json.dumps(s))
                         echo "Seeding ${fileName} to develop worker..."
                         sh """
                             set -euo pipefail
-                            POD="opensearch-benchmark-worker-jvector-0"
+                            POD="opensearch-benchmark-worker-${params.ENGINE}-0"
 
                             if kubectl exec -n benchmark-api-develop \$POD -- test -f '${targetPath}' 2>/dev/null; then
                                 echo "[develop] ${fileName} already present — skipping"
