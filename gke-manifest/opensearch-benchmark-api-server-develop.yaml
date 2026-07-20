@@ -99,6 +99,8 @@ spec:
           value: "/app"
         - name: RESULTS_DIR
           value: "/data/results"
+        - name: WORKER_URL_TEMPLATE
+          value: "http://opensearch-benchmark-worker-{engine}-0.opensearch-benchmark-worker-{engine}.benchmark-api-develop.svc.cluster.local:8080"
         
         resources:
           requests:
