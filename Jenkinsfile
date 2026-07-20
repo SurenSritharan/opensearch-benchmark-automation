@@ -97,6 +97,23 @@ pipeline {
                 expression { params.SCALE_CLUSTERS }
             }
             steps {
+                // Ensure opensearch-shared-certs exists in benchmark-api-develop
+                // before any pods start. Copy from benchmark-api where it already lives.
+                sh '''
+                    if ! kubectl get secret opensearch-shared-certs -n benchmark-api-develop &>/dev/null; then
+                        echo "Copying opensearch-shared-certs into benchmark-api-develop..."
+                        kubectl get secret opensearch-shared-certs -n benchmark-api -o json | \
+                            python3 -c "
+import sys, json
+s = json.load(sys.stdin)
+s['metadata'] = {'name': s['metadata']['name'], 'namespace': 'benchmark-api-develop'}
+print(json.dumps(s))
+" | kubectl apply -f -
+                        echo "✅ Certs available in benchmark-api-develop"
+                    else
+                        echo "✅ opensearch-shared-certs already present in benchmark-api-develop"
+                    fi
+                '''
                 parallel(
                     'benchmark-api-server-develop': {
                         sh '''
