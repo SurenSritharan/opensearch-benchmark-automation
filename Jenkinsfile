@@ -91,14 +91,13 @@ pipeline {
             }
         }
 
-        // ── 2. Prepare Worker ──────────────────────────────────────────────────
-        stage('Prepare Worker') {
+        // ── 2a. Seed Certs ─────────────────────────────────────────────────────
+        //     Must complete before worker pods start — they mount this secret.
+        stage('Copy Certs') {
             when {
                 expression { params.SCALE_CLUSTERS }
             }
             steps {
-                // Ensure opensearch-shared-certs exists in benchmark-api-develop
-                // before any pods start. Copy from benchmark-api where it already lives.
                 sh '''
                     if ! kubectl get secret opensearch-shared-certs -n benchmark-api-develop &>/dev/null; then
                         echo "Copying opensearch-shared-certs into benchmark-api-develop..."
@@ -114,6 +113,15 @@ print(json.dumps(s))
                         echo "✅ opensearch-shared-certs already present in benchmark-api-develop"
                     fi
                 '''
+            }
+        }
+
+        // ── 3. Prepare Worker ─────────────────────────────────────────────────
+        stage('Prepare Worker') {
+            when {
+                expression { params.SCALE_CLUSTERS }
+            }
+            steps {
                 parallel(
                     'benchmark-api-server-develop': {
                         sh '''
@@ -150,7 +158,7 @@ print(json.dumps(s))
             }
         }
 
-        // ── 3. Verify Health ───────────────────────────────────────────────────
+        // ── 4. Verify Health ───────────────────────────────────────────────────
         stage('Verify Health') {
             steps {
                 sh '''
@@ -167,7 +175,7 @@ print(json.dumps(s))
             }
         }
 
-        // ── 4. Seed Dataset Cache ──────────────────────────────────────────────
+        // ── 5. Seed Dataset Cache ──────────────────────────────────────────────
         stage('Seed Dataset Cache') {
             steps {
                 script {
@@ -220,7 +228,7 @@ print(json.dumps(s))
             }
         }
 
-        // ── 5. Per-Run (version × node_size) ──────────────────────────────────
+        // ── 6. Per-Run (version × node_size) ──────────────────────────────────
         //    Loops over every (version, nodeSize) combination declared in the
         //    pipeline JSON — same pattern as the main Jenkinsfile.
         //    Single-version / single-size pipelines produce one iteration.
@@ -502,7 +510,7 @@ print(json.dumps(s))
             }
         }
 
-        // ── 8. Build Summary ───────────────────────────────────────────────────
+        // ── 7. Build Summary ───────────────────────────────────────────────────
         stage('Build Summary') {
             steps {
                 script {
@@ -553,7 +561,7 @@ EOF
             }
         }
 
-        // ── 9. Archive ─────────────────────────────────────────────────────────
+        // ── 8. Archive ─────────────────────────────────────────────────────────
         stage('Archive Results') {
             steps {
                 archiveArtifacts artifacts: "${RESULTS_DIR}/**/*",
