@@ -24,7 +24,7 @@ pipeline {
         )
         string(
             name: 'API_URL',
-            defaultValue: 'http://136.116.200.202',
+            defaultValue: 'http://136.116.139.175',
             description: 'Base URL of the develop benchmark cloud service API.'
         )
         booleanParam(
