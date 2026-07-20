@@ -463,7 +463,8 @@ class BenchmarkRunner:
                     })
                     continue
 
-                self._download_artifacts(result.stdout, sweep_results_dir)
+                self._download_artifacts(result.stdout, sweep_results_dir,
+                                         stderr=result.stderr)
                 
                 # Check explicitly if it was killed by us (SIGKILL / exit code -9)
                 is_cancelled = (cancel_event and cancel_event.is_set()) or result.returncode == -9
@@ -587,10 +588,15 @@ class BenchmarkRunner:
         except Exception as e:
             logger.warning(f"Could not clear benchmark.log: {e}")
     
-    def _download_artifacts(self, console_output: str, target_dir: Path):
+    def _download_artifacts(self, console_output: str, target_dir: Path,
+                            stderr: str = ''):
         """
         Download benchmark artifacts from opensearch-benchmark home directory.
         Extracts test_run.json and benchmark.log from the benchmark execution.
+
+        If the OSB benchmark.log is empty (e.g. OSB crashed before writing
+        anything), falls back to writing stdout+stderr so the UI always has
+        something to show.
         """
         import re
         
@@ -621,17 +627,29 @@ class BenchmarkRunner:
         
         # Download the benchmark log
         log_path = f"{BENCHMARK_HOME}/.osb/logs/benchmark.log"
+        log_content = ''
         try:
             with open(log_path, 'r') as f:
                 log_content = f.read()
-            
-            (target_dir / "benchmark.log").write_text(log_content, encoding="utf-8")
             logger.info(f"Downloaded benchmark.log")
         except FileNotFoundError:
             logger.warning(f"benchmark.log not found at {log_path}")
         except Exception as e:
             logger.error(f"Error downloading benchmark.log: {e}")
 
-# Made with Bob
+        # If the OSB log is empty (fast crash / pre-launch failure), fall back
+        # to the process stdout+stderr so there is always something in the UI.
+        if not log_content.strip():
+            fallback_parts = []
+            if console_output and console_output.strip():
+                fallback_parts.append("=== stdout ===\n" + console_output)
+            if stderr and stderr.strip():
+                fallback_parts.append("=== stderr ===\n" + stderr)
+            if fallback_parts:
+                log_content = '\n'.join(fallback_parts)
+                logger.info("benchmark.log was empty — writing stdout/stderr fallback")
 
-    
+        if log_content:
+            (target_dir / "benchmark.log").write_text(log_content, encoding="utf-8")
+
+# Made with Bob
