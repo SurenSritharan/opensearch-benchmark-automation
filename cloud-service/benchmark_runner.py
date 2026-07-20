@@ -548,29 +548,37 @@ class BenchmarkRunner:
         
         return None  # Valid — filesystem checks happen at execution time on the worker
     
-    def _check_cluster_health(self, target_host: str) -> bool:
-        """Check if OpenSearch cluster is healthy and ready"""
-        try:
-            url = f"https://{target_host}/_cluster/health"
-            response = requests.get(
-                url,
-                auth=HTTPBasicAuth('admin', 'admin'),
-                verify=False,
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                health = response.json()
-                status = health.get('status')
-                logger.info(f"Cluster status: {status}, nodes: {health.get('number_of_nodes')}")
-                return status in ['green', 'yellow']
-            else:
-                logger.error(f"Cluster health check failed: HTTP {response.status_code}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Error checking cluster health: {e}")
-            return False
+    def _check_cluster_health(self, target_host: str, retries: int = 6, retry_delay: int = 10) -> bool:
+        """Check if OpenSearch cluster is healthy and ready.
+
+        Retries up to `retries` times with `retry_delay` seconds between
+        attempts so a transiently red/initializing cluster (e.g. just after
+        scale-up) doesn't immediately fail all scenarios.
+        """
+        url = f"https://{target_host}/_cluster/health"
+        for attempt in range(1, retries + 1):
+            try:
+                response = requests.get(
+                    url,
+                    auth=HTTPBasicAuth('admin', 'admin'),
+                    verify=False,
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    health = response.json()
+                    status = health.get('status')
+                    logger.info(f"Cluster health (attempt {attempt}/{retries}): {status}, nodes: {health.get('number_of_nodes')}")
+                    if status in ['green', 'yellow']:
+                        return True
+                    logger.warning(f"Cluster status is '{status}' — waiting {retry_delay}s before retry")
+                else:
+                    logger.warning(f"Cluster health check HTTP {response.status_code} (attempt {attempt}/{retries}) — waiting {retry_delay}s")
+            except Exception as e:
+                logger.warning(f"Cluster health check error (attempt {attempt}/{retries}): {e} — waiting {retry_delay}s")
+            if attempt < retries:
+                time.sleep(retry_delay)
+        logger.error(f"Cluster {target_host} not healthy after {retries} attempts")
+        return False
     
     def _clear_benchmark_logs(self):
         """Clear the benchmark.log file before starting a new benchmark run."""
