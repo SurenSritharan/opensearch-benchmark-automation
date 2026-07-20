@@ -62,11 +62,11 @@ pipeline {
         WORKER_NS      = "benchmark-api-develop"
     }
 
-    triggers {
-        // No automatic cron — interns trigger manually or on a schedule they define.
-        // Uncomment and adjust to enable a cadence:
-        // cron('0 8 * * 1')  // weekly on Monday at 08:00 UTC
-    }
+    // triggers {
+    //     // No automatic cron — interns trigger manually or on a schedule they define.
+    //     // Uncomment and adjust to enable a cadence:
+    //     cron('0 8 * * *')  
+    // }
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
