@@ -87,9 +87,12 @@ echo "OpenSearch Version: $OPENSEARCH_VERSION"
 echo "Node Size:         $NODE_SIZE  (cpu: $NODE_CPU_REQ/$NODE_CPU_LIM  mem: $NODE_MEM  heap: $NODE_HEAP)"
 echo "=========================================="
 
-# Create namespace if it doesn't exist
-echo "Creating namespace $NAMESPACE..."
-kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+# Create namespace if it doesn't exist.
+# This is a best-effort step — in CI the namespace is pre-created by jenkins-agent-rbac.yaml
+# and the Jenkins SA lacks cluster-level namespace permissions, so we tolerate the error.
+echo "Ensuring namespace $NAMESPACE exists..."
+kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null || \
+    kubectl get namespace $NAMESPACE > /dev/null
 
 # Clean up existing resources for fresh deployment
 echo ""
