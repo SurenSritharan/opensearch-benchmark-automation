@@ -74,8 +74,8 @@ case "$NODE_SIZE" in
 esac
 
 # Validate namespace
-if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene)$ ]]; then
-    echo "Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene"
+if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene|os-develop)$ ]]; then
+    echo "Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, os-develop"
     exit 1
 fi
 
@@ -190,12 +190,23 @@ else
 fi
 
 # Deploy based on namespace type
-if [ "$NAMESPACE" == "os-jvector" ]; then
-    echo ""
-    echo "Deploying JVector cluster (with custom plugin)..."
+if [ "$NAMESPACE" == "os-jvector" ] || [ "$NAMESPACE" == "os-develop" ]; then
+    # Determine which manifest set to use
+    if [ "$NAMESPACE" == "os-develop" ]; then
+        MANAGER_MANIFEST="$SCRIPT_DIR/opensearch-develop-cluster-manager.yaml"
+        DATA_MANIFEST="$SCRIPT_DIR/opensearch-develop-data-nodes.yaml"
+        echo ""
+        echo "Deploying JVector develop cluster..."
+    else
+        MANAGER_MANIFEST="$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml"
+        DATA_MANIFEST="$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml"
+        echo ""
+        echo "Deploying JVector cluster (with custom plugin)..."
+    fi
+
     echo "1. Deploying cluster manager..."
     sed -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
-        "$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml" | kubectl apply -n $NAMESPACE -f -
+        "$MANAGER_MANIFEST" | kubectl apply -n $NAMESPACE -f -
     
     echo "2. Waiting for cluster manager to be ready..."
     kubectl wait --for=condition=ready pod -l app=opensearch-cluster-manager -n $NAMESPACE --timeout=300s || true
@@ -206,7 +217,7 @@ if [ "$NAMESPACE" == "os-jvector" ]; then
         -e "s/\${NODE_CPU_LIM}/$NODE_CPU_LIM/g" \
         -e "s/\${NODE_MEM}/$NODE_MEM/g" \
         -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
-        "$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml" | kubectl apply -n $NAMESPACE -f -
+        "$DATA_MANIFEST" | kubectl apply -n $NAMESPACE -f -
     
 else
     # For os-faiss and os-lucene, use the standard manifests

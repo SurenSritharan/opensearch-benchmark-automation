@@ -61,12 +61,6 @@ scale_down_namespace() {
         kubectl scale statefulset opensearch-cluster-manager --replicas=0 -n $ns
     fi
     
-    # Scale down benchmark client
-    if kubectl get statefulset opensearch-benchmark-client -n $ns &> /dev/null; then
-        echo "  📉 Scaling down opensearch-benchmark-client..."
-        kubectl scale statefulset opensearch-benchmark-client --replicas=0 -n $ns
-    fi
-    
     # Wait for pods to terminate
     echo ""
     echo "Waiting for pods to terminate..."
@@ -112,14 +106,14 @@ if [ "$NAMESPACE" == "all" ]; then
     echo "Scaling down all OpenSearch clusters..."
     echo ""
     
-    for ns in os-jvector os-faiss os-lucene; do
+    for ns in os-jvector os-faiss os-lucene os-develop; do
         scale_down_namespace $ns
     done
     
 else
     # Validate namespace
-    if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene)$ ]]; then
-        echo -e "${RED}❌ Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, all${NC}"
+    if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene|os-develop)$ ]]; then
+        echo -e "${RED}❌ Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, os-develop, all${NC}"
         exit 1
     fi
     

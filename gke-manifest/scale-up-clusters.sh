@@ -83,14 +83,14 @@ if [ "$NAMESPACE" == "all" ]; then
     echo "Scaling up all OpenSearch clusters..."
     echo ""
     
-    for ns in os-jvector os-faiss os-lucene; do
+    for ns in os-jvector os-faiss os-lucene os-develop; do
         scale_up_namespace $ns
     done
     
 else
     # Validate namespace
-    if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene)$ ]]; then
-        echo -e "${RED}❌ Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, all${NC}"
+    if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene|os-develop)$ ]]; then
+        echo -e "${RED}❌ Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, os-develop, all${NC}"
         exit 1
     fi
     
@@ -107,9 +107,6 @@ echo "   kubectl get pods -n $NAMESPACE -w"
 echo ""
 echo "💡 Check cluster health:"
 echo "   kubectl exec -n $NAMESPACE opensearch-data-0 -- curl -k -u admin:admin https://localhost:9200/_cluster/health?pretty"
-echo ""
-echo "💡 Access benchmark client:"
-echo "   kubectl exec -it -n $NAMESPACE opensearch-benchmark-client-0 -- bash"
 echo ""
 echo "💡 To scale back down when done:"
 echo "   ./scale-down-clusters.sh $NAMESPACE"

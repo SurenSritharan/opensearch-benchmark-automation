@@ -62,4 +62,22 @@ spec:
     requests:
       storage: 400Gi
 
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: benchmark-worker-storage-develop
+  namespace: benchmark-api-develop
+  labels:
+    app: opensearch-benchmark-develop
+    component: worker
+    engine: develop
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-rwo
+  resources:
+    requests:
+      storage: 400Gi
+
 # Made with Bob
