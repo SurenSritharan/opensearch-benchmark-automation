@@ -1,0 +1,143 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: benchmark-api-develop
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: benchmark-api-develop
+  namespace: benchmark-api-develop
+  labels:
+    app: opensearch-benchmark-develop
+    component: api-server
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: opensearch-benchmark-develop
+    component: api-server
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: benchmark-api-db-storage
+  namespace: benchmark-api-develop
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: premium-rwo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-benchmark-api-server
+  namespace: benchmark-api-develop
+  labels:
+    app: opensearch-benchmark-develop
+    component: api-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opensearch-benchmark-develop
+      component: api-server
+  template:
+    metadata:
+      labels:
+        app: opensearch-benchmark-develop
+        component: api-server
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: client-pool
+      
+      containers:
+      - name: api-server
+        image: python:3.11-slim
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -e
+            echo "Installing dependencies..."
+            apt-get update -y -qq
+            apt-get install -y -qq git curl wget vim gcc python3-dev jq tini
+            
+            echo "Installing Python packages..."
+            pip install --quiet flask flask-cors pyyaml gunicorn filelock
+            
+            echo "Setting up directories..."
+            mkdir -p /app/web
+
+            echo "Cloning benchmark automation project (develop branch)..."
+            git clone --depth 1 --branch develop https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
+            cp /workspace-tmp/cloud-service/*.py /app/
+            cp -r /workspace-tmp/cloud-service/web /app/
+            cp /workspace-tmp/cloud-service/requirements.txt /app/ 2>/dev/null || true
+            cp -r /workspace-tmp/config /app/config
+            rm -rf /workspace-tmp
+            
+            if [ -f "/app/requirements.txt" ]; then
+              echo "Installing cloud-service requirements..."
+              pip install --quiet -r /app/requirements.txt
+            fi
+            
+            echo "Starting develop API server..."
+            cd /app
+            exec /usr/bin/tini -- gunicorn --bind 0.0.0.0:8080 --workers 2 --threads 4 --timeout 300 --access-logfile - app:app
+        
+        env:
+        - name: WORKER_ENGINES
+          value: "none"  # API server only - don't process any jobs
+        - name: WORKER_MODE
+          value: "api-only"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: DB_PATH
+          value: "/data/jobs.db"
+        - name: WORKSPACE_DIR
+          value: "/app"
+        - name: RESULTS_DIR
+          value: "/data/results"
+        
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2"
+          limits:
+            memory: "8Gi"
+            cpu: "4"
+        
+        volumeMounts:
+        - name: db-storage
+          mountPath: /data
+
+        ports:
+        - containerPort: 8080
+          name: http
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      
+      volumes:
+      - name: db-storage
+        persistentVolumeClaim:
+          claimName: benchmark-api-db-storage
+
+# Made with Bob

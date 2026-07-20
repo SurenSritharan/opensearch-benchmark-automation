@@ -1,0 +1,192 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-benchmark-worker-${ENGINE}
+  namespace: benchmark-api-develop
+  labels:
+    app: opensearch-benchmark-develop
+    component: worker
+    engine: ${ENGINE}
+spec:
+  clusterIP: None
+  selector:
+    app: opensearch-benchmark-develop
+    component: worker
+    engine: ${ENGINE}
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: opensearch-benchmark-worker-${ENGINE}
+  namespace: benchmark-api-develop
+  labels:
+    app: opensearch-benchmark-develop
+    component: worker
+    engine: ${ENGINE}
+spec:
+  serviceName: "opensearch-benchmark-worker-${ENGINE}"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opensearch-benchmark-develop
+      component: worker
+      engine: ${ENGINE}
+  template:
+    metadata:
+      labels:
+        app: opensearch-benchmark-develop
+        component: worker
+        engine: ${ENGINE}
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: client-pool
+      
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: component
+                operator: In
+                values:
+                - worker
+            topologyKey: kubernetes.io/hostname
+      
+      initContainers:
+      - name: init-dirs
+        image: busybox:1.36
+        command:
+          - sh
+          - -c
+          - |
+            mkdir -p /data/datasets /data/results /data/workspace
+        volumeMounts:
+        - name: worker-storage
+          mountPath: /data
+
+      containers:
+      - name: worker
+        image: python:3.11-slim
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            set -e
+            echo "Installing dependencies..."
+            apt-get update -y -qq
+            apt-get install -y -qq git curl wget vim libhdf5-dev gcc python3-dev jq nmon procps tini apt-transport-https ca-certificates gnupg
+            
+            echo "Installing Google Cloud CLI..."
+            mkdir -p /etc/apt/keyrings
+            curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /etc/apt/keyrings/google-cloud-cli.gpg
+            echo "deb [signed-by=/etc/apt/keyrings/google-cloud-cli.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-cli.list
+            apt-get update -y -qq
+            apt-get install -y -qq google-cloud-cli
+            
+            echo "Installing Python packages..."
+            pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn filelock
+            
+            echo "Setting up directories..."
+            mkdir -p /datasets/opensearch-benchmark /results /opt/benchmark-src /app
+            
+            echo "Cloning OpenSearch Benchmark..."
+            git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark /opt/benchmark-src
+            cd /opt/benchmark-src
+            pip install -e .
+            
+            echo "Cloning workloads..."
+            if [ ! -d "/datasets/opensearch-benchmark-workloads/.git" ]; then
+              git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-workloads.git /datasets/opensearch-benchmark-workloads
+            else
+              cd /datasets/opensearch-benchmark-workloads
+              git pull origin main || echo "Git pull failed, using existing version"
+            fi
+            
+            echo "Setting up workspace (develop branch)..."
+            if [ ! -d "/workspace/.git" ]; then
+              echo "Cloning benchmark automation project (develop branch, first time)..."
+              git clone --depth 1 --branch develop https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
+              cp -r /workspace-tmp/* /workspace/ 2>/dev/null || true
+              cp -r /workspace-tmp/.git /workspace/ 2>/dev/null || true
+              rm -rf /workspace-tmp
+            else
+              echo "Workspace already exists, pulling latest develop changes..."
+              cd /workspace
+              git pull origin develop || echo "Git pull failed, using existing version"
+            fi
+            
+            echo "Setting up worker service..."
+            cp /workspace/cloud-service/*.py /app/
+            
+            if [ -f "/workspace/cloud-service/requirements.txt" ]; then
+              echo "Installing cloud-service requirements..."
+              pip install --quiet -r /workspace/cloud-service/requirements.txt
+            fi
+            
+            echo "Starting ${ENGINE} worker..."
+            cd /app
+            exec /usr/bin/tini -- gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 2 --timeout 7200 --access-logfile - app:app
+        
+        env:
+        - name: WORKER_ENGINES
+          value: "${ENGINE}"
+        - name: WORKER_MODE
+          value: "combined"
+        - name: BENCHMARK_HOME
+          value: "/datasets/opensearch-benchmark"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        
+        resources:
+          requests:
+            memory: "48Gi"
+            cpu: "12"
+          limits:
+            memory: "48Gi"
+            cpu: "16"
+        
+        volumeMounts:
+        - name: worker-storage
+          mountPath: /datasets
+          subPath: datasets
+        - name: worker-storage
+          mountPath: /results
+          subPath: results
+        - name: worker-storage
+          mountPath: /workspace
+          subPath: workspace
+        - name: certs
+          mountPath: /certs
+          readOnly: true
+        
+        ports:
+        - containerPort: 8080
+          name: http
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 60
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 30
+      
+      volumes:
+      - name: worker-storage
+        persistentVolumeClaim:
+          claimName: benchmark-worker-storage-${ENGINE}
+      - name: certs
+        secret:
+          secretName: opensearch-shared-certs
+          defaultMode: 0644
+
+# Made with Bob
