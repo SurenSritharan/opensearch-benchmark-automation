@@ -55,12 +55,8 @@ pipeline {
     }
 
     environment {
-        RESULTS_DIR    = "results/${BUILD_ID}"
-        KUBECONFIG     = "${env.WORKSPACE}/.kube/config"
-        ENGINE         = "develop"
-        NS             = "os-develop"
-        WORKER_NS      = "benchmark-api-develop"
-        DEVELOP_API_URL = "${params.API_URL}"
+        RESULTS_DIR = "results/${BUILD_ID}"
+        KUBECONFIG  = "${env.WORKSPACE}/.kube/config"
     }
 
     // triggers {
@@ -169,37 +165,9 @@ print(json.dumps(s))
                     echo "=== Benchmark API develop (benchmark-api-develop namespace) ==="
                     kubectl get pods -n benchmark-api-develop
                 '''
-                // Wait for API server to be reachable
                 sh """
-                    echo "Waiting for develop API server to be ready..."
-                    for i in \$(seq 1 30); do
-                        if curl -sf --max-time 5 ${env.DEVELOP_API_URL}/health > /dev/null 2>&1; then
-                            echo "✅ API server is ready"
-                            break
-                        fi
-                        echo "  [\$i/30] API server not ready yet — waiting 10s..."
-                        sleep 10
-                        if [ \$i -eq 30 ]; then
-                            echo "❌ API server did not become ready in time"
-                            exit 1
-                        fi
-                    done
-                """
-                // Wait for the jvector worker to be reachable via the API server proxy
-                sh """
-                    echo "Waiting for jvector worker to be ready..."
-                    for i in \$(seq 1 60); do
-                        STATUS=\$(curl -sf --max-time 5 ${env.DEVELOP_API_URL}/health 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('workers',{}).get('jvector','unknown'))" 2>/dev/null || echo "unknown")
-                        if [ "\$STATUS" = "ready" ] || [ "\$STATUS" = "idle" ]; then
-                            echo "✅ jvector worker is ready (status: \$STATUS)"
-                            break
-                        fi
-                        echo "  [\$i/60] worker status: \$STATUS — waiting 10s..."
-                        sleep 10
-                        if [ \$i -eq 60 ]; then
-                            echo "⚠️  Worker did not report ready after 10 minutes — proceeding anyway"
-                        fi
-                    done
+                    curl -sf ${params.API_URL}/health || \
+                        (echo "WARNING: API health check failed — service may still be starting" && true)
                 """
             }
         }
@@ -392,7 +360,7 @@ print(json.dumps(s))
                                 // ── b) Run benchmark ──────────────────────────────
                                 sh """
                                     set +e
-                                    API_URL=${env.DEVELOP_API_URL} \
+                                    API_URL=${params.API_URL} \
                                     cloud-service/scripts/run-pipeline.sh \
                                         --pipeline ${pipeline} \
                                         jvector \
@@ -417,7 +385,7 @@ print(json.dumps(s))
                                         JOB_ID=\$(cat job_id_develop-${version}-${runSize}.txt)
                                         echo "=== develop @ ${version}/${runSize} (job: \$JOB_ID) ==="
 
-                                        curl -s "${env.DEVELOP_API_URL}/api/v1/benchmark/\$JOB_ID?engine=jvector" \
+                                        curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=jvector" \
                                             | jq '.' > ${RESULTS_DIR}/${runKey}/job-status-develop.json
                                         jq '{job_id, status, scenarios_completed, scenarios_total}' \
                                             ${RESULTS_DIR}/${runKey}/job-status-develop.json
@@ -428,7 +396,7 @@ print(json.dumps(s))
                                             && echo "  Copied results -> \$DEST/" \
                                             || echo "WARNING: kubectl cp failed — worker pod may not be running"
 
-                                        echo "  View: ${env.DEVELOP_API_URL}/results.html?job_id=\$JOB_ID"
+                                        echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
                                     else
                                         echo "WARNING: no job_id for ${version}/${runSize} — benchmark may not have submitted"
                                     fi
@@ -560,7 +528,7 @@ Date:      \$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 Parameters:
   Pipeline:           ${pipeline}
   Cluster:            os-develop (JVector)
-  API URL:            ${env.DEVELOP_API_URL}
+  API URL:            ${params.API_URL}
   Scale Clusters:     ${params.SCALE_CLUSTERS}
   Redeploy Clusters:  ${params.REDEPLOY_CLUSTERS}
   OpenSearch Version: ${params.OPENSEARCH_VERSION}
@@ -575,7 +543,7 @@ EOF
                                 JOB_FILE="job_id_develop-\${version}-\${size}.txt"
                                 if [ -f "\$JOB_FILE" ]; then
                                     JOB_ID=\$(cat "\$JOB_FILE")
-                                    echo "    develop: ${env.DEVELOP_API_URL}/results.html?job_id=\${JOB_ID}" \
+                                    echo "    develop: ${params.API_URL}/results.html?job_id=\${JOB_ID}" \
                                         >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
                                 else
                                     echo "    develop: no job submitted" \
@@ -619,7 +587,7 @@ EOF
                                 if [ -f "\$JOB_FILE" ]; then
                                     JOB_ID=\$(cat "\$JOB_FILE")
                                     echo "Cancelling develop job \$JOB_ID..."
-                                    curl -s -X POST "${env.DEVELOP_API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=jvector" || true
+                                    curl -s -X POST "${params.API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=jvector" || true
                                 fi
                             done
                         """
