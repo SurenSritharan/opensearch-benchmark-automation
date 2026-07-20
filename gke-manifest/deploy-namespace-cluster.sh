@@ -74,8 +74,8 @@ case "$NODE_SIZE" in
 esac
 
 # Validate namespace
-if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene|os-develop)$ ]]; then
-    echo "Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, os-develop"
+if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene|os-develop-jvector|os-develop-faiss|os-develop-lucene)$ ]]; then
+    echo "Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, os-develop-jvector, os-develop-faiss, os-develop-lucene"
     exit 1
 fi
 
@@ -88,11 +88,12 @@ echo "Node Size:         $NODE_SIZE  (cpu: $NODE_CPU_REQ/$NODE_CPU_LIM  mem: $NO
 echo "=========================================="
 
 # Create namespace if it doesn't exist.
-# This is a best-effort step — in CI the namespace is pre-created by jenkins-agent-rbac.yaml
-# and the Jenkins SA lacks cluster-level namespace permissions, so we tolerate the error.
+# In CI the namespace is pre-created by jenkins-agent-rbac.yaml and the Jenkins SA lacks
+# cluster-level namespace permissions — so only attempt creation if the namespace is absent.
 echo "Ensuring namespace $NAMESPACE exists..."
-kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null || \
-    kubectl get namespace $NAMESPACE > /dev/null
+if ! kubectl get namespace $NAMESPACE &>/dev/null; then
+    kubectl create namespace $NAMESPACE
+fi
 
 # Clean up existing resources for fresh deployment
 echo ""
@@ -193,27 +194,20 @@ else
 fi
 
 # Deploy based on namespace type
-if [ "$NAMESPACE" == "os-jvector" ] || [ "$NAMESPACE" == "os-develop" ]; then
-    # Determine which manifest set to use
-    if [ "$NAMESPACE" == "os-develop" ]; then
-        MANAGER_MANIFEST="$SCRIPT_DIR/opensearch-develop-cluster-manager.yaml"
-        DATA_MANIFEST="$SCRIPT_DIR/opensearch-develop-data-nodes.yaml"
-        echo ""
-        echo "Deploying JVector develop cluster..."
-    else
-        MANAGER_MANIFEST="$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml"
-        DATA_MANIFEST="$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml"
-        echo ""
-        echo "Deploying JVector cluster (with custom plugin)..."
-    fi
+if [[ "$NAMESPACE" =~ ^os-develop- ]]; then
+    # develop-* namespaces use the jvector manifests (jvector develop build)
+    MANAGER_MANIFEST="$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml"
+    DATA_MANIFEST="$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml"
+    echo ""
+    echo "Deploying JVector develop cluster..."
 
     echo "1. Deploying cluster manager..."
     sed -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
         "$MANAGER_MANIFEST" | kubectl apply -n $NAMESPACE -f -
-    
+
     echo "2. Waiting for cluster manager to be ready..."
     kubectl wait --for=condition=ready pod -l app=opensearch-cluster-manager -n $NAMESPACE --timeout=300s || true
-    
+
     echo "3. Deploying data nodes..."
     sed -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
         -e "s/\${NODE_CPU_REQ}/$NODE_CPU_REQ/g" \
@@ -221,20 +215,42 @@ if [ "$NAMESPACE" == "os-jvector" ] || [ "$NAMESPACE" == "os-develop" ]; then
         -e "s/\${NODE_MEM}/$NODE_MEM/g" \
         -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
         "$DATA_MANIFEST" | kubectl apply -n $NAMESPACE -f -
-    
+
+elif [ "$NAMESPACE" == "os-jvector" ]; then
+    MANAGER_MANIFEST="$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml"
+    DATA_MANIFEST="$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml"
+    # NOTE: this branch targets the main-branch os-jvector namespace (not used on develop)
+    echo ""
+    echo "Deploying JVector cluster (with custom plugin)..."
+
+    echo "1. Deploying cluster manager..."
+    sed -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+        "$MANAGER_MANIFEST" | kubectl apply -n $NAMESPACE -f -
+
+    echo "2. Waiting for cluster manager to be ready..."
+    kubectl wait --for=condition=ready pod -l app=opensearch-cluster-manager -n $NAMESPACE --timeout=300s || true
+
+    echo "3. Deploying data nodes..."
+    sed -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+        -e "s/\${NODE_CPU_REQ}/$NODE_CPU_REQ/g" \
+        -e "s/\${NODE_CPU_LIM}/$NODE_CPU_LIM/g" \
+        -e "s/\${NODE_MEM}/$NODE_MEM/g" \
+        -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
+        "$DATA_MANIFEST" | kubectl apply -n $NAMESPACE -f -
+
 else
     # For os-faiss and os-lucene, use the standard manifests
     echo ""
     echo "Deploying standard OpenSearch cluster (FAISS/Lucene)..."
-    
+
     echo "1. Deploying cluster manager..."
     sed -e "s/\${NAMESPACE}/$NAMESPACE/g" \
         -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
         "$SCRIPT_DIR/opensearch-standard-cluster-manager.yaml" | kubectl apply -n $NAMESPACE -f -
-    
+
     echo "2. Waiting for cluster manager to be ready..."
     kubectl wait --for=condition=ready pod -l app=opensearch-cluster-manager -n $NAMESPACE --timeout=300s || true
-    
+
     echo "3. Deploying data nodes..."
     sed -e "s/\${NAMESPACE}/$NAMESPACE/g" \
         -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
