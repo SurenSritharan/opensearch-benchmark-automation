@@ -367,7 +367,7 @@ print(json.dumps(s))
                                     API_URL=${env.DEVELOP_API_URL} \
                                     cloud-service/scripts/run-pipeline.sh \
                                         --pipeline ${pipeline} \
-                                        develop \
+                                        jvector \
                                         2>&1 | tee benchmark-run-develop-${version}-${runSize}.log
                                     PIPE_RC=\${PIPESTATUS[0]}
 
@@ -389,14 +389,14 @@ print(json.dumps(s))
                                         JOB_ID=\$(cat job_id_develop-${version}-${runSize}.txt)
                                         echo "=== develop @ ${version}/${runSize} (job: \$JOB_ID) ==="
 
-                                        curl -s "${env.DEVELOP_API_URL}/api/v1/benchmark/\$JOB_ID?engine=develop" \
+                                        curl -s "${env.DEVELOP_API_URL}/api/v1/benchmark/\$JOB_ID?engine=jvector" \
                                             | jq '.' > ${RESULTS_DIR}/${runKey}/job-status-develop.json
                                         jq '{job_id, status, scenarios_completed, scenarios_total}' \
                                             ${RESULTS_DIR}/${runKey}/job-status-develop.json
 
                                         DEST="${RESULTS_DIR}/${runKey}/test-runs/develop"
                                         mkdir -p "\$DEST"
-                                        kubectl cp benchmark-api-develop/opensearch-benchmark-worker-develop-0:/results/\$JOB_ID/develop/. "\$DEST/" 2>/dev/null \
+                                        kubectl cp benchmark-api-develop/opensearch-benchmark-worker-develop-0:/results/\$JOB_ID/jvector/. "\$DEST/" 2>/dev/null \
                                             && echo "  Copied results -> \$DEST/" \
                                             || echo "WARNING: kubectl cp failed — worker pod may not be running"
 
@@ -591,7 +591,7 @@ EOF
                                 if [ -f "\$JOB_FILE" ]; then
                                     JOB_ID=\$(cat "\$JOB_FILE")
                                     echo "Cancelling develop job \$JOB_ID..."
-                                    curl -s -X POST "${env.DEVELOP_API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=develop" || true
+                                    curl -s -X POST "${env.DEVELOP_API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=jvector" || true
                                 fi
                             done
                         """
