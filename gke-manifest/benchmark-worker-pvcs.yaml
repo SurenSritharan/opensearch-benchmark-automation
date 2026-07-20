@@ -66,12 +66,12 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: benchmark-worker-storage-develop
+  name: benchmark-worker-storage-jvector
   namespace: benchmark-api-develop
   labels:
     app: opensearch-benchmark-develop
     component: worker
-    engine: develop
+    engine: jvector
 spec:
   accessModes:
     - ReadWriteOnce

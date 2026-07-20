@@ -139,19 +139,19 @@ print(json.dumps(s))
                                 -n benchmark-api-develop --timeout=300s
                         '''
                     },
-                    'benchmark-worker-develop': {
+                    'benchmark-worker-jvector': {
                         sh """
                             cat gke-manifest/opensearch-benchmark-worker-develop-template.yaml | \
-                                sed 's/\\\${ENGINE}/develop/g' | \
+                                sed 's/\\\${ENGINE}/jvector/g' | \
                                 kubectl apply -f -
-                            kubectl scale statefulset opensearch-benchmark-worker-develop \
+                            kubectl scale statefulset opensearch-benchmark-worker-jvector \
                                 --replicas=0 -n benchmark-api-develop
                             kubectl wait --for=delete pod \
-                                -l app=opensearch-benchmark-develop,component=worker,engine=develop \
+                                -l app=opensearch-benchmark-develop,component=worker,engine=jvector \
                                 -n benchmark-api-develop --timeout=120s || true
-                            kubectl scale statefulset opensearch-benchmark-worker-develop \
+                            kubectl scale statefulset opensearch-benchmark-worker-jvector \
                                 --replicas=1 -n benchmark-api-develop
-                            kubectl rollout status statefulset/opensearch-benchmark-worker-develop \
+                            kubectl rollout status statefulset/opensearch-benchmark-worker-jvector \
                                 -n benchmark-api-develop --timeout=1200s
                         """
                     }
@@ -211,7 +211,7 @@ print(json.dumps(s))
                         echo "Seeding ${fileName} to develop worker..."
                         sh """
                             set -euo pipefail
-                            POD="opensearch-benchmark-worker-develop-0"
+                            POD="opensearch-benchmark-worker-jvector-0"
 
                             if kubectl exec -n benchmark-api-develop \$POD -- test -f '${targetPath}' 2>/dev/null; then
                                 echo "[develop] ${fileName} already present — skipping"
@@ -396,7 +396,7 @@ print(json.dumps(s))
 
                                         DEST="${RESULTS_DIR}/${runKey}/test-runs/develop"
                                         mkdir -p "\$DEST"
-                                        kubectl cp benchmark-api-develop/opensearch-benchmark-worker-develop-0:/results/\$JOB_ID/jvector/. "\$DEST/" 2>/dev/null \
+                                        kubectl cp benchmark-api-develop/opensearch-benchmark-worker-jvector-0:/results/\$JOB_ID/jvector/. "\$DEST/" 2>/dev/null \
                                             && echo "  Copied results -> \$DEST/" \
                                             || echo "WARNING: kubectl cp failed — worker pod may not be running"
 
@@ -492,15 +492,15 @@ print(json.dumps(s))
                                     do
                                         ENDPOINT=\$(echo "\$ENDPOINT_FILE" | awk '{print \$1}')
                                         FILENAME=\$(echo "\$ENDPOINT_FILE" | awk '{print \$2}')
-                                        kubectl exec -n benchmark-api-develop opensearch-benchmark-worker-develop-0 -c worker -- \
+                                        kubectl exec -n benchmark-api-develop opensearch-benchmark-worker-jvector-0 -c worker -- \
                                             curl -sk -u admin:admin "https://\$OS_HOST\$ENDPOINT" \
                                             > "\$TEL_DIR/\$FILENAME" 2>/dev/null || true
                                         echo "  telemetry: \$FILENAME"
                                     done
 
                                     # ── Worker log ─────────────────────────────────
-                                    WORKER_LOG="${RESULTS_DIR}/${runKey}/server-logs/worker-develop.log"
-                                    kubectl logs statefulset/opensearch-benchmark-worker-develop \
+                                    WORKER_LOG="${RESULTS_DIR}/${runKey}/server-logs/worker-jvector.log"
+                                    kubectl logs statefulset/opensearch-benchmark-worker-jvector \
                                         -n benchmark-api-develop --tail=5000 2>&1 > "\$WORKER_LOG" || true
                                     echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
                                 """
@@ -601,7 +601,7 @@ EOF
                 if (params.SCALE_CLUSTERS && !params.SKIP_SCALE_DOWN) {
                     echo "Scaling down develop worker and API server..."
                     sh '''
-                        kubectl scale statefulset opensearch-benchmark-worker-develop \
+                        kubectl scale statefulset opensearch-benchmark-worker-jvector \
                             --replicas=0 -n benchmark-api-develop || true
                         kubectl scale deployment opensearch-benchmark-api-server \
                             --replicas=0 -n benchmark-api-develop || true
