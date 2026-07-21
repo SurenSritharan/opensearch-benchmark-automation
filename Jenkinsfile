@@ -337,7 +337,7 @@ print(json.dumps(s))
                                             ACTIVE=\$(kubectl exec -n \$NS opensearch-data-0 -c opensearch -- \
                                                 curl -sk -u admin:admin \
                                                 'https://localhost:9200/_cat/recovery?h=stage&active_only=true' \
-                                                2>/dev/null | grep -c . || echo 0)
+                                                2>/dev/null | grep -c . || true)
                                             set -x
                                             if [ "\$STATUS" = "green" ] && [ "\$INIT" = "0" ]; then
                                                 echo "  ✅ [\$NS] cluster green — ready"
