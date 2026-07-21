@@ -323,7 +323,7 @@ print(json.dumps(s))
                                         echo "Waiting for \$NS cluster health (green + 0 initializing shards)..."
                                         LAST_PROGRESS=\$SECONDS
                                         LAST_ACTIVE=9999
-                                        STALL_LIMIT=1200
+                                        STALL_LIMIT=7200
                                         RETRIED=0
                                         while true; do
                                             { set +x; } 2>/dev/null
