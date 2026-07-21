@@ -15,6 +15,7 @@ pipeline {
             name: 'PIPELINE',
             choices: [
                 'search-all',
+                'search-all-overquery',
                 'search-1m',
                 'search-5m',
                 'search-compare',
