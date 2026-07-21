@@ -346,7 +346,9 @@ print(json.dumps(s))
                                                 SCORE=\$(echo "\$RECOVERY" | awk '{sum += \$4 + \$5} END {printf "%.1f", sum}')
                                                 MAX_SCORE=\$(echo "\$RECOVERY" | awk 'END {printf "%.1f", NR * 200}')
                                             else
-                                                echo "  [\$NS] status=\${STATUS:-unknown} initializing=\${INIT}"
+                                                echo "  [\$NS] status=\${STATUS:-unknown} initializing=\${INIT} (no active recoveries)"
+                                                # No active recoveries means transfers completed — treat as progress
+                                                LAST_PROGRESS=\$SECONDS
                                                 SCORE=0; MAX_SCORE=0
                                             fi
                                             if [ "\$(echo "\$SCORE \$LAST_PROGRESS_SCORE" | awk '{print (\$1 > \$2)}')" = "1" ]; then
