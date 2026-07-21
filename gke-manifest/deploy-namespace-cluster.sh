@@ -87,9 +87,14 @@ echo "OpenSearch Version: $OPENSEARCH_VERSION"
 echo "Node Size:         $NODE_SIZE  (cpu: $NODE_CPU_REQ/$NODE_CPU_LIM  mem: $NODE_MEM  heap: $NODE_HEAP)"
 echo "=========================================="
 
-# Create namespace if it doesn't exist
-echo "Creating namespace $NAMESPACE..."
-kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+# Namespaces are pre-created by jenkins-agent-rbac.yaml (requires cluster-admin).
+# The Jenkins SA does not have permission to create namespaces — fail fast if missing.
+echo "Ensuring namespace $NAMESPACE exists..."
+if ! kubectl get namespace $NAMESPACE &>/dev/null; then
+    echo "ERROR: namespace '$NAMESPACE' does not exist."
+    echo "       Apply gke-manifest/jenkins-agent-rbac.yaml with a cluster-admin account first."
+    exit 1
+fi
 
 # Clean up existing resources for fresh deployment
 echo ""

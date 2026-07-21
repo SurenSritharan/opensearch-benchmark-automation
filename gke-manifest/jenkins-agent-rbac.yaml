@@ -1,0 +1,155 @@
+# ServiceAccount and RBAC for the Jenkins pipeline.
+# The jenkins SA in benchmark-api is used to generate a kubeconfig Secret
+# (gke-kubeconfig) stored in Jenkins credentials. The pipeline uses this
+# kubeconfig to run kubectl commands against GKE from the Jenkins server.
+#
+# Apply with:
+#   kubectl apply -f gke-manifest/jenkins-agent-rbac.yaml
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins
+  namespace: benchmark-api
+---
+# benchmark-api namespace — scale workers, read pods, manage deployments
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: benchmark-api
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+# os-jvector namespace — scale statefulsets, read pods/events
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: os-jvector
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+# os-faiss namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: os-faiss
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+# os-lucene namespace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: os-lucene
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+# benchmark-api-develop namespace — develop API server, develop worker
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: benchmark-api-develop
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: benchmark-api-develop
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+# os-develop-jvector namespace — JVector develop cluster
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: os-develop-jvector
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: os-develop-jvector
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+# os-develop-faiss namespace — FAISS develop cluster
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: os-develop-faiss
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: os-develop-faiss
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+# os-develop-lucene namespace — Lucene develop cluster
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: os-develop-lucene
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: os-develop-lucene
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+
+# Made with Bob
