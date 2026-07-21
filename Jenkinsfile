@@ -323,7 +323,8 @@ print(json.dumps(s))
                                         echo "Waiting for \$NS cluster health..."
                                         LAST_PROGRESS_SCORE="0.0"
                                         LAST_PROGRESS=\$SECONDS
-                                        STALL_LIMIT=600
+                                        STALL_LIMIT=1200
+                                        RETRIED=0
                                         while true; do
                                             HEALTH=\$(kubectl exec -n \$NS opensearch-data-0 -c opensearch -- \
                                                 curl -sk -u admin:admin \
@@ -360,8 +361,18 @@ print(json.dumps(s))
                                             fi
                                             STALLED=\$((SECONDS - LAST_PROGRESS))
                                             if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
-                                                echo "❌ [\$NS] shard recovery stalled for \${STALL_LIMIT}s — giving up"
-                                                exit 1
+                                                if [ "\$RETRIED" = "0" ]; then
+                                                    echo "⚠️  [\$NS] shard recovery stalled for \${STALL_LIMIT}s — retrying failed shards"
+                                                    kubectl exec -n \$NS opensearch-data-0 -c opensearch -- \
+                                                        curl -sk -u admin:admin -X POST \
+                                                        'https://localhost:9200/_cluster/reroute?retry_failed=true' > /dev/null || true
+                                                    RETRIED=1
+                                                    LAST_PROGRESS=\$SECONDS
+                                                    LAST_PROGRESS_SCORE="0.0"
+                                                else
+                                                    echo "❌ [\$NS] shard recovery stalled for \${STALL_LIMIT}s after retry — giving up"
+                                                    exit 1
+                                                fi
                                             fi
                                             sleep 10
                                         done
