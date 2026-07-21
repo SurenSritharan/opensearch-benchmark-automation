@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: opensearch-data-config
-  namespace: os-develop-jvector
+  namespace: ${NAMESPACE}
 data:
   opensearch.yml: |
     cluster.name: opensearch-cluster
@@ -11,10 +11,10 @@ data:
     node.roles: [data, ingest]
     
     discovery.seed_hosts:
-      - opensearch-cluster-manager-0.opensearch-cluster-manager.os-develop-jvector.svc.cluster.local
-      - opensearch-data-0.opensearch-data.os-develop-jvector.svc.cluster.local
-      - opensearch-data-1.opensearch-data.os-develop-jvector.svc.cluster.local
-      - opensearch-data-2.opensearch-data.os-develop-jvector.svc.cluster.local
+      - opensearch-cluster-manager-0.opensearch-cluster-manager.${NAMESPACE}.svc.cluster.local
+      - opensearch-data-0.opensearch-data.${NAMESPACE}.svc.cluster.local
+      - opensearch-data-1.opensearch-data.${NAMESPACE}.svc.cluster.local
+      - opensearch-data-2.opensearch-data.${NAMESPACE}.svc.cluster.local
     
     discovery.seed_resolver.timeout: 10s
     discovery.seed_resolver.max_concurrent_resolvers: 3
@@ -63,7 +63,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-data
-  namespace: os-develop-jvector
+  namespace: ${NAMESPACE}
   labels:
     app: opensearch-data
 spec:
@@ -82,7 +82,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-cluster
-  namespace: os-develop-jvector
+  namespace: ${NAMESPACE}
   labels:
     app: opensearch-data
 spec:
@@ -98,7 +98,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: opensearch-data
-  namespace: os-develop-jvector
+  namespace: ${NAMESPACE}
 spec:
   serviceName: opensearch-data
   replicas: 3
@@ -144,8 +144,6 @@ spec:
         - name: install-plugins
           image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
           env:
-            - name: JVECTOR_PLUGIN_VERSION
-              value: "${OPENSEARCH_VERSION}.0"
             - name: PROMETHEUS_PLUGIN_VERSION
               value: "${OPENSEARCH_VERSION}.0"
             - name: GCS_PLUGIN_VERSION
@@ -157,15 +155,6 @@ spec:
               set -e
               echo "Staging base OpenSearch plugins for version ${OPENSEARCH_VERSION}..."
               cp -r /usr/share/opensearch/plugins/* /mnt/plugins/
-              
-              echo "Downloading and installing JVector Plugin..."
-              curl -sL "https://repo1.maven.org/maven2/org/opensearch/plugin/opensearch-jvector-plugin/${JVECTOR_PLUGIN_VERSION}/opensearch-jvector-plugin-${JVECTOR_PLUGIN_VERSION}.zip" -o /tmp/jvector.zip
-              rm -rf /mnt/plugins/opensearch-neural-search
-              rm -rf /mnt/plugins/opensearch-knn
-              mkdir -p /mnt/plugins/opensearch-jvector
-              cd /mnt/plugins/opensearch-jvector
-              jar xf /tmp/jvector.zip
-              echo "JVector plugin installed successfully!"
 
               echo "Downloading and installing Prometheus Exporter..."
               curl -sL "https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/${PROMETHEUS_PLUGIN_VERSION}/prometheus-exporter-${PROMETHEUS_PLUGIN_VERSION}.zip" -o /tmp/prometheus-exporter.zip
