@@ -1,0 +1,168 @@
+{
+  "description": "Search — wiki + msmarco at 1M and 5M with overquery_factor sweep (indexes must already exist)",
+  "engine": "__ENGINE__",
+  "steps": [
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "1m",
+        "query_k": 100,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "1m",
+        "query_k": 64,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "1m",
+        "query_k": 10,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "5m",
+        "query_k": 100,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "5m",
+        "query_k": 64,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "5m",
+        "query_k": 10,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "1m",
+        "query_k": 100,
+        "hnsw_ef_search": 256,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "1m",
+        "query_k": 64,
+        "hnsw_ef_search": 256,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "1m",
+        "query_k": 10,
+        "hnsw_ef_search": 256,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "5m",
+        "query_k": 100,
+        "hnsw_ef_search": 256,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "5m",
+        "query_k": 64,
+        "hnsw_ef_search": 256,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "vector-search",
+      "params": {
+        "corpus_size": "5m",
+        "query_k": 10,
+        "hnsw_ef_search": 256,
+        "parameter_sweeps": [
+          { "params": { "overquery_factor": 5 } },
+          { "params": { "overquery_factor": 8 } },
+          { "params": { "overquery_factor": 12 } }
+        ]
+      }
+    }
+  ]
+}
