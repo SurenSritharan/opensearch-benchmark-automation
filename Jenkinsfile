@@ -320,45 +320,35 @@ print(json.dumps(s))
                                         done
 
                                         # Wait for cluster to reach green with no initializing shards
-                                        echo "Waiting for \$NS cluster health..."
-                                        LAST_PROGRESS_SCORE="0.0"
+                                        echo "Waiting for \$NS cluster health (green + 0 initializing shards)..."
                                         LAST_PROGRESS=\$SECONDS
+                                        LAST_ACTIVE=9999
                                         STALL_LIMIT=1200
                                         RETRIED=0
                                         while true; do
+                                            { set +x; } 2>/dev/null
                                             HEALTH=\$(kubectl exec -n \$NS opensearch-data-0 -c opensearch -- \
                                                 curl -sk -u admin:admin \
                                                 'https://localhost:9200/_cluster/health' 2>/dev/null || true)
-                                            STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || true)
+                                            STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || echo "unknown")
                                             INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 0)
-                                            if [ "\$STATUS" = "green" ] && [ "\${INIT:-1}" = "0" ]; then
+                                            RELOC=\$(echo "\$HEALTH" | grep -oP '(?<="relocating_shards":)\\d+' || echo 0)
+                                            UNASSIGNED=\$(echo "\$HEALTH" | grep -oP '(?<="unassigned_shards":)\\d+' || echo 0)
+                                            ACTIVE=\$(kubectl exec -n \$NS opensearch-data-0 -c opensearch -- \
+                                                curl -sk -u admin:admin \
+                                                'https://localhost:9200/_cat/recovery?h=stage&active_only=true' \
+                                                2>/dev/null | grep -c . || echo 0)
+                                            set -x
+                                            if [ "\$STATUS" = "green" ] && [ "\$INIT" = "0" ]; then
                                                 echo "  ✅ [\$NS] cluster green — ready"
                                                 break
-                                            elif [ "\$STATUS" = "yellow" ] || [ "\$STATUS" = "green" ]; then
-                                                echo "  [\$NS] cluster \${STATUS} but \${INIT} shards initializing — waiting..."
                                             fi
-                                            RECOVERY=\$(kubectl exec -n \$NS opensearch-data-0 -c opensearch -- \
-                                                curl -sk -u admin:admin \
-                                                'https://localhost:9200/_cat/recovery?h=index,shard,stage,bytes_percent,translog_ops_percent&active_only=true' \
-                                                2>/dev/null || true)
-                                            if [ -n "\$RECOVERY" ]; then
-                                                echo "  [\$NS] status=\${STATUS:-unknown} initializing=\${INIT}"
-                                                echo "\$RECOVERY" | while read line; do echo "    \$line"; done
-                                                SCORE=\$(echo "\$RECOVERY" | awk '{sum += \$4 + \$5} END {printf "%.1f", sum}')
-                                                MAX_SCORE=\$(echo "\$RECOVERY" | awk 'END {printf "%.1f", NR * 200}')
-                                            else
-                                                echo "  [\$NS] status=\${STATUS:-unknown} initializing=\${INIT} (no active recoveries)"
-                                                # No active recoveries means transfers completed — treat as progress
+                                            STALLED=\$((SECONDS - LAST_PROGRESS))
+                                            echo "  [\$NS] status=\${STATUS}  initializing=\${INIT}  relocating=\${RELOC}  unassigned=\${UNASSIGNED}  active_recoveries=\${ACTIVE}  (stall \${STALLED}s/\${STALL_LIMIT}s)"
+                                            if [ "\$ACTIVE" -lt "\$LAST_ACTIVE" ]; then
                                                 LAST_PROGRESS=\$SECONDS
-                                                SCORE=0; MAX_SCORE=0
                                             fi
-                                            if [ "\$(echo "\$SCORE \$LAST_PROGRESS_SCORE" | awk '{print (\$1 > \$2)}')" = "1" ]; then
-                                                LAST_PROGRESS_SCORE=\$SCORE; LAST_PROGRESS=\$SECONDS
-                                            fi
-                                            if [ "\$(echo "\$MAX_SCORE" | awk '{print (\$1 > 0)}')" = "1" ] && \
-                                               [ "\$(echo "\$SCORE \$MAX_SCORE" | awk '{print (\$1 >= \$2)}')" = "1" ]; then
-                                                sleep 10; continue
-                                            fi
+                                            LAST_ACTIVE=\$ACTIVE
                                             STALLED=\$((SECONDS - LAST_PROGRESS))
                                             if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
                                                 if [ "\$RETRIED" = "0" ]; then
@@ -368,7 +358,7 @@ print(json.dumps(s))
                                                         'https://localhost:9200/_cluster/reroute?retry_failed=true' > /dev/null || true
                                                     RETRIED=1
                                                     LAST_PROGRESS=\$SECONDS
-                                                    LAST_PROGRESS_SCORE="0.0"
+                                                    LAST_ACTIVE=9999
                                                 else
                                                     echo "❌ [\$NS] shard recovery stalled for \${STALL_LIMIT}s after retry — giving up"
                                                     exit 1
