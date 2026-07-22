@@ -129,7 +129,7 @@ spec:
             
             echo "Starting ${ENGINE} worker..."
             cd /app
-            exec /usr/bin/tini -- gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 2 --timeout 7200 --access-logfile - app:app
+            exec /usr/bin/tini -- gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 4 --timeout 7200 --access-logfile - app:app
         
         env:
         - name: WORKER_ENGINES
