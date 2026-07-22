@@ -604,7 +604,16 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
         label = scenario['label']
         procedure_name = scenario['procedure_name']
         scenario_key = f"{dataset}-{label}"
-        
+
+        # Skip scenarios that already completed before a pod restart.
+        # scenario_status is persisted in the options blob (survives restarts);
+        # only 'completed' is skipped — 'running' and 'failed' are retried.
+        job_data = get_job(job_id)
+        if (job_data or {}).get('scenario_status', {}).get(scenario_key) == 'completed':
+            logger.info(f"Batch job {job_id}: Skipping already-completed scenario {scenario_key}")
+            batch_results['scenarios_completed'] += 1
+            continue
+
         try:
             # Create unique path for each test: results_base/dataset-label
             # This prevents tests from overwriting each other
