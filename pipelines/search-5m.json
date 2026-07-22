@@ -4,8 +4,10 @@
   "params": { "corpus_size": "5m" },
   "steps": [
     { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 100 } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 64 } },
     { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 10 } },
     { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 64,  "hnsw_ef_search": 256 } },
     { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 10,  "hnsw_ef_search": 256 } }
   ]
 }

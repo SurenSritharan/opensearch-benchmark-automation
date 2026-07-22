@@ -1,0 +1,13 @@
+{
+  "description": "Overquery search — wiki + msmarco at 5M, k=10, overquery_factor=5 (indexes must already exist)",
+  "engine": "__ENGINE__",
+  "params": {
+    "corpus_size": "5m",
+    "query_k": 10,
+    "overquery_factor": 5
+  },
+  "steps": [
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "hnsw_ef_search": 512 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "hnsw_ef_search": 512 } }
+  ]
+}

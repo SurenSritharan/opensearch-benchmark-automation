@@ -93,8 +93,6 @@ spec:
           value: "api-only"
         - name: PYTHONUNBUFFERED
           value: "1"
-        - name: DB_PATH
-          value: "/data/jobs.db"
         - name: WORKSPACE_DIR
           value: "/app"
         - name: RESULTS_DIR
@@ -109,10 +107,6 @@ spec:
           limits:
             memory: "8Gi"
             cpu: "4"
-        
-        volumeMounts:
-        - name: db-storage
-          mountPath: /data
 
         ports:
         - containerPort: 8080
@@ -132,9 +126,4 @@ spec:
           initialDelaySeconds: 15
           periodSeconds: 10
       
-      volumes:
-      - name: db-storage
-        persistentVolumeClaim:
-          claimName: benchmark-api-db-storage
-
 # Made with Bob

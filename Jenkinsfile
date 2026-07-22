@@ -57,6 +57,11 @@ pipeline {
             defaultValue: false,
             description: 'Skip post-run scale-down so the cluster and worker stay up for investigation.'
         )
+        choice(
+            name: 'LOG_LEVEL',
+            choices: ['', 'debug', 'info', 'warning', 'error'],
+            description: 'opensearch-benchmark log level. Leave blank to use the pipeline default. Set to "debug" to enable verbose OSB internal logging.'
+        )
     }
 
     environment {
@@ -369,15 +374,16 @@ print(json.dumps(s))
                                     """
                                 }
 
-                                // ── b) Run benchmark ──────────────────────────────
-                                sh """
-                                    set +e
-                                    API_URL=${params.API_URL} \
-                                    cloud-service/scripts/run-pipeline.sh \
-                                        --pipeline ${pipeline} \
-                                        ${params.ENGINE} \
-                                        2>&1 | tee benchmark-run-develop-${version}-${runSize}.log
-                                    PIPE_RC=\${PIPESTATUS[0]}
+                                        // ── b) Run benchmark ───────────────────────────────
+                                        sh """
+                                            set +e
+                                            API_URL=${params.API_URL} \
+                                            cloud-service/scripts/run-pipeline.sh \
+                                                --pipeline ${pipeline} \
+                                                ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
+                                                ${engine} \
+                                                2>&1 | tee benchmark-run-${engine}-${version}-${runSize}.log
+                                            PIPE_RC=\${PIPESTATUS[0]}
 
                                     JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-develop-${version}-${runSize}.log | tail -1 || true)
                                     if [ -n "\$JOB_ID" ]; then
@@ -420,29 +426,29 @@ print(json.dumps(s))
 
                                     echo "Collecting logs from namespace: \$NS"
 
-                                    PODS=\$(kubectl get pods -n \$NS \
-                                        --no-headers \
-                                        -o custom-columns=':metadata.name,:spec.nodeName' 2>/dev/null \
-                                        | while read POD NODE; do
-                                            POOL=\$(kubectl get node "\$NODE" \
-                                                -o jsonpath='{.metadata.labels.cloud\\.google\\.com/gke-nodepool}' \
-                                                2>/dev/null || true)
-                                            if [ "\$POOL" = "server-pool" ]; then echo "\$POD"; fi
-                                        done || true)
+                                            # Collect from all opensearch pods in the namespace
+                                            # (data nodes + cluster-manager). All are pinned to
+                                            # server-pool via nodeSelector so no node-label lookup
+                                            # is needed — and the lookup was silently swallowing
+                                            # errors that left PODS empty.
+                                            PODS=\$(kubectl get pods -n ${ns} \
+                                                -l 'app in (opensearch-data,opensearch-cluster-manager)' \
+                                                --no-headers \
+                                                -o custom-columns=':metadata.name' 2>/dev/null || true)
 
-                                    if [ -z "\$PODS" ]; then
-                                        echo "  No server-pool pods found in \$NS — skipping"
-                                    else
-                                        for POD in \$PODS; do
-                                            CONTAINERS=\$(kubectl get pod "\$POD" -n \$NS \
-                                                -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
-                                            for CONTAINER in \$CONTAINERS; do
-                                                LOGFILE="\$LOG_DIR/\${POD}-\${CONTAINER}.log"
-                                                kubectl logs "\$POD" -c "\$CONTAINER" -n \$NS \
-                                                    --tail=5000 2>&1 > "\$LOGFILE" || true
-                                                SIZE=\$(wc -l < "\$LOGFILE" 2>/dev/null || echo 0)
-                                                echo "  \$POD / \$CONTAINER: \${SIZE} lines -> \$LOGFILE"
-                                            done
+                                            if [ -z "\$PODS" ]; then
+                                                echo "  No opensearch pods found in ${ns} — skipping"
+                                            else
+                                                for POD in \$PODS; do
+                                                    CONTAINERS=\$(kubectl get pod "\$POD" -n ${ns} \
+                                                        -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
+                                                    for CONTAINER in \$CONTAINERS; do
+                                                        LOGFILE="\$LOG_DIR/\${POD}-\${CONTAINER}.log"
+                                                        kubectl logs "\$POD" -c "\$CONTAINER" -n ${ns} \
+                                                            --tail=5000 2>&1 > "\$LOGFILE" || true
+                                                        SIZE=\$(wc -l < "\$LOGFILE" 2>/dev/null || echo 0)
+                                                        echo "  \$POD / \$CONTAINER: \${SIZE} lines -> \$LOGFILE"
+                                                    done
 
                                             GC_LOGFILE="\$LOG_DIR/\${POD}-gc.log"
                                             kubectl exec "\$POD" -c opensearch -n \$NS -- \
@@ -585,6 +591,12 @@ EOF
         always {
             script {
                 if (currentBuild.currentResult == 'ABORTED') {
+                    echo "Build aborted — cancelling any running cloud service jobs..."
+
+                    // Only send cancel requests if the API server pod is running.
+                    // If it's already down, the worker process is gone and there is nothing to cancel.
+                    // Note: on pod restart, init_db() cancels any orphaned 'running' jobs —
+                    // so skipping cancel here does not leave jobs permanently stuck in a running state.
                     def apiRunning = sh(
                         script: """
                             PHASE=\$(kubectl get pods -n benchmark-api-develop -l app=opensearch-benchmark-develop,component=api-server \

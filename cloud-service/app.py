@@ -30,11 +30,22 @@ CORS(app)
 
 # Initialize components
 _workspace_dir = os.environ.get("WORKSPACE_DIR", "/workspace")
-_results_dir   = os.environ.get("RESULTS_DIR",   "/results")
+RESULTS_DIR    = Path(os.environ.get("RESULTS_DIR", "/results")).resolve()
 config_loader = ConfigLoader(workspace_dir=_workspace_dir)
-benchmark_runner = BenchmarkRunner(config_loader, results_dir=_results_dir)
+benchmark_runner = BenchmarkRunner(config_loader, results_dir=str(RESULTS_DIR))
 
-# SQLite database for job storage (shared across all workers)
+# WORKER_ENGINES must be resolved first — it gates init_db() and all queue logic.
+# API server sets WORKER_ENGINES=none    — proxies requests, never touches the DB.
+# Worker pods set WORKER_ENGINES=jvector (or faiss, or lucene) — one engine each.
+_WORKER_ENGINES_RAW = os.environ.get('WORKER_ENGINES', 'none').strip().lower()
+_ALLOWED_ENGINES = set(
+    e.strip() for e in _WORKER_ENGINES_RAW.split(',')
+    if e.strip() not in ('none', '', 'api-only')
+)
+_IS_WORKER = bool(_ALLOWED_ENGINES)
+logger.info(f"WORKER_ENGINES={_WORKER_ENGINES_RAW!r}, allowed engines: {_ALLOWED_ENGINES}, will process jobs: {_IS_WORKER}")
+
+# SQLite database for job storage — lives on the worker PVC, not used by the API server.
 DB_PATH = os.environ.get("DB_PATH", "/workspace/jobs.db")
 db_lock = threading.RLock()
 
@@ -54,7 +65,8 @@ def init_db():
 
     On every startup:
     1. Jobs left in 'running' state (orphaned by a pod restart mid-run) are
-       reset to 'queued' so the queue processor retries them automatically.
+       cancelled so they never silently re-run or appear as ghost 'running'
+       entries in the UI after a cancel whose write didn't reach the DB.
     2. Stale engine lock files are released so a lock that survived a pod
        restart cannot permanently block the queue processor for that engine.
     """
@@ -82,18 +94,30 @@ def init_db():
             ON jobs(engine, status, queue_position)
         """)
 
-        # Crash-recovery: reset any orphaned 'running' jobs back to 'queued'
+        # Crash-recovery: mark any orphaned 'running' jobs as 'cancelled'.
+        #
+        # Jobs left in 'running' state after a pod restart could be either:
+        #   (a) legitimately in-flight runs that were cut off mid-execution, or
+        #   (b) jobs whose cancel request was proxied to a worker that was
+        #       already unreachable — so the cancel write never landed.
+        #
+        # In both cases re-queuing silently would cause duplicate runs or ghost
+        # 'running' entries in the UI after a cancel.  Instead we mark them
+        # cancelled with a clear reason; the user can explicitly re-submit if
+        # a genuine retry is needed.
         cursor = conn.execute("SELECT job_id FROM jobs WHERE status = 'running'")
         orphaned = [row[0] for row in cursor.fetchall()]
         if orphaned:
             conn.execute(
-                "UPDATE jobs SET status='queued', started_at=NULL "
+                "UPDATE jobs SET status='cancelled', "
+                "completed_at=datetime('now'), "
+                "error='Job orphaned by pod restart — cancelled on startup recovery' "
                 f"WHERE job_id IN ({','.join('?'*len(orphaned))})",
                 orphaned
             )
             logger.warning(
-                f"Startup recovery: reset {len(orphaned)} orphaned running "
-                f"job(s) to queued: {orphaned}"
+                f"Startup recovery: cancelled {len(orphaned)} orphaned running "
+                f"job(s): {orphaned}"
             )
 
         conn.commit()
@@ -118,20 +142,10 @@ def init_db():
     logger.info(f"Initialized SQLite database at {DB_PATH}")
 
 
-# Initialize database on module load
-init_db()
+# Initialize database on worker pods only — the API server has no DB of its own.
+if _IS_WORKER:
+    init_db()
 logger.info(f"Initialized shared state in process (PID: {os.getpid()})")
-
-# WORKER_ENGINES controls which engine this pod is allowed to process.
-# API server sets WORKER_ENGINES=none    — queues jobs only, never executes them.
-# Worker pods set WORKER_ENGINES=jvector (or faiss, or lucene) — one engine each.
-_WORKER_ENGINES_RAW = os.environ.get('WORKER_ENGINES', 'none').strip().lower()
-_ALLOWED_ENGINES = set(
-    e.strip() for e in _WORKER_ENGINES_RAW.split(',')
-    if e.strip() not in ('none', '', 'api-only')
-)
-_IS_WORKER = bool(_ALLOWED_ENGINES)
-logger.info(f"WORKER_ENGINES={_WORKER_ENGINES_RAW!r}, allowed engines: {_ALLOWED_ENGINES}, will process jobs: {_IS_WORKER}")
 
 # ---------------------------------------------------------------------------
 # Worker proxy helpers (api-only mode)
@@ -434,7 +448,8 @@ def process_engine_queue(engine: str):
                             enable_profiling=not options.get('no_profiling', False),
                             enable_metrics=not options.get('no_metrics', False),
                             workload_params=workload_params,
-                            cancel_event=cancel_event
+                            cancel_event=cancel_event,
+                            log_level=options.get('log_level'),
                         )
                         
                         # Only save result if the job wasn't cancelled while we were running
@@ -470,9 +485,6 @@ def process_engine_queue(engine: str):
 # ---------------------------------------------------------------------------
 # Git commit-back
 # ---------------------------------------------------------------------------
-RESULTS_DIR = Path("/results").resolve()
-
-
 def _commit_results_to_git(job_id: str, final_status: str) -> None:
     """Commit the completed job's result directory and push to the results repo.
 
@@ -603,7 +615,16 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
         label = scenario['label']
         procedure_name = scenario['procedure_name']
         scenario_key = f"{dataset}-{label}"
-        
+
+        # Skip scenarios that already completed before a pod restart.
+        # scenario_status is persisted in the options blob (survives restarts);
+        # only 'completed' is skipped — 'running' and 'failed' are retried.
+        job_data = get_job(job_id)
+        if (job_data or {}).get('scenario_status', {}).get(scenario_key) == 'completed':
+            logger.info(f"Batch job {job_id}: Skipping already-completed scenario {scenario_key}")
+            batch_results['scenarios_completed'] += 1
+            continue
+
         try:
             # Create unique path for each test: results_base/dataset-label
             # This prevents tests from overwriting each other
@@ -642,7 +663,8 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
                 enable_profiling=not options.get('no_profiling', False),
                 enable_metrics=not options.get('no_metrics', False),
                 workload_params=workload_params if workload_params else None,
-                cancel_event=cancel_event
+                cancel_event=cancel_event,
+                log_level=options.get('log_level'),
             )
 
             scenario_completed_at = datetime.utcnow().isoformat()
@@ -749,9 +771,6 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
         executor.submit(_commit_results_to_git, job_id, job_data['status'])
 
 
-RESULTS_DIR = Path("/results").resolve()
-
-
 def _resolve_results_path(relative_path: str = "") -> Path:
     candidate = (RESULTS_DIR / relative_path).resolve()
     if candidate != RESULTS_DIR and RESULTS_DIR not in candidate.parents:
@@ -803,15 +822,15 @@ def browse_results(requested_path: str):
 @app.route('/health')
 def health():
     """Health check endpoint"""
+    if not _IS_WORKER:
+        return jsonify({'status': 'healthy'})
     try:
-        all_jobs = get_all_jobs(limit=1000)  # Get all jobs for counting
+        all_jobs = get_all_jobs(limit=1000)
         active_jobs = sum(1 for j in all_jobs if j.get('status') == 'running')
-        total_jobs = len(all_jobs)
-        
         return jsonify({
             'status': 'healthy',
             'active_jobs': active_jobs,
-            'total_jobs': total_jobs
+            'total_jobs': len(all_jobs)
         })
     except Exception as e:
         logger.error(f"Error in health check: {e}", exc_info=True)
@@ -820,7 +839,7 @@ def health():
             'error': str(e),
             'active_jobs': 0,
             'total_jobs': 0
-        })
+        }), 500
 
 
 @app.route('/api/v1/sync', methods=['POST'])
@@ -1023,6 +1042,7 @@ def trigger_batch_benchmark():
             'options': {
                 'no_profiling': request_data.get('no_profiling', False),
                 'no_metrics': request_data.get('no_metrics', False),
+                'log_level': request_data.get('log_level', None),
                 'workload_params': request_data.get('workload_params', None)
             }
         }
@@ -1744,33 +1764,6 @@ def view_results(job_id: str):
     """Serve the results viewer page"""
     return send_from_directory('web', 'results.html')
 
-
-@app.route('/api/v1/logs')
-def get_benchmark_logs():
-    """Get opensearch-benchmark logs for a specific engine worker"""
-    engine = request.args.get('engine', '').strip()
-    if not _IS_WORKER:
-        if not engine:
-            return jsonify({'error': 'engine parameter is required'}), 400
-        lines = request.args.get('lines', '100')
-        return _proxy(engine, f'/api/v1/logs?lines={lines}')
-    try:
-        log_file = Path('/datasets/opensearch-benchmark/.osb/logs/benchmark.log')
-        if not log_file.exists():
-            return jsonify({'error': 'Log file not found'}), 404
-        
-        # Get last N lines (default 100) — stream with deque to avoid loading the whole file
-        n = int(request.args.get('lines', 100))
-        with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-            tail_lines = deque(f, maxlen=n)
-        return jsonify({
-            'log_file': str(log_file),
-            'lines': len(tail_lines),
-            'content': ''.join(tail_lines)
-        })
-    except Exception as e:
-        logger.error(f"Error reading logs: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/v1/cluster/<engine>/health')

@@ -8,7 +8,7 @@ import requests
 import threading
 import time
 from requests.auth import HTTPBasicAuth
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 import signal
@@ -134,7 +134,8 @@ class BenchmarkRunner:
         enable_profiling: bool = True,
         enable_metrics: bool = True,
         workload_params: Optional[Dict[str, Any]] = None,
-        cancel_event: Optional[threading.Event] = None
+        cancel_event: Optional[threading.Event] = None,
+        log_level: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute a benchmark using opensearch-benchmark CLI with cross-worker tracking support
@@ -341,6 +342,100 @@ class BenchmarkRunner:
                 env = os.environ.copy()
                 env['TERM'] = 'dumb'
                 env['BENCHMARK_HOME'] = '/datasets/opensearch-benchmark'
+
+                # When log_level=debug is set, write a patched logging.json before
+                # launching OSB and restore the original in the finally block below.
+                benchmark_home = Path(env['BENCHMARK_HOME'])
+                logging_json_path = benchmark_home / '.osb' / 'logging.json'
+                logging_json_backup = benchmark_home / '.osb' / 'logging.json.bak'
+                patched_logging_json = False
+
+                if log_level:
+                    valid_levels = {'debug', 'info', 'warning', 'error'}
+                    level_upper = log_level.upper()
+                    if log_level.lower() not in valid_levels:
+                        logger.warning(f"Ignoring unknown log_level '{log_level}'; valid: {valid_levels}")
+                    else:
+                        try:
+                            if logging_json_path.exists():
+                                import shutil
+                                shutil.copy2(logging_json_path, logging_json_backup)
+
+                            log_dir = benchmark_home / '.osb' / 'logs'
+                            log_dir.mkdir(parents=True, exist_ok=True)
+                            log_config = {
+                                "version": 1,
+                                "formatters": {
+                                    "normal": {
+                                        "format": "%(asctime)s,%(msecs)d %(actorAddress)s/PID:%(process)d %(name)s %(levelname)s %(message)s",
+                                        "datefmt": "%Y-%m-%d %H:%M:%S",
+                                        "()": "osbenchmark.log.configure_utc_formatter"
+                                    },
+                                    "profile": {
+                                        "format": "%(asctime)s,%(msecs)d PID:%(process)d %(name)s %(levelname)s %(message)s",
+                                        "datefmt": "%Y-%m-%d %H:%M:%S",
+                                        "()": "osbenchmark.log.configure_utc_formatter"
+                                    },
+                                    "trace": {
+                                        "format": "%(asctime)s %(message)s",
+                                        "datefmt": "%Y-%m-%d %H:%M:%S"
+                                    }
+                                },
+                                "filters": {
+                                    "isActorLog": {
+                                        "()": "thespian.director.ActorAddressLogFilter"
+                                    }
+                                },
+                                "handlers": {
+                                    "benchmark_log_handler": {
+                                        "class": "logging.handlers.WatchedFileHandler",
+                                        "filename": str(log_dir / "benchmark.log"),
+                                        "encoding": "UTF-8",
+                                        "formatter": "normal",
+                                        "filters": ["isActorLog"]
+                                    },
+                                    "benchmark_profile_handler": {
+                                        "class": "logging.FileHandler",
+                                        "filename": str(log_dir / "profile.log"),
+                                        "delay": True,
+                                        "encoding": "UTF-8",
+                                        "formatter": "profile"
+                                    },
+                                    "http_trace_handler": {
+                                        "class": "logging.handlers.WatchedFileHandler",
+                                        "filename": str(log_dir / "http-trace.log"),
+                                        "encoding": "UTF-8",
+                                        "formatter": "trace"
+                                    }
+                                },
+                                "root": {
+                                    "handlers": ["benchmark_log_handler"],
+                                    "level": level_upper
+                                },
+                                "loggers": {
+                                    "opensearch": {
+                                        "handlers": ["benchmark_log_handler"],
+                                        "level": level_upper,
+                                        "propagate": False
+                                    },
+                                    "opensearchpy.trace": {
+                                        "handlers": ["http_trace_handler"],
+                                        "level": level_upper,
+                                        "propagate": False
+                                    },
+                                    "benchmark.profile": {
+                                        "handlers": ["benchmark_profile_handler"],
+                                        "level": "INFO",
+                                        "propagate": False
+                                    }
+                                }
+                            }
+                            with open(logging_json_path, 'w') as f:
+                                json.dump(log_config, f, indent=2)
+                            patched_logging_json = True
+                            logger.info(f"Logging config patched: level={level_upper}")
+                        except Exception as e:
+                            logger.warning(f"Failed to patch logging.json: {e}")
                 
                 logger.info(f"Executing benchmark sweep {sweep_idx}/{len(parameter_sweeps)}: dataset={dataset}, engine={engine}, scenario={scenario}")
                 logger.info(f"Command: {' '.join(cmd)}")
@@ -417,6 +512,17 @@ class BenchmarkRunner:
                     result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
                     
                 finally:
+                    # Restore logging.json if we patched it
+                    if patched_logging_json:
+                        try:
+                            if logging_json_backup.exists():
+                                import shutil
+                                shutil.move(str(logging_json_backup), str(logging_json_path))
+                            else:
+                                logging_json_path.unlink(missing_ok=True)
+                        except Exception as e:
+                            logger.warning(f"Failed to restore logging.json: {e}")
+
                     # CRITICAL CROSS-WORKER CLEANUP: Ensure artifact is deleted
                     if pgid_file.exists():
                         try:
@@ -581,20 +687,86 @@ class BenchmarkRunner:
         return False
     
     def _clear_benchmark_logs(self):
-        """Clear the benchmark.log file before starting a new benchmark run."""
+        """Clear benchmark log files and reset logging.json before each run."""
         BENCHMARK_HOME = "/datasets/opensearch-benchmark"
-        log_path = f"{BENCHMARK_HOME}/.osb/logs/benchmark.log"
-        
+        osb_dir = Path(f"{BENCHMARK_HOME}/.osb")
+        log_dir = osb_dir / 'logs'
+
+        # Truncate log files so previous run output doesn't bleed into the next run
+        for log_name in ("benchmark.log", "http-trace.log"):
+            log_path = log_dir / log_name
+            try:
+                with open(log_path, 'w') as f:
+                    f.truncate(0)
+                logger.info(f"Cleared {log_name}")
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                logger.warning(f"Could not clear {log_name}: {e}")
+
+        # Delete any patched logging.json and its backup so that if log_level is
+        # not set on this run, OSB starts fresh with its built-in default config.
+        # (If log_level IS set, the patched config is written right after this.)
+        for f in (osb_dir / 'logging.json', osb_dir / 'logging.json.bak'):
+            try:
+                f.unlink()
+                logger.info(f"Removed {f.name}")
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                logger.warning(f"Could not remove {f.name}: {e}")
+
+        # Remove result directories older than 21 days from the PVC.
+        # Job IDs are YYYYMMDD-HHMMSS so age is derived directly from the name.
+        self._purge_old_results(self.results_dir, max_age_days=21)
+
+    def _purge_old_results(self, results_dir: Path, max_age_days: int = 21) -> None:
+        """Delete old job result directories and OSB test-run entries from the PVC."""
+        import shutil
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
+        # 1. /results/<job_id>/ — job IDs are YYYYMMDD-HHMMSS, age from name
+        deleted, errors = 0, 0
         try:
-            # Truncate the log file to zero bytes
-            with open(log_path, 'w') as f:
-                f.truncate(0)
-            logger.info(f"Cleared benchmark.log")
-        except FileNotFoundError:
-            # Log file doesn't exist yet, that's fine
-            logger.info(f"benchmark.log doesn't exist yet, will be created on first run")
+            for entry in results_dir.iterdir():
+                if not entry.is_dir():
+                    continue
+                try:
+                    job_date = datetime.strptime(entry.name[:15], "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue  # not a job directory, skip
+                if job_date < cutoff:
+                    try:
+                        shutil.rmtree(entry)
+                        logger.info(f"Purged old result dir: {entry.name} ({job_date.date()})")
+                        deleted += 1
+                    except Exception as e:
+                        logger.warning(f"Could not purge {entry.name}: {e}")
+                        errors += 1
         except Exception as e:
-            logger.warning(f"Could not clear benchmark.log: {e}")
+            logger.warning(f"Error scanning results dir for purge: {e}")
+        if deleted:
+            logger.info(f"Purged {deleted} result dir(s) older than {max_age_days}d ({errors} errors)")
+
+        # 2. .osb/benchmarks/test-runs/<uuid>/ — UUID-named so use mtime
+        test_runs_dir = Path("/datasets/opensearch-benchmark/.osb/benchmarks/test-runs")
+        cutoff_ts = cutoff.timestamp()
+        deleted, errors = 0, 0
+        try:
+            for entry in test_runs_dir.iterdir():
+                if not entry.is_dir():
+                    continue
+                try:
+                    if entry.stat().st_mtime < cutoff_ts:
+                        shutil.rmtree(entry)
+                        deleted += 1
+                except Exception as e:
+                    logger.warning(f"Could not purge test-run {entry.name}: {e}")
+                    errors += 1
+        except Exception as e:
+            logger.warning(f"Error scanning test-runs dir for purge: {e}")
+        if deleted:
+            logger.info(f"Purged {deleted} OSB test-run dir(s) older than {max_age_days}d ({errors} errors)")
     
     def _download_artifacts(self, console_output: str, target_dir: Path,
                             stderr: str = ''):
@@ -633,31 +805,32 @@ class BenchmarkRunner:
         else:
             logger.warning("Could not find run UUID in benchmark output")
         
-        # Download the benchmark log
-        log_path = f"{BENCHMARK_HOME}/.osb/logs/benchmark.log"
-        log_content = ''
+        # Move benchmark.log into the results directory using a filesystem rename
+        # so the full file is preserved without ever loading it into Python memory.
+        # This avoids OOMKill when debug logging produces multi-GB log files.
+        # _clear_benchmark_logs() will recreate a fresh empty file before the next run.
+        import shutil
+        log_src = Path(f"{BENCHMARK_HOME}/.osb/logs/benchmark.log")
+        log_dst = target_dir / "benchmark.log"
+        moved = False
         try:
-            with open(log_path, 'r') as f:
-                log_content = f.read()
-            logger.info(f"Downloaded benchmark.log")
-        except FileNotFoundError:
-            logger.warning(f"benchmark.log not found at {log_path}")
+            if log_src.exists() and log_src.stat().st_size > 0:
+                shutil.move(str(log_src), str(log_dst))
+                logger.info(f"Moved benchmark.log ({log_dst.stat().st_size / 1024 / 1024:.1f} MB)")
+                moved = True
         except Exception as e:
-            logger.error(f"Error downloading benchmark.log: {e}")
+            logger.error(f"Error moving benchmark.log: {e}")
 
-        # If the OSB log is empty (fast crash / pre-launch failure), fall back
-        # to the process stdout+stderr so there is always something in the UI.
-        if not log_content.strip():
+        # If the log is missing or empty (fast crash / pre-launch failure), fall back
+        # to writing stdout+stderr so the UI always has something to show.
+        if not moved:
             fallback_parts = []
             if console_output and console_output.strip():
                 fallback_parts.append("=== stdout ===\n" + console_output)
             if stderr and stderr.strip():
                 fallback_parts.append("=== stderr ===\n" + stderr)
             if fallback_parts:
-                log_content = '\n'.join(fallback_parts)
+                log_dst.write_text('\n'.join(fallback_parts), encoding="utf-8")
                 logger.info("benchmark.log was empty — writing stdout/stderr fallback")
-
-        if log_content:
-            (target_dir / "benchmark.log").write_text(log_content, encoding="utf-8")
 
 # Made with Bob

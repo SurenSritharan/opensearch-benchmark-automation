@@ -30,12 +30,24 @@ set -euo pipefail
 
 # ── Parse arguments ────────────────────────────────────────────────────────────
 PIPELINE_FILE=""
-if [ "${1:-}" = "--pipeline" ]; then
-  PIPELINE_FILE="pipelines/${2:?--pipeline requires a name argument}.json"
-  shift 2
-fi
+CLI_LOG_LEVEL=""
+while true; do
+  case "${1:-}" in
+    --pipeline)
+      PIPELINE_FILE="pipelines/${2:?--pipeline requires a name argument}.json"
+      shift 2
+      ;;
+    --log-level)
+      CLI_LOG_LEVEL="${2:?--log-level requires a value (debug|info|warning|error)}"
+      shift 2
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
-ENGINE="${1:?Usage: $0 --pipeline <name> <engine>}"
+ENGINE="${1:?Usage: $0 --pipeline <name> [--log-level <level>] <engine>}"
 API_URL="${API_URL:-http://34.132.114.18}"
 
 # ── Validate ───────────────────────────────────────────────────────────────────
@@ -60,6 +72,8 @@ PIPELINE_JSON=$(sed "s/__ENGINE__/${ENGINE}/g" "$PIPELINE_FILE")
 DESCRIPTION=$(echo "$PIPELINE_JSON" | jq -r '.description // ""')
 NO_PROFILING=$(echo "$PIPELINE_JSON" | jq -r '.no_profiling // false')
 NO_METRICS=$(echo "$PIPELINE_JSON"  | jq -r '.no_metrics   // false')
+# CLI --log-level overrides the pipeline JSON value
+LOG_LEVEL="${CLI_LOG_LEVEL:-$(echo "$PIPELINE_JSON" | jq -r '.log_level // ""')}"
 
 # Top-level pipeline params merged into every step (later keys win)
 PIPELINE_PARAMS=$(echo "$PIPELINE_JSON" | jq '.params // {}')
@@ -138,14 +152,17 @@ PAYLOAD=$(jq -n \
   --arg     engine       "$ENGINE" \
   --argjson no_profiling "$NO_PROFILING" \
   --argjson no_metrics   "$NO_METRICS" \
+  --arg     log_level    "$LOG_LEVEL" \
   --argjson tests        "$TESTS_JSON" \
   '{
     engine: $engine,
     no_profiling: $no_profiling,
     no_metrics: $no_metrics,
+    log_level: $log_level,
     tests: $tests
   } | if .no_profiling == false then del(.no_profiling) else . end
-    | if .no_metrics   == false then del(.no_metrics)   else . end')
+    | if .no_metrics   == false then del(.no_metrics)   else . end
+    | if .log_level    == ""    then del(.log_level)    else . end')
 
 # ── Print header ───────────────────────────────────────────────────────────────
 echo "=========================================="
@@ -215,6 +232,13 @@ while true; do
   ')
 
   IFS='|' read -r job_status completed total label display <<< "$summary"
+
+  # Suppress transient "unknown 0/0" that appears when the worker pod is
+  # restarting and the proxy temporarily returns an empty/error response.
+  if [ "$job_status" = "unknown" ] && [ "$total" = "0" ]; then
+    sleep 4
+    continue
+  fi
 
   terminal=false
   case "$job_status" in completed|failed|error|partial|cancelled) terminal=true ;; esac
