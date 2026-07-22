@@ -16,7 +16,7 @@ pipeline {
             choices: [
                 'search-all',
                 'search-all-overquery',
-                'overquery-5m-k100',
+                'overquery-5m-k10',
                 'search-1m',
                 'search-5m',
                 'search-compare',
