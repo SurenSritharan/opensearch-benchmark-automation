@@ -7,7 +7,7 @@
     "overquery_factor": 5
   },
   "steps": [
-    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search" },
-    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "hnsw_ef_search": 256 } }
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "hnsw_ef_search": 512 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "hnsw_ef_search": 512 } }
   ]
 }
