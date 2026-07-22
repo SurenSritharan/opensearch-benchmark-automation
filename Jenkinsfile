@@ -657,7 +657,7 @@ EOF
 
                     // Only send cancel requests if the API server pod is running.
                     // If it's already down, the worker process is gone and there is nothing to cancel.
-                    // Note: on pod restart, init_db() resets any 'running' jobs back to 'queued' —
+                    // Note: on pod restart, init_db() cancels any orphaned 'running' jobs —
                     // so skipping cancel here does not leave jobs permanently stuck in a running state.
                     def apiRunning = sh(
                         script: """
