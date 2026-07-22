@@ -73,11 +73,6 @@ pipeline {
             choices: ['', 'debug', 'info', 'warning', 'error'],
             description: 'opensearch-benchmark log level. Leave blank to use the pipeline default. Set to "debug" to enable verbose OSB internal logging.'
         )
-        booleanParam(
-            name: 'ENABLE_HTTP_TRACE',
-            defaultValue: false,
-            description: 'Write every HTTP request to http-trace.log (curl-style). Uses opensearchpy.trace at INFO — less noisy than LOG_LEVEL=debug. Saved alongside benchmark.log in results.'
-        )
     }
 
     environment {
@@ -440,7 +435,6 @@ pipeline {
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
                                                 ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
-                                                ${params.ENABLE_HTTP_TRACE ? "--http-trace" : ""} \
                                                 ${engine} \
                                                 2>&1 | tee benchmark-run-${engine}-${version}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}

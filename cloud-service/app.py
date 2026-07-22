@@ -436,7 +436,6 @@ def process_engine_queue(engine: str):
                             workload_params=workload_params,
                             cancel_event=cancel_event,
                             log_level=options.get('log_level'),
-                            http_trace=options.get('http_trace', False),
                         )
                         
                         # Only save result if the job wasn't cancelled while we were running
@@ -646,7 +645,6 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
                 workload_params=workload_params if workload_params else None,
                 cancel_event=cancel_event,
                 log_level=options.get('log_level'),
-                http_trace=options.get('http_trace', False),
             )
 
             scenario_completed_at = datetime.utcnow().isoformat()
@@ -1028,7 +1026,6 @@ def trigger_batch_benchmark():
                 'no_profiling': request_data.get('no_profiling', False),
                 'no_metrics': request_data.get('no_metrics', False),
                 'log_level': request_data.get('log_level', None),
-                'http_trace': request_data.get('http_trace', False),
                 'workload_params': request_data.get('workload_params', None)
             }
         }

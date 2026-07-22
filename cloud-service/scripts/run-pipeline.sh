@@ -31,7 +31,6 @@ set -euo pipefail
 # ── Parse arguments ────────────────────────────────────────────────────────────
 PIPELINE_FILE=""
 CLI_LOG_LEVEL=""
-CLI_HTTP_TRACE="false"
 while true; do
   case "${1:-}" in
     --pipeline)
@@ -41,10 +40,6 @@ while true; do
     --log-level)
       CLI_LOG_LEVEL="${2:?--log-level requires a value (debug|info|warning|error)}"
       shift 2
-      ;;
-    --http-trace)
-      CLI_HTTP_TRACE="true"
-      shift
       ;;
     *)
       break
@@ -79,8 +74,6 @@ NO_PROFILING=$(echo "$PIPELINE_JSON" | jq -r '.no_profiling // false')
 NO_METRICS=$(echo "$PIPELINE_JSON"  | jq -r '.no_metrics   // false')
 # CLI --log-level overrides the pipeline JSON value
 LOG_LEVEL="${CLI_LOG_LEVEL:-$(echo "$PIPELINE_JSON" | jq -r '.log_level // ""')}"
-# CLI --http-trace overrides the pipeline JSON value
-HTTP_TRACE="${CLI_HTTP_TRACE:-$(echo "$PIPELINE_JSON" | jq -r '.http_trace // "false"')}"
 
 # Top-level pipeline params merged into every step (later keys win)
 PIPELINE_PARAMS=$(echo "$PIPELINE_JSON" | jq '.params // {}')
@@ -160,19 +153,16 @@ PAYLOAD=$(jq -n \
   --argjson no_profiling "$NO_PROFILING" \
   --argjson no_metrics   "$NO_METRICS" \
   --arg     log_level    "$LOG_LEVEL" \
-  --argjson http_trace   "$HTTP_TRACE" \
   --argjson tests        "$TESTS_JSON" \
   '{
     engine: $engine,
     no_profiling: $no_profiling,
     no_metrics: $no_metrics,
     log_level: $log_level,
-    http_trace: $http_trace,
     tests: $tests
   } | if .no_profiling == false then del(.no_profiling) else . end
     | if .no_metrics   == false then del(.no_metrics)   else . end
-    | if .log_level    == ""    then del(.log_level)    else . end
-    | if .http_trace   == false then del(.http_trace)   else . end')
+    | if .log_level    == ""    then del(.log_level)    else . end')
 
 # ── Print header ───────────────────────────────────────────────────────────────
 echo "=========================================="
