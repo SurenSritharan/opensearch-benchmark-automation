@@ -30,11 +30,22 @@ CORS(app)
 
 # Initialize components
 _workspace_dir = os.environ.get("WORKSPACE_DIR", "/workspace")
-_results_dir   = os.environ.get("RESULTS_DIR",   "/results")
+RESULTS_DIR    = Path(os.environ.get("RESULTS_DIR", "/results")).resolve()
 config_loader = ConfigLoader(workspace_dir=_workspace_dir)
-benchmark_runner = BenchmarkRunner(config_loader, results_dir=_results_dir)
+benchmark_runner = BenchmarkRunner(config_loader, results_dir=str(RESULTS_DIR))
 
-# SQLite database for job storage (shared across all workers)
+# WORKER_ENGINES must be resolved first — it gates init_db() and all queue logic.
+# API server sets WORKER_ENGINES=none    — proxies requests, never touches the DB.
+# Worker pods set WORKER_ENGINES=jvector (or faiss, or lucene) — one engine each.
+_WORKER_ENGINES_RAW = os.environ.get('WORKER_ENGINES', 'none').strip().lower()
+_ALLOWED_ENGINES = set(
+    e.strip() for e in _WORKER_ENGINES_RAW.split(',')
+    if e.strip() not in ('none', '', 'api-only')
+)
+_IS_WORKER = bool(_ALLOWED_ENGINES)
+logger.info(f"WORKER_ENGINES={_WORKER_ENGINES_RAW!r}, allowed engines: {_ALLOWED_ENGINES}, will process jobs: {_IS_WORKER}")
+
+# SQLite database for job storage — lives on the worker PVC, not used by the API server.
 DB_PATH = os.environ.get("DB_PATH", "/workspace/jobs.db")
 db_lock = threading.RLock()
 
@@ -54,7 +65,8 @@ def init_db():
 
     On every startup:
     1. Jobs left in 'running' state (orphaned by a pod restart mid-run) are
-       reset to 'queued' so the queue processor retries them automatically.
+       cancelled so they never silently re-run or appear as ghost 'running'
+       entries in the UI after a cancel whose write didn't reach the DB.
     2. Stale engine lock files are released so a lock that survived a pod
        restart cannot permanently block the queue processor for that engine.
     """
@@ -130,20 +142,10 @@ def init_db():
     logger.info(f"Initialized SQLite database at {DB_PATH}")
 
 
-# Initialize database on module load
-init_db()
+# Initialize database on worker pods only — the API server has no DB of its own.
+if _IS_WORKER:
+    init_db()
 logger.info(f"Initialized shared state in process (PID: {os.getpid()})")
-
-# WORKER_ENGINES controls which engine this pod is allowed to process.
-# API server sets WORKER_ENGINES=none    — queues jobs only, never executes them.
-# Worker pods set WORKER_ENGINES=jvector (or faiss, or lucene) — one engine each.
-_WORKER_ENGINES_RAW = os.environ.get('WORKER_ENGINES', 'none').strip().lower()
-_ALLOWED_ENGINES = set(
-    e.strip() for e in _WORKER_ENGINES_RAW.split(',')
-    if e.strip() not in ('none', '', 'api-only')
-)
-_IS_WORKER = bool(_ALLOWED_ENGINES)
-logger.info(f"WORKER_ENGINES={_WORKER_ENGINES_RAW!r}, allowed engines: {_ALLOWED_ENGINES}, will process jobs: {_IS_WORKER}")
 
 # ---------------------------------------------------------------------------
 # Worker proxy helpers (api-only mode)
@@ -483,9 +485,6 @@ def process_engine_queue(engine: str):
 # ---------------------------------------------------------------------------
 # Git commit-back
 # ---------------------------------------------------------------------------
-RESULTS_DIR = Path("/results").resolve()
-
-
 def _commit_results_to_git(job_id: str, final_status: str) -> None:
     """Commit the completed job's result directory and push to the results repo.
 
@@ -772,9 +771,6 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
         executor.submit(_commit_results_to_git, job_id, job_data['status'])
 
 
-RESULTS_DIR = Path("/results").resolve()
-
-
 def _resolve_results_path(relative_path: str = "") -> Path:
     candidate = (RESULTS_DIR / relative_path).resolve()
     if candidate != RESULTS_DIR and RESULTS_DIR not in candidate.parents:
@@ -826,15 +822,15 @@ def browse_results(requested_path: str):
 @app.route('/health')
 def health():
     """Health check endpoint"""
+    if not _IS_WORKER:
+        return jsonify({'status': 'healthy'})
     try:
-        all_jobs = get_all_jobs(limit=1000)  # Get all jobs for counting
+        all_jobs = get_all_jobs(limit=1000)
         active_jobs = sum(1 for j in all_jobs if j.get('status') == 'running')
-        total_jobs = len(all_jobs)
-        
         return jsonify({
             'status': 'healthy',
             'active_jobs': active_jobs,
-            'total_jobs': total_jobs
+            'total_jobs': len(all_jobs)
         })
     except Exception as e:
         logger.error(f"Error in health check: {e}", exc_info=True)
@@ -843,7 +839,7 @@ def health():
             'error': str(e),
             'active_jobs': 0,
             'total_jobs': 0
-        })
+        }), 500
 
 
 @app.route('/api/v1/sync', methods=['POST'])

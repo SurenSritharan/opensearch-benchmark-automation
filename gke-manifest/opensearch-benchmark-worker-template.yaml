@@ -140,6 +140,8 @@ spec:
           value: "/datasets/opensearch-benchmark"
         - name: PYTHONUNBUFFERED
           value: "1"
+        - name: DB_PATH
+          value: "/workspace/jobs.db"
         
         resources:
           requests:
