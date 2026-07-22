@@ -68,6 +68,11 @@ pipeline {
             defaultValue: false,
             description: 'Skip the post-run scale-down so clusters and workers stay up for investigation. Overrides SCALE_CLUSTERS teardown.'
         )
+        choice(
+            name: 'LOG_LEVEL',
+            choices: ['', 'debug', 'info', 'warning', 'error'],
+            description: 'opensearch-benchmark HTTP log level. Leave blank to use the pipeline default (normally no HTTP logging). Set to "debug" to log every request/response.'
+        )
     }
 
     environment {
@@ -429,6 +434,7 @@ pipeline {
                                             API_URL=${params.API_URL} \
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
+                                                ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
                                                 ${engine} \
                                                 2>&1 | tee benchmark-run-${engine}-${version}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}

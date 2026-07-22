@@ -134,7 +134,8 @@ class BenchmarkRunner:
         enable_profiling: bool = True,
         enable_metrics: bool = True,
         workload_params: Optional[Dict[str, Any]] = None,
-        cancel_event: Optional[threading.Event] = None
+        cancel_event: Optional[threading.Event] = None,
+        log_level: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute a benchmark using opensearch-benchmark CLI with cross-worker tracking support
@@ -341,6 +342,89 @@ class BenchmarkRunner:
                 env = os.environ.copy()
                 env['TERM'] = 'dumb'
                 env['BENCHMARK_HOME'] = '/datasets/opensearch-benchmark'
+
+                # ── HTTP request logging via logging.json ──────────────────
+                # When log_level is set we write a patched logging.json into
+                # BENCHMARK_HOME before launching OSB and restore the original
+                # (or remove the override) in the finally block below.
+                # Setting the 'opensearch' logger to DEBUG makes OSB emit every
+                # HTTP request and response via its built-in aiohttp trace hooks.
+                benchmark_home = Path(env['BENCHMARK_HOME'])
+                logging_json_path = benchmark_home / '.osb' / 'logging.json'
+                logging_json_backup = benchmark_home / '.osb' / 'logging.json.bak'
+                patched_logging_json = False
+
+                if log_level:
+                    valid_levels = {'debug', 'info', 'warning', 'error'}
+                    level_upper = log_level.upper()
+                    if log_level.lower() not in valid_levels:
+                        logger.warning(f"Ignoring unknown log_level '{log_level}'; valid: {valid_levels}")
+                    else:
+                        try:
+                            if logging_json_path.exists():
+                                import shutil
+                                shutil.copy2(logging_json_path, logging_json_backup)
+
+                            # Build logging config: root + opensearch logger both at requested level.
+                            log_config = {
+                                "version": 1,
+                                "formatters": {
+                                    "normal": {
+                                        "format": "%(asctime)s,%(msecs)d %(actorAddress)s/PID:%(process)d %(name)s %(levelname)s %(message)s",
+                                        "datefmt": "%Y-%m-%d %H:%M:%S",
+                                        "()": "osbenchmark.log.configure_utc_formatter"
+                                    },
+                                    "profile": {
+                                        "format": "%(asctime)s,%(msecs)d PID:%(process)d %(name)s %(levelname)s %(message)s",
+                                        "datefmt": "%Y-%m-%d %H:%M:%S",
+                                        "()": "osbenchmark.log.configure_utc_formatter"
+                                    }
+                                },
+                                "filters": {
+                                    "isActorLog": {
+                                        "()": "thespian.director.ActorAddressLogFilter"
+                                    }
+                                },
+                                "handlers": {
+                                    "benchmark_log_handler": {
+                                        "class": "logging.handlers.WatchedFileHandler",
+                                        "filename": str(benchmark_home / 'logs' / 'benchmark.log'),
+                                        "encoding": "UTF-8",
+                                        "formatter": "normal",
+                                        "filters": ["isActorLog"]
+                                    },
+                                    "benchmark_profile_handler": {
+                                        "class": "logging.FileHandler",
+                                        "filename": str(benchmark_home / 'logs' / 'profile.log'),
+                                        "delay": True,
+                                        "encoding": "UTF-8",
+                                        "formatter": "profile"
+                                    }
+                                },
+                                "root": {
+                                    "handlers": ["benchmark_log_handler"],
+                                    "level": level_upper
+                                },
+                                "loggers": {
+                                    "opensearch": {
+                                        "handlers": ["benchmark_log_handler"],
+                                        "level": level_upper,
+                                        "propagate": False
+                                    },
+                                    "benchmark.profile": {
+                                        "handlers": ["benchmark_profile_handler"],
+                                        "level": "INFO",
+                                        "propagate": False
+                                    }
+                                }
+                            }
+                            benchmark_home.joinpath('logs').mkdir(parents=True, exist_ok=True)
+                            with open(logging_json_path, 'w') as f:
+                                json.dump(log_config, f, indent=2)
+                            patched_logging_json = True
+                            logger.info(f"HTTP request logging enabled: opensearch logger set to {level_upper}")
+                        except Exception as e:
+                            logger.warning(f"Failed to patch logging.json for log_level={log_level}: {e}")
                 
                 logger.info(f"Executing benchmark sweep {sweep_idx}/{len(parameter_sweeps)}: dataset={dataset}, engine={engine}, scenario={scenario}")
                 logger.info(f"Command: {' '.join(cmd)}")
@@ -417,6 +501,17 @@ class BenchmarkRunner:
                     result = subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
                     
                 finally:
+                    # Restore logging.json if we patched it
+                    if patched_logging_json:
+                        try:
+                            if logging_json_backup.exists():
+                                import shutil
+                                shutil.move(str(logging_json_backup), str(logging_json_path))
+                            else:
+                                logging_json_path.unlink(missing_ok=True)
+                        except Exception as e:
+                            logger.warning(f"Failed to restore logging.json: {e}")
+
                     # CRITICAL CROSS-WORKER CLEANUP: Ensure artifact is deleted
                     if pgid_file.exists():
                         try:
