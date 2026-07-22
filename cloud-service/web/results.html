@@ -608,6 +608,11 @@
         
         let liveRefreshInterval = null;
         let _liveStatusBusy = false;
+        // Cache the last live-status response so selectionchange can re-patch immediately.
+        let _lastLiveData = null;
+        // Set to true when patchLiveStatusDOM skips a node due to an active selection,
+        // so selectionchange knows there is actually deferred work to apply.
+        let _patchDeferred = false;
 
         async function loadResults(jobId) {
             try {
@@ -713,6 +718,7 @@
                 document.getElementById('commonParamsSection').style.display = 'none';
                 document.getElementById('sweepParamsSection').style.display = 'none';
 
+                _lastLiveData = data;
                 if (!liveStatusInitialized) {
                     // First call: build the full DOM structure
                     buildLiveStatusDOM(content, data);
@@ -725,6 +731,20 @@
                 console.error('Error displaying live status:', error);
             }
         }
+
+        // When the user clears a text selection, immediately re-patch any nodes
+        // that were skipped while the selection was active — but only if there is
+        // actually deferred work (_patchDeferred), so a plain cursor click that
+        // collapses the selection doesn't trigger a patch and destroy the node
+        // the user is about to start selecting.
+        document.addEventListener('selectionchange', () => {
+            const sel = window.getSelection();
+            const cleared = !sel || sel.rangeCount === 0 || sel.isCollapsed;
+            if (cleared && _patchDeferred && _lastLiveData && liveStatusInitialized) {
+                _patchDeferred = false;
+                patchLiveStatusDOM(_lastLiveData);
+            }
+        });
 
         function buildLiveStatusDOM(content, data) {
             const scenarios = data.scenarios || [];
@@ -778,6 +798,13 @@
             content.innerHTML = html;
         }
 
+        // Returns true if the user has an active text selection whose anchor is
+        // inside `node` — used to skip textContent writes that would destroy the selection.
+        function _selectionInsideNode(node) {
+            const sel = window.getSelection();
+            return sel && sel.rangeCount > 0 && node.contains(sel.anchorNode);
+        }
+
         function patchLiveStatusDOM(data) {
             const scenarios = data.scenarios || [];
             const scenarioStatus = data.scenario_status || {};
@@ -800,15 +827,16 @@
 
                 scenarios.forEach((s, idx) => {
                     const rowEl = document.getElementById(`live-queue-row-${idx}`);
-                    if (rowEl) {
-                        const newHtml = renderScenarioRow(s, idx, scenarioStatus, data);
-                        // Only replace if content changed to avoid unnecessary reflows
-                        const tmp = document.createElement('div');
-                        tmp.innerHTML = newHtml;
-                        const newRow = tmp.firstElementChild;
-                        if (rowEl.outerHTML !== newRow.outerHTML) {
-                            rowEl.replaceWith(newRow);
-                        }
+                    if (!rowEl) return;
+                    // Never replace a row the user is selecting text inside —
+                    // replaceWith() destroys the DOM node and kills the selection.
+                    if (_selectionInsideNode(rowEl)) { _patchDeferred = true; return; }
+                    const newHtml = renderScenarioRow(s, idx, scenarioStatus, data);
+                    const tmp = document.createElement('div');
+                    tmp.innerHTML = newHtml;
+                    const newRow = tmp.firstElementChild;
+                    if (rowEl.outerHTML !== newRow.outerHTML) {
+                        rowEl.replaceWith(newRow);
                     }
                 });
             }
@@ -819,11 +847,10 @@
                 liveData.benchmark_logs.forEach((log, idx) => {
                     _logPanelText[idx] = log.benchmark_log;
                     const pre = document.getElementById(`log-pre-${idx}`);
-                    if (pre) {
-                        if (pre.textContent !== log.benchmark_log) {
-                            pre.textContent = log.benchmark_log;
-                            pre._populated = true;
-                        }
+                    if (pre && pre.textContent !== log.benchmark_log) {
+                        if (_selectionInsideNode(pre)) { _patchDeferred = true; return; }
+                        pre.textContent = log.benchmark_log;
+                        pre._populated = true;
                     }
                 });
             }
@@ -835,7 +862,8 @@
                     if (pre) {
                         const newJson = JSON.stringify(run.test_run, null, 2);
                         if (pre.textContent !== newJson) {
-                            pre.textContent = newJson;
+                            if (_selectionInsideNode(pre)) { _patchDeferred = true; }
+                            else { pre.textContent = newJson; }
                         }
                     }
                 });
