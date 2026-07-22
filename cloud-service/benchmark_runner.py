@@ -388,14 +388,14 @@ class BenchmarkRunner:
                                 "handlers": {
                                     "benchmark_log_handler": {
                                         "class": "logging.handlers.WatchedFileHandler",
-                                        "filename": str(benchmark_home / 'logs' / 'benchmark.log'),
+                                        "filename": str(benchmark_home / '.osb' / 'logs' / 'benchmark.log'),
                                         "encoding": "UTF-8",
                                         "formatter": "normal",
                                         "filters": ["isActorLog"]
                                     },
                                     "benchmark_profile_handler": {
                                         "class": "logging.FileHandler",
-                                        "filename": str(benchmark_home / 'logs' / 'profile.log'),
+                                        "filename": str(benchmark_home / '.osb' / 'logs' / 'profile.log'),
                                         "delay": True,
                                         "encoding": "UTF-8",
                                         "formatter": "profile"
@@ -418,7 +418,7 @@ class BenchmarkRunner:
                                     }
                                 }
                             }
-                            benchmark_home.joinpath('logs').mkdir(parents=True, exist_ok=True)
+                            benchmark_home.joinpath('.osb', 'logs').mkdir(parents=True, exist_ok=True)
                             with open(logging_json_path, 'w') as f:
                                 json.dump(log_config, f, indent=2)
                             patched_logging_json = True
