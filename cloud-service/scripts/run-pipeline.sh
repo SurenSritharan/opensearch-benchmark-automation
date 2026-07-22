@@ -233,6 +233,13 @@ while true; do
 
   IFS='|' read -r job_status completed total label display <<< "$summary"
 
+  # Suppress transient "unknown 0/0" that appears when the worker pod is
+  # restarting and the proxy temporarily returns an empty/error response.
+  if [ "$job_status" = "unknown" ] && [ "$total" = "0" ]; then
+    sleep 4
+    continue
+  fi
+
   terminal=false
   case "$job_status" in completed|failed|error|partial|cancelled) terminal=true ;; esac
 
