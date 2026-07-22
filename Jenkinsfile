@@ -482,18 +482,18 @@ pipeline {
 
                                             echo "Collecting logs from namespace: ${ns}"
 
+                                            # Collect from all opensearch pods in the namespace
+                                            # (data nodes + cluster-manager). All are pinned to
+                                            # server-pool via nodeSelector so no node-label lookup
+                                            # is needed — and the lookup was silently swallowing
+                                            # errors that left PODS empty.
                                             PODS=\$(kubectl get pods -n ${ns} \
+                                                -l 'app in (opensearch-data,opensearch-cluster-manager)' \
                                                 --no-headers \
-                                                -o custom-columns=':metadata.name,:spec.nodeName' 2>/dev/null \
-                                                | while read POD NODE; do
-                                                    POOL=\$(kubectl get node "\$NODE" \
-                                                        -o jsonpath='{.metadata.labels.cloud\\.google\\.com/gke-nodepool}' \
-                                                        2>/dev/null || true)
-                                                    if [ "\$POOL" = "server-pool" ]; then echo "\$POD"; fi
-                                                done || true)
+                                                -o custom-columns=':metadata.name' 2>/dev/null || true)
 
                                             if [ -z "\$PODS" ]; then
-                                                echo "  No server-pool pods found in ${ns} — skipping"
+                                                echo "  No opensearch pods found in ${ns} — skipping"
                                             else
                                                 for POD in \$PODS; do
                                                     CONTAINERS=\$(kubectl get pod "\$POD" -n ${ns} \
