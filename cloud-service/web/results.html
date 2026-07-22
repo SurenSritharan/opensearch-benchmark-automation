@@ -590,36 +590,6 @@
                     <div id="detailedMetricsContent"></div>
                 </div>
                 
-                <!-- Benchmark Logs -->
-                <div id="logsSection" class="section" style="display: none;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                        <div class="section-title" style="margin-bottom: 0;">📋 Benchmark Logs</div>
-                        <button onclick="loadBenchmarkLogs()" style="padding: 8px 16px; font-size: 14px; background: #3b82f6;">🔄 Refresh Logs</button>
-                    </div>
-                    <div class="section-subtitle">Execution logs from the benchmark run</div>
-                    <div id="logsContent" style="background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 8px; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 13px; max-height: 600px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word;"></div>
-                </div>
-
-                <div id="liveLogsSection" class="section" style="display: none;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                        <div class="section-title" style="margin-bottom: 0;">🔴 Live Worker Logs</div>
-                        <div>
-                            <label style="display: inline; margin-right: 10px; font-weight: normal; font-size: 14px;">
-                                <input type="checkbox" id="autoRefreshLiveLogs" checked> Auto-refresh (5s)
-                            </label>
-                            <select id="liveLogLines" onchange="loadBenchmarkLogs()" style="width: auto; display: inline; padding: 5px; margin-right: 8px; border: 1px solid #d1d5db; border-radius: 4px;">
-                                <option value="100">100 lines</option>
-                                <option value="200">200 lines</option>
-                                <option value="500" selected>500 lines</option>
-                                <option value="1000">1000 lines</option>
-                                <option value="2000">2000 lines</option>
-                            </select>
-                            <button onclick="loadBenchmarkLogs()" style="padding: 8px 16px; font-size: 14px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600;">🔄 Refresh</button>
-                        </div>
-                    </div>
-                    <div class="section-subtitle" id="liveLogInfo">Tailing the OSB worker log for this engine</div>
-                    <div id="liveLogsContent" style="background: #1e1e1e; color: #d4d4d4; padding: 20px; border-radius: 8px; font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace; font-size: 13px; max-height: 600px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word;">Loading...</div>
-                </div>
             </div>
         </div>
     </div>
@@ -751,7 +721,6 @@
                     // Subsequent calls: patch only what changed
                     patchLiveStatusDOM(data);
                 }
-                displayScenarioTimeline(data);
             } catch (error) {
                 console.error('Error displaying live status:', error);
             }
@@ -2769,71 +2738,6 @@
             document.getElementById('detailedMetrics').style.display = 'block';
         }
 
-        // ---------------------------------------------------------------------------
-        // Live log viewer — polls /api/v1/logs?engine=<engine>&lines=<n>
-        // Shown for running/queued jobs; always available via the section below results.
-        // ---------------------------------------------------------------------------
-        let liveLogsInterval = null;
-        // Track last-seen content length to skip no-op DOM updates on the 5s poll.
-        let _liveLogLastLen = -1;
-
-        async function loadBenchmarkLogs() {
-            const engine = urlParams.get('engine');
-            if (!engine) return;
-
-            const lines = (document.getElementById('liveLogLines') || {}).value || 500;
-            const viewer = document.getElementById('liveLogsContent');
-            const info = document.getElementById('liveLogInfo');
-            const section = document.getElementById('liveLogsSection');
-
-            if (!viewer) return;
-            section.style.display = 'block';
-
-            try {
-                const res = await fetch(`/api/v1/logs?engine=${encodeURIComponent(engine)}&lines=${lines}`);
-                const data = await res.json();
-
-                if (res.ok) {
-                    const newContent = data.content || '';
-                    // Skip the textContent write (and the browser re-layout it triggers)
-                    // when the log hasn't grown since the last poll.
-                    if (newContent.length !== _liveLogLastLen) {
-                        _liveLogLastLen = newContent.length;
-                        const atBottom = viewer.scrollHeight - viewer.scrollTop <= viewer.clientHeight + 40;
-                        viewer.textContent = newContent || '(log file is empty — benchmark has not run yet)';
-                        viewer.style.color = newContent ? '' : '#9ca3af';
-                        if (atBottom) viewer.scrollTop = viewer.scrollHeight;
-                    }
-                    info.textContent = `Engine: ${engine} · Last ${data.lines} lines`;
-                } else {
-                    viewer.textContent = data.error || 'Failed to load logs';
-                    viewer.style.color = '#f87171';
-                }
-            } catch (err) {
-                viewer.textContent = `Error loading logs: ${err.message}`;
-                viewer.style.color = '#f87171';
-            }
-        }
-
-        // Start live log auto-refresh once the page loads.
-        // Use a self-scheduling setTimeout chain so each refresh only fires after
-        // the previous fetch fully completes — prevents overlapping requests.
-        function scheduleLiveLogRefresh() {
-            liveLogsInterval = setTimeout(function tick() {
-                if (!(document.getElementById('autoRefreshLiveLogs') || {}).checked) {
-                    // Auto-refresh paused; check again next cycle.
-                    liveLogsInterval = setTimeout(tick, 5000);
-                    return;
-                }
-                loadBenchmarkLogs().finally(() => {
-                    if (liveLogsInterval !== null) {
-                        liveLogsInterval = setTimeout(tick, 5000);
-                    }
-                });
-            }, 5000);
-        }
-        loadBenchmarkLogs();
-        scheduleLiveLogRefresh();
     </script>
 </body>
 </html>

@@ -1765,33 +1765,6 @@ def view_results(job_id: str):
     return send_from_directory('web', 'results.html')
 
 
-@app.route('/api/v1/logs')
-def get_benchmark_logs():
-    """Get opensearch-benchmark logs for a specific engine worker"""
-    engine = request.args.get('engine', '').strip()
-    if not _IS_WORKER:
-        if not engine:
-            return jsonify({'error': 'engine parameter is required'}), 400
-        lines = request.args.get('lines', '100')
-        return _proxy(engine, f'/api/v1/logs?lines={lines}')
-    try:
-        log_file = Path('/datasets/opensearch-benchmark/.osb/logs/benchmark.log')
-        if not log_file.exists():
-            return jsonify({'error': 'Log file not found'}), 404
-        
-        # Get last N lines (default 100) — stream with deque to avoid loading the whole file
-        n = int(request.args.get('lines', 100))
-        with open(log_file, 'r', encoding='utf-8', errors='ignore') as f:
-            tail_lines = deque(f, maxlen=n)
-        return jsonify({
-            'log_file': str(log_file),
-            'lines': len(tail_lines),
-            'content': ''.join(tail_lines)
-        })
-    except Exception as e:
-        logger.error(f"Error reading logs: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
 
 @app.route('/api/v1/cluster/<engine>/health')
 def get_cluster_health(engine: str):
