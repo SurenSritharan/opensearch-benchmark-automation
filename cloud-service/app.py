@@ -82,18 +82,30 @@ def init_db():
             ON jobs(engine, status, queue_position)
         """)
 
-        # Crash-recovery: reset any orphaned 'running' jobs back to 'queued'
+        # Crash-recovery: mark any orphaned 'running' jobs as 'cancelled'.
+        #
+        # Jobs left in 'running' state after a pod restart could be either:
+        #   (a) legitimately in-flight runs that were cut off mid-execution, or
+        #   (b) jobs whose cancel request was proxied to a worker that was
+        #       already unreachable — so the cancel write never landed.
+        #
+        # In both cases re-queuing silently would cause duplicate runs or ghost
+        # 'running' entries in the UI after a cancel.  Instead we mark them
+        # cancelled with a clear reason; the user can explicitly re-submit if
+        # a genuine retry is needed.
         cursor = conn.execute("SELECT job_id FROM jobs WHERE status = 'running'")
         orphaned = [row[0] for row in cursor.fetchall()]
         if orphaned:
             conn.execute(
-                "UPDATE jobs SET status='queued', started_at=NULL "
+                "UPDATE jobs SET status='cancelled', "
+                "completed_at=datetime('now'), "
+                "error='Job orphaned by pod restart — cancelled on startup recovery' "
                 f"WHERE job_id IN ({','.join('?'*len(orphaned))})",
                 orphaned
             )
             logger.warning(
-                f"Startup recovery: reset {len(orphaned)} orphaned running "
-                f"job(s) to queued: {orphaned}"
+                f"Startup recovery: cancelled {len(orphaned)} orphaned running "
+                f"job(s): {orphaned}"
             )
 
         conn.commit()
