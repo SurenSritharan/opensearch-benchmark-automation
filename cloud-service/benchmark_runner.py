@@ -343,12 +343,8 @@ class BenchmarkRunner:
                 env['TERM'] = 'dumb'
                 env['BENCHMARK_HOME'] = '/datasets/opensearch-benchmark'
 
-                # ── HTTP request logging via logging.json ──────────────────
-                # When log_level is set we write a patched logging.json into
-                # BENCHMARK_HOME before launching OSB and restore the original
-                # (or remove the override) in the finally block below.
-                # Setting the 'opensearch' logger to DEBUG makes OSB emit every
-                # HTTP request and response via its built-in aiohttp trace hooks.
+                # When log_level=debug is set, write a patched logging.json before
+                # launching OSB and restore the original in the finally block below.
                 benchmark_home = Path(env['BENCHMARK_HOME'])
                 logging_json_path = benchmark_home / '.osb' / 'logging.json'
                 logging_json_backup = benchmark_home / '.osb' / 'logging.json.bak'
@@ -365,7 +361,8 @@ class BenchmarkRunner:
                                 import shutil
                                 shutil.copy2(logging_json_path, logging_json_backup)
 
-                            # Build logging config: root + opensearch logger both at requested level.
+                            log_dir = benchmark_home / '.osb' / 'logs'
+                            log_dir.mkdir(parents=True, exist_ok=True)
                             log_config = {
                                 "version": 1,
                                 "formatters": {
@@ -378,6 +375,10 @@ class BenchmarkRunner:
                                         "format": "%(asctime)s,%(msecs)d PID:%(process)d %(name)s %(levelname)s %(message)s",
                                         "datefmt": "%Y-%m-%d %H:%M:%S",
                                         "()": "osbenchmark.log.configure_utc_formatter"
+                                    },
+                                    "trace": {
+                                        "format": "%(asctime)s %(message)s",
+                                        "datefmt": "%Y-%m-%d %H:%M:%S"
                                     }
                                 },
                                 "filters": {
@@ -388,17 +389,23 @@ class BenchmarkRunner:
                                 "handlers": {
                                     "benchmark_log_handler": {
                                         "class": "logging.handlers.WatchedFileHandler",
-                                        "filename": str(benchmark_home / '.osb' / 'logs' / 'benchmark.log'),
+                                        "filename": str(log_dir / "benchmark.log"),
                                         "encoding": "UTF-8",
                                         "formatter": "normal",
                                         "filters": ["isActorLog"]
                                     },
                                     "benchmark_profile_handler": {
                                         "class": "logging.FileHandler",
-                                        "filename": str(benchmark_home / '.osb' / 'logs' / 'profile.log'),
+                                        "filename": str(log_dir / "profile.log"),
                                         "delay": True,
                                         "encoding": "UTF-8",
                                         "formatter": "profile"
+                                    },
+                                    "http_trace_handler": {
+                                        "class": "logging.handlers.WatchedFileHandler",
+                                        "filename": str(log_dir / "http-trace.log"),
+                                        "encoding": "UTF-8",
+                                        "formatter": "trace"
                                     }
                                 },
                                 "root": {
@@ -411,6 +418,11 @@ class BenchmarkRunner:
                                         "level": level_upper,
                                         "propagate": False
                                     },
+                                    "opensearchpy.trace": {
+                                        "handlers": ["http_trace_handler"],
+                                        "level": level_upper,
+                                        "propagate": False
+                                    },
                                     "benchmark.profile": {
                                         "handlers": ["benchmark_profile_handler"],
                                         "level": "INFO",
@@ -418,13 +430,12 @@ class BenchmarkRunner:
                                     }
                                 }
                             }
-                            benchmark_home.joinpath('.osb', 'logs').mkdir(parents=True, exist_ok=True)
                             with open(logging_json_path, 'w') as f:
                                 json.dump(log_config, f, indent=2)
                             patched_logging_json = True
-                            logger.info(f"HTTP request logging enabled: opensearch logger set to {level_upper}")
+                            logger.info(f"Logging config patched: level={level_upper}")
                         except Exception as e:
-                            logger.warning(f"Failed to patch logging.json for log_level={log_level}: {e}")
+                            logger.warning(f"Failed to patch logging.json: {e}")
                 
                 logger.info(f"Executing benchmark sweep {sweep_idx}/{len(parameter_sweeps)}: dataset={dataset}, engine={engine}, scenario={scenario}")
                 logger.info(f"Command: {' '.join(cmd)}")
@@ -676,20 +687,34 @@ class BenchmarkRunner:
         return False
     
     def _clear_benchmark_logs(self):
-        """Clear the benchmark.log file before starting a new benchmark run."""
+        """Clear benchmark log files and reset logging.json before each run."""
         BENCHMARK_HOME = "/datasets/opensearch-benchmark"
-        log_path = f"{BENCHMARK_HOME}/.osb/logs/benchmark.log"
-        
-        try:
-            # Truncate the log file to zero bytes
-            with open(log_path, 'w') as f:
-                f.truncate(0)
-            logger.info(f"Cleared benchmark.log")
-        except FileNotFoundError:
-            # Log file doesn't exist yet, that's fine
-            logger.info(f"benchmark.log doesn't exist yet, will be created on first run")
-        except Exception as e:
-            logger.warning(f"Could not clear benchmark.log: {e}")
+        osb_dir = Path(f"{BENCHMARK_HOME}/.osb")
+        log_dir = osb_dir / 'logs'
+
+        # Truncate log files so previous run output doesn't bleed into the next run
+        for log_name in ("benchmark.log", "http-trace.log"):
+            log_path = log_dir / log_name
+            try:
+                with open(log_path, 'w') as f:
+                    f.truncate(0)
+                logger.info(f"Cleared {log_name}")
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                logger.warning(f"Could not clear {log_name}: {e}")
+
+        # Delete any patched logging.json and its backup so that if log_level is
+        # not set on this run, OSB starts fresh with its built-in default config.
+        # (If log_level IS set, the patched config is written right after this.)
+        for f in (osb_dir / 'logging.json', osb_dir / 'logging.json.bak'):
+            try:
+                f.unlink()
+                logger.info(f"Removed {f.name}")
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                logger.warning(f"Could not remove {f.name}: {e}")
     
     def _download_artifacts(self, console_output: str, target_dir: Path,
                             stderr: str = ''):
