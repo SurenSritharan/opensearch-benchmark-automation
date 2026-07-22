@@ -8,7 +8,7 @@ import requests
 import threading
 import time
 from requests.auth import HTTPBasicAuth
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 import signal
@@ -715,6 +715,58 @@ class BenchmarkRunner:
                 pass
             except Exception as e:
                 logger.warning(f"Could not remove {f.name}: {e}")
+
+        # Remove result directories older than 21 days from the PVC.
+        # Job IDs are YYYYMMDD-HHMMSS so age is derived directly from the name.
+        self._purge_old_results(self.results_dir, max_age_days=21)
+
+    def _purge_old_results(self, results_dir: Path, max_age_days: int = 21) -> None:
+        """Delete old job result directories and OSB test-run entries from the PVC."""
+        import shutil
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
+        # 1. /results/<job_id>/ — job IDs are YYYYMMDD-HHMMSS, age from name
+        deleted, errors = 0, 0
+        try:
+            for entry in results_dir.iterdir():
+                if not entry.is_dir():
+                    continue
+                try:
+                    job_date = datetime.strptime(entry.name[:15], "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
+                except ValueError:
+                    continue  # not a job directory, skip
+                if job_date < cutoff:
+                    try:
+                        shutil.rmtree(entry)
+                        logger.info(f"Purged old result dir: {entry.name} ({job_date.date()})")
+                        deleted += 1
+                    except Exception as e:
+                        logger.warning(f"Could not purge {entry.name}: {e}")
+                        errors += 1
+        except Exception as e:
+            logger.warning(f"Error scanning results dir for purge: {e}")
+        if deleted:
+            logger.info(f"Purged {deleted} result dir(s) older than {max_age_days}d ({errors} errors)")
+
+        # 2. .osb/benchmarks/test-runs/<uuid>/ — UUID-named so use mtime
+        test_runs_dir = Path("/datasets/opensearch-benchmark/.osb/benchmarks/test-runs")
+        cutoff_ts = cutoff.timestamp()
+        deleted, errors = 0, 0
+        try:
+            for entry in test_runs_dir.iterdir():
+                if not entry.is_dir():
+                    continue
+                try:
+                    if entry.stat().st_mtime < cutoff_ts:
+                        shutil.rmtree(entry)
+                        deleted += 1
+                except Exception as e:
+                    logger.warning(f"Could not purge test-run {entry.name}: {e}")
+                    errors += 1
+        except Exception as e:
+            logger.warning(f"Error scanning test-runs dir for purge: {e}")
+        if deleted:
+            logger.info(f"Purged {deleted} OSB test-run dir(s) older than {max_age_days}d ({errors} errors)")
     
     def _download_artifacts(self, console_output: str, target_dir: Path,
                             stderr: str = ''):
@@ -753,31 +805,32 @@ class BenchmarkRunner:
         else:
             logger.warning("Could not find run UUID in benchmark output")
         
-        # Download the benchmark log
-        log_path = f"{BENCHMARK_HOME}/.osb/logs/benchmark.log"
-        log_content = ''
+        # Move benchmark.log into the results directory using a filesystem rename
+        # so the full file is preserved without ever loading it into Python memory.
+        # This avoids OOMKill when debug logging produces multi-GB log files.
+        # _clear_benchmark_logs() will recreate a fresh empty file before the next run.
+        import shutil
+        log_src = Path(f"{BENCHMARK_HOME}/.osb/logs/benchmark.log")
+        log_dst = target_dir / "benchmark.log"
+        moved = False
         try:
-            with open(log_path, 'r') as f:
-                log_content = f.read()
-            logger.info(f"Downloaded benchmark.log")
-        except FileNotFoundError:
-            logger.warning(f"benchmark.log not found at {log_path}")
+            if log_src.exists() and log_src.stat().st_size > 0:
+                shutil.move(str(log_src), str(log_dst))
+                logger.info(f"Moved benchmark.log ({log_dst.stat().st_size / 1024 / 1024:.1f} MB)")
+                moved = True
         except Exception as e:
-            logger.error(f"Error downloading benchmark.log: {e}")
+            logger.error(f"Error moving benchmark.log: {e}")
 
-        # If the OSB log is empty (fast crash / pre-launch failure), fall back
-        # to the process stdout+stderr so there is always something in the UI.
-        if not log_content.strip():
+        # If the log is missing or empty (fast crash / pre-launch failure), fall back
+        # to writing stdout+stderr so the UI always has something to show.
+        if not moved:
             fallback_parts = []
             if console_output and console_output.strip():
                 fallback_parts.append("=== stdout ===\n" + console_output)
             if stderr and stderr.strip():
                 fallback_parts.append("=== stderr ===\n" + stderr)
             if fallback_parts:
-                log_content = '\n'.join(fallback_parts)
+                log_dst.write_text('\n'.join(fallback_parts), encoding="utf-8")
                 logger.info("benchmark.log was empty — writing stdout/stderr fallback")
-
-        if log_content:
-            (target_dir / "benchmark.log").write_text(log_content, encoding="utf-8")
 
 # Made with Bob
