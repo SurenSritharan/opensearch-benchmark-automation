@@ -136,6 +136,7 @@ class BenchmarkRunner:
         workload_params: Optional[Dict[str, Any]] = None,
         cancel_event: Optional[threading.Event] = None,
         log_level: Optional[str] = None,
+        http_trace: bool = False,
     ) -> Dict[str, Any]:
         """
         Execute a benchmark using opensearch-benchmark CLI with cross-worker tracking support
@@ -354,10 +355,13 @@ class BenchmarkRunner:
                 logging_json_backup = benchmark_home / '.osb' / 'logging.json.bak'
                 patched_logging_json = False
 
-                if log_level:
+                if log_level or http_trace:
                     valid_levels = {'debug', 'info', 'warning', 'error'}
-                    level_upper = log_level.upper()
-                    if log_level.lower() not in valid_levels:
+                    level_upper = (log_level or 'info').upper()
+                    # trace_level: when only http_trace is set use INFO (one curl line per
+                    # request, no response body flood). When log_level is also set, match it.
+                    trace_level = level_upper if log_level else "INFO"
+                    if log_level and log_level.lower() not in valid_levels:
                         logger.warning(f"Ignoring unknown log_level '{log_level}'; valid: {valid_levels}")
                     else:
                         try:
@@ -399,6 +403,12 @@ class BenchmarkRunner:
                                         "delay": True,
                                         "encoding": "UTF-8",
                                         "formatter": "profile"
+                                    },
+                                    "http_trace_handler": {
+                                        "class": "logging.handlers.WatchedFileHandler",
+                                        "filename": str(benchmark_home / '.osb' / 'logs' / 'http-trace.log'),
+                                        "encoding": "UTF-8",
+                                        "formatter": "normal"
                                     }
                                 },
                                 "root": {
@@ -409,6 +419,11 @@ class BenchmarkRunner:
                                     "opensearch": {
                                         "handlers": ["benchmark_log_handler"],
                                         "level": level_upper,
+                                        "propagate": False
+                                    },
+                                    "opensearchpy.trace": {
+                                        "handlers": ["http_trace_handler"],
+                                        "level": trace_level,
                                         "propagate": False
                                     },
                                     "benchmark.profile": {
@@ -422,9 +437,14 @@ class BenchmarkRunner:
                             with open(logging_json_path, 'w') as f:
                                 json.dump(log_config, f, indent=2)
                             patched_logging_json = True
-                            logger.info(f"HTTP request logging enabled: opensearch logger set to {level_upper}")
+                            flags = []
+                            if log_level:
+                                flags.append(f"log_level={level_upper}")
+                            if http_trace:
+                                flags.append("http_trace=INFO→http-trace.log")
+                            logger.info(f"Logging config patched: {', '.join(flags)}")
                         except Exception as e:
-                            logger.warning(f"Failed to patch logging.json for log_level={log_level}: {e}")
+                            logger.warning(f"Failed to patch logging.json: {e}")
                 
                 logger.info(f"Executing benchmark sweep {sweep_idx}/{len(parameter_sweeps)}: dataset={dataset}, engine={engine}, scenario={scenario}")
                 logger.info(f"Command: {' '.join(cmd)}")
@@ -754,5 +774,18 @@ class BenchmarkRunner:
 
         if log_content:
             (target_dir / "benchmark.log").write_text(log_content, encoding="utf-8")
+
+        # Copy http-trace.log if it exists (only written when log_level is set)
+        trace_log_path = f"{BENCHMARK_HOME}/.osb/logs/http-trace.log"
+        try:
+            with open(trace_log_path, 'r') as f:
+                trace_content = f.read()
+            if trace_content.strip():
+                (target_dir / "http-trace.log").write_text(trace_content, encoding="utf-8")
+                logger.info("Downloaded http-trace.log")
+        except FileNotFoundError:
+            pass  # only present when log_level was set
+        except Exception as e:
+            logger.error(f"Error downloading http-trace.log: {e}")
 
 # Made with Bob
