@@ -351,8 +351,11 @@ pipeline {
                                                 fi
 
                                                 # Wait for manager pod
+                                                # 600s timeout: the install-jvector-plugin init container
+                                                # downloads from Maven Central at startup, which regularly
+                                                # takes 5+ minutes on cold nodes.
                                                 kubectl rollout status statefulset/opensearch-cluster-manager \
-                                                    -n ${ns} --timeout=300s
+                                                    -n ${ns} --timeout=600s
 
                                                 # Wait for all data pods to be Running
                                                 echo "Waiting for opensearch-data pods to be Running in ${ns}..."
