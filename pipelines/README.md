@@ -12,6 +12,7 @@ Each file here defines a complete benchmark run — an ordered list of steps wit
   "engine":      "__ENGINE__",    // replaced at submit time: jvector | faiss | lucene
   "no_profiling": false,          // optional — omit to keep async-profiler enabled
   "no_metrics":   false,          // optional — omit to keep GKE metrics collection enabled
+  "log_level":    "debug",        // optional — sets opensearch-benchmark HTTP logging level (debug|info|warning|error)
   "params": {                     // optional — pipeline-level params merged into every step
     "corpus_size": "1m"           // drives auto-derivation of target_index_name + num_vectors
   },
