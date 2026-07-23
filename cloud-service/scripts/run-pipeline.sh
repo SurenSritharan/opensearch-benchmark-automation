@@ -31,6 +31,7 @@ set -euo pipefail
 # ── Parse arguments ────────────────────────────────────────────────────────────
 PIPELINE_FILE=""
 CLI_LOG_LEVEL=""
+FIRST_RUN=false
 while true; do
   case "${1:-}" in
     --pipeline)
@@ -40,6 +41,10 @@ while true; do
     --log-level)
       CLI_LOG_LEVEL="${2:?--log-level requires a value (debug|info|warning|error)}"
       shift 2
+      ;;
+    --first-run)
+      FIRST_RUN=true
+      shift
       ;;
     *)
       break
@@ -78,7 +83,16 @@ LOG_LEVEL="${CLI_LOG_LEVEL:-$(echo "$PIPELINE_JSON" | jq -r '.log_level // ""')}
 # Top-level pipeline params merged into every step (later keys win)
 PIPELINE_PARAMS=$(echo "$PIPELINE_JSON" | jq '.params // {}')
 
-STEP_COUNT=$(echo "$PIPELINE_JSON" | jq '.steps | length')
+# When --first-run is set and the pipeline defines first_run_steps, prepend them
+# to steps so the first run does: build (first_run_steps) + search (steps).
+# Without --first-run, or when first_run_steps is absent, only steps runs.
+if [ "$FIRST_RUN" = true ] && echo "$PIPELINE_JSON" | jq -e '.first_run_steps | length > 0' > /dev/null 2>&1; then
+  EFFECTIVE_STEPS=$(echo "$PIPELINE_JSON" | jq '.first_run_steps + .steps')
+else
+  EFFECTIVE_STEPS=$(echo "$PIPELINE_JSON" | jq '.steps')
+fi
+
+STEP_COUNT=$(echo "$EFFECTIVE_STEPS" | jq 'length')
 if [ "$STEP_COUNT" -eq 0 ]; then
   echo "ERROR: pipeline contains no steps: $PIPELINE_FILE"
   exit 1
@@ -145,7 +159,7 @@ while IFS= read -r raw_step; do
 
   TESTS_JSON=$(echo "$TESTS_JSON" | jq --argjson t "$test_entry" '. + [$t]')
 
-done < <(echo "$PIPELINE_JSON" | jq -c '.steps[]')
+done < <(echo "$EFFECTIVE_STEPS" | jq -c '.[]')
 
 # ── Build final payload ────────────────────────────────────────────────────────
 PAYLOAD=$(jq -n \
@@ -175,7 +189,7 @@ echo "Scenarios:   $STEP_COUNT step(s)"
 echo "API URL:     $API_URL"
 echo ""
 echo "Steps (in order):"
-echo "$PIPELINE_JSON" | jq -r '.steps[] | .dataset + " / " + .scenario + (if .params then " (params: \(.params | keys | join(", ")))" else "" end)' \
+echo "$EFFECTIVE_STEPS" | jq -r '.[] | .dataset + " / " + .scenario + (if .params then " (params: \(.params | keys | join(", ")))" else "" end)' \
   | nl -ba -w3 -v1 | sed 's/^/  /'
 echo ""
 echo "Payload:"

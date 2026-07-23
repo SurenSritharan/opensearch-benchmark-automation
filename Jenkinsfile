@@ -299,9 +299,12 @@ pipeline {
                     def pipeline     = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
                     def pipelineJson = readJSON file: "pipelines/${pipeline}.json"
 
-                    // Build the list of (version, nodeSize) pairs to iterate.
-                    // node_sizes and versions can each be a single value or an array —
-                    // all combinations are run sequentially, results in <version>/<size>/.
+                    // Iteration order: version (outer) × node_size (inner).
+                    //
+                    // Version change  → redeploy cluster at new version + rebuild index
+                    //                   (build_steps run once per version, on the first size)
+                    // Node size change → redeploy cluster (CPU/mem only, PVC preserved)
+                    //                   + search only (data intact, no rebuild needed)
                     def rawVersions  = pipelineJson.versions   ?: [params.OPENSEARCH_VERSION]
                     def rawSizes     = pipelineJson.node_sizes ?: (pipelineJson.node_size ? [pipelineJson.node_size] : ['small'])
                     def runs = []
@@ -314,13 +317,23 @@ pipeline {
                     def extraArgs = "--version ${params.OPENSEARCH_VERSION} --node-size ${nodeSize} --force"
                     if (params.DELETE_PVCS) { extraArgs += " --delete-pvcs" }
 
-                    runs.each { run ->
-                        def version    = run.version
-                        def runSize    = run.nodeSize
-                        def runKey     = "${version}/${runSize}"
+                    // first_run_steps: when a pipeline defines this key, run-pipeline.sh is
+                    // invoked with --first-run on the very first (version, size) run so it
+                    // reads first_run_steps instead of steps — building the index fresh.
+                    // All subsequent runs use steps (search-only) against the existing PVC.
+                    def hasFirstRunSteps = pipelineJson.first_run_steps && pipelineJson.first_run_steps.size() > 0
+                    // A multi-run pipeline (multiple versions or sizes) always redeploys the
+                    // cluster on every iteration so the correct version + node resources are applied.
+                    def multiRun  = pipelineJson.versions || pipelineJson.node_sizes
+                    def firstRun  = true   // flipped to false after the first run executes
 
-                        // For multi-version/size pipelines each run needs a fresh deploy
-                        def multiRun = pipelineJson.versions || pipelineJson.node_sizes
+                    runs.each { run ->
+                        def version      = run.version
+                        def runSize      = run.nodeSize
+                        def runKey       = "${version}/${runSize}"
+                        def isFirstRun   = firstRun
+                        firstRun = false
+
                         def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
                         if (params.DELETE_PVCS) { runExtraArgs += " --delete-pvcs" }
 
@@ -433,11 +446,15 @@ pipeline {
                                         }
 
                                         // ── b) Run benchmark ───────────────────────────────
+                                        // On the first run, --first-run is passed so run-pipeline.sh
+                                        // reads first_run_steps (build + search). All subsequent runs
+                                        // omit the flag and read steps (search-only), reusing the PVC.
                                         sh """
                                             set +e
                                             API_URL=${params.API_URL} \
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
+                                                ${hasFirstRunSteps && isFirstRun ? "--first-run" : ""} \
                                                 ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
                                                 ${engine} \
                                                 2>&1 | tee benchmark-run-${engine}-${version}-${runSize}.log
