@@ -64,7 +64,7 @@ datasets:
             method_name: "hnsw"
           jvector:
             method_name: "disk_ann"
-            mode: "in_memory"
+            mode: "on_disk"
       
         # uses bulk-vector-data-set which internally loads HDF5 corpus file — capped at corpus size (max 10m)
       - name: "bulk-ingest-data"
@@ -173,7 +173,7 @@ datasets:
         engine_params:
           jvector:
             method_name: "disk_ann"
-            mode: "in_memory"
+            mode: "on_disk"
           faiss:
             method_name: "hnsw"
           lucene:
