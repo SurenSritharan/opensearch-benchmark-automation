@@ -61,12 +61,6 @@ scale_down_namespace() {
         kubectl scale statefulset opensearch-cluster-manager --replicas=0 -n $ns
     fi
     
-    # Scale down benchmark client
-    if kubectl get statefulset opensearch-benchmark-client -n $ns &> /dev/null; then
-        echo "  📉 Scaling down opensearch-benchmark-client..."
-        kubectl scale statefulset opensearch-benchmark-client --replicas=0 -n $ns
-    fi
-    
     # Wait for pods to terminate
     echo ""
     echo "Waiting for pods to terminate..."
