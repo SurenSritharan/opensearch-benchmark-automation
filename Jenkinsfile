@@ -335,7 +335,10 @@ pipeline {
                         firstRun = false
 
                         def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
-                        if (params.DELETE_PVCS) { runExtraArgs += " --delete-pvcs" }
+                        // Always wipe the PVC on the first run when first_run_steps are defined —
+                        // stale indexes from a previous build would otherwise conflict with create-index.
+                        // Also wipe on subsequent runs if DELETE_PVCS was explicitly requested.
+                        if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
 
                         echo "════════════════════════════════════════"
                         echo "Benchmarking OpenSearch ${version} / ${runSize}"
