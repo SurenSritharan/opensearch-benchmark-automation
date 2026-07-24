@@ -122,6 +122,30 @@ def init_db():
 
         conn.commit()
 
+    # Kill any orphaned benchmark processes left over from the previous run.
+    #
+    # _launch_process() writes /workspace/run/job_<id>.pgid before each benchmark
+    # subprocess starts and deletes it when the process exits normally.  Any file
+    # still present here means the worker was killed mid-run and the subprocess is
+    # either still running (consuming CPU/memory) or already dead.  Either way,
+    # send SIGKILL to the whole process group and remove the stale file.
+    run_dir = Path("/workspace/run")
+    if run_dir.is_dir():
+        for pgid_file in run_dir.glob("*.pgid"):
+            try:
+                pgid = int(pgid_file.read_text().strip())
+                os.killpg(pgid, 9)
+                logger.warning(f"Startup: killed orphaned process group {pgid} ({pgid_file.name})")
+            except ProcessLookupError:
+                pass  # already dead — nothing to kill
+            except Exception as e:
+                logger.warning(f"Startup: could not kill pgid from {pgid_file.name}: {e}")
+            finally:
+                try:
+                    pgid_file.unlink()
+                except Exception:
+                    pass
+
     # Release any stale engine lock files left over from the previous process
     locks_dir = "/workspace/locks"
     if os.path.isdir(locks_dir):
