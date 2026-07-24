@@ -308,7 +308,17 @@ pipeline {
                     def rawVersions  = pipelineJson.versions   ?: [params.OPENSEARCH_VERSION]
                     def rawSizes     = pipelineJson.node_sizes ?: (pipelineJson.node_size ? [pipelineJson.node_size] : ['small'])
                     def runs = []
-                    rawVersions.each { v -> rawSizes.each { s -> runs << [version: v, nodeSize: s] } }
+                    def versionCounts = [:]
+                    rawVersions.each { v -> rawSizes.each { s ->
+                        def count = (versionCounts[v] ?: 0) + 1
+                        versionCounts[v] = count
+                        runs << [version: v, nodeSize: s, versionOccurrence: count]
+                    }}
+                    // Post-process: versions that appear more than once get _run1, _run2 ...
+                    // Versions that appear exactly once keep their label as-is.
+                    runs.each { r ->
+                        r.versionLabel = (versionCounts[r.version] > 1) ? "${r.version}_run${r.versionOccurrence}" : r.version
+                    }
 
                     sh "mkdir -p ${RESULTS_DIR}"
 
@@ -330,7 +340,8 @@ pipeline {
                     runs.each { run ->
                         def version      = run.version
                         def runSize      = run.nodeSize
-                        def runKey       = "${version}/${runSize}"
+                        def versionLabel = run.versionLabel ?: run.version
+                        def runKey       = "${versionLabel}/${runSize}"
                         def isFirstRun   = firstRun
                         firstRun = false
 
