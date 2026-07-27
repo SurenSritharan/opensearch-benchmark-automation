@@ -14,12 +14,12 @@ pipeline {
         choice(
             name: 'PIPELINE',
             choices: [
+                'search-compare',
                 'search-all',
                 'search-all-overquery',
                 'overquery-5m-k10',
                 'search-1m',
                 'search-5m',
-                'search-compare',
                 'complete-1m',
                 'complete-5m',
                 'complete',
