@@ -1413,9 +1413,9 @@ def list_jobs():
 
 
 def _parse_sweep_directory(
-    sweep_dir: Path, 
-    sweep_name: str, 
-    scenario_label: Optional[str] = None, 
+    sweep_dir: Path,
+    sweep_name: Optional[str],
+    scenario_label: Optional[str] = None,
     dataset: Optional[str] = None
 ) -> dict:
     """Helper function to cleanly read and parse artifacts for a single sweep directory."""
@@ -1487,15 +1487,20 @@ def get_job_results(job_id: str):
             subdir = s_data.get('results_subdir', '')
             dataset = s_data.get('dataset', '')
             label = s_data.get('scenario_label', scenario_key)
-            
+
             for sweep in s_data.get('sweep_results', []):
                 sweep_name = sweep.get('sweep_name')
-                if not sweep_name and sweep.get('results_dir'):
-                    tail = Path(sweep['results_dir']).name
+                # Prefer the sweep-level results_dir; fall back to the scenario-level one
+                # (sweep-level is absent when the run failed before the process launched).
+                raw_rd = sweep.get('results_dir') or s_data.get('results_dir', '')
+                if not sweep_name and raw_rd:
+                    tail = Path(raw_rd).name
                     # If the tail is the scenario subdir itself, artifacts live directly
-                    # in the scenario dir (no sweep-N subfolder was created)
+                    # in the scenario dir (no sweep-N subfolder was created).
+                    # sweep_name is left as None so the UI download URL omits the
+                    # non-existent sweep-N path segment.
                     if tail == subdir or not tail.startswith('sweep-'):
-                        sweep_name = f"sweep-{sweep.get('sweep_index', 1)}"
+                        sweep_name = None
                         sweep_path = results_dir / subdir
                     else:
                         sweep_name = tail
@@ -1505,6 +1510,26 @@ def get_job_results(job_id: str):
                 else:
                     continue
                 sweeps.append(_parse_sweep_directory(sweep_path, sweep_name, label, dataset))
+
+        # Scenarios that were skipped (already completed on a prior restart) are absent
+        # from scenario_results.  Fall back to filesystem discovery for those so their
+        # benchmark.log files are still served.
+        found_subdirs = {s_data.get('results_subdir', '') for s_data in scenario_results.values()}
+        for scenario in job.get('scenarios', []):
+            dataset = scenario.get('dataset', '')
+            label = scenario.get('label', '')
+            scenario_key = f"{dataset}-{label}"
+            if scenario_key in found_subdirs:
+                continue
+            # Not in scenario_results — try filesystem
+            scenario_dir = results_dir / scenario_key
+            if scenario_dir.exists():
+                sweep_dirs = sorted(scenario_dir.glob('sweep-*'))
+                if sweep_dirs:
+                    for sd in sweep_dirs:
+                        sweeps.append(_parse_sweep_directory(sd, sd.name, label, dataset))
+                else:
+                    sweeps.append(_parse_sweep_directory(scenario_dir, None, label, dataset))
     elif job.get('scenarios'):
         # --- Batch Job Path (legacy/existing jobs without scenario_results) ---
         # Reconstruct from job.scenarios and file system

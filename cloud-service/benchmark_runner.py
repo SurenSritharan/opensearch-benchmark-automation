@@ -809,6 +809,7 @@ class BenchmarkRunner:
                     all_results.append({
                         'status': 'failed', 'error': f'Cluster {ctx.target_host} is not ready.',
                         'exit_code': -1, 'sweep_index': idx, 'sweep_params': ctx.sweep_params,
+                        'results_dir': str(ctx.results_dir),
                     })
                     continue
 
@@ -838,6 +839,7 @@ class BenchmarkRunner:
                     all_results.append({
                         'status': 'failed', 'error': 'Process failed to initialize',
                         'sweep_index': idx, 'sweep_params': ctx.sweep_params,
+                        'results_dir': str(ctx.results_dir),
                     })
                     continue
 
