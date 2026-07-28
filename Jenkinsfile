@@ -419,7 +419,7 @@ pipeline {
                                                 echo "Waiting for ${ns} cluster health..."
                                                 LAST_PROGRESS_SCORE="0.0"
                                                 LAST_PROGRESS=\$SECONDS
-                                                STALL_LIMIT=600
+                                                STALL_LIMIT=3600
                                                 while true; do
                                                     HEALTH=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
                                                         curl -sk -u admin:admin \
