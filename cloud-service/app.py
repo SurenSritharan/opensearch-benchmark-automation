@@ -83,12 +83,18 @@ def init_db():
                 created_at TEXT,
                 started_at TEXT,
                 completed_at TEXT,
+                last_heartbeat_at TEXT,
                 options TEXT,
                 result TEXT,
                 error TEXT,
                 queue_position INTEGER
             )
         """)
+        # Add column to existing databases that predate this field
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN last_heartbeat_at TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_engine_status_queue
             ON jobs(engine, status, queue_position)
@@ -105,12 +111,18 @@ def init_db():
         # 'running' entries in the UI after a cancel.  Instead we mark them
         # cancelled with a clear reason; the user can explicitly re-submit if
         # a genuine retry is needed.
-        cursor = conn.execute("SELECT job_id FROM jobs WHERE status = 'running'")
+        cursor = conn.execute(
+            "SELECT job_id FROM jobs WHERE status = 'running'"
+        )
         orphaned = [row[0] for row in cursor.fetchall()]
         if orphaned:
+            # Use last_heartbeat_at as completed_at so the displayed duration
+            # reflects how far the job actually got, not when the pod restarted.
+            # Falls back to NULL when no heartbeat was ever written (e.g. the job
+            # was killed before finishing its first scenario).
             conn.execute(
                 "UPDATE jobs SET status='cancelled', "
-                "completed_at=datetime('now'), "
+                "completed_at=last_heartbeat_at, "
                 "error='Job orphaned by pod restart — cancelled on startup recovery' "
                 f"WHERE job_id IN ({','.join('?'*len(orphaned))})",
                 orphaned
@@ -273,8 +285,9 @@ def save_job(job_id: str, job_data: Dict[str, Any]):
             conn.execute("""
                 INSERT OR REPLACE INTO jobs
                 (job_id, status, dataset, engine, scenario, ui_scenario,
-                 created_at, started_at, completed_at, options, result, error, queue_position)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, started_at, completed_at, last_heartbeat_at,
+                 options, result, error, queue_position)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job_id,
                 job_data.get('status'),
@@ -285,6 +298,7 @@ def save_job(job_id: str, job_data: Dict[str, Any]):
                 job_data.get('created_at'),
                 job_data.get('started_at'),
                 job_data.get('completed_at'),
+                job_data.get('last_heartbeat_at'),
                 options_json,
                 result_json,
                 job_data.get('error'),
@@ -712,6 +726,7 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             if job_data and 'scenario_status' in job_data:
                 job_data['scenario_status'][scenario_key] = scenario_run_status or 'failed'
                 job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = scenario_completed_at
+                job_data['last_heartbeat_at'] = scenario_completed_at
                 save_job(job_id, job_data)
 
             if scenario_run_status == 'completed':
