@@ -124,8 +124,7 @@ class K8sMetricsCollector:
             url = f"https://{self.opensearch_host}/_nodes/stats/jvm"
             resp = requests.get(
                 url,
-                auth=("admin", "admin"),
-                verify=False,
+                cert=('/certs/admin.pem', '/certs/admin-key.pem'), verify='/certs/root-ca.pem',
                 timeout=5,
             )
             resp.raise_for_status()

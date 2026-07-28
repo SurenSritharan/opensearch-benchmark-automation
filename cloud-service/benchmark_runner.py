@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
-from requests.auth import HTTPBasicAuth
 import requests
 from config_loader import ConfigLoader
 from k8s_metrics_collector import K8sMetricsCollector
@@ -26,9 +25,11 @@ class RunContext:
     target_host:    str
     workload_path:  str
     dataset_config: Dict[str, Any]
-    params:         Dict[str, Any]   # merged base → procedure → sweep → runtime
+    params:         Dict[str, Any]   # merged base → procedure → sweep → runtime (no credentials)
     sweep_params:   Dict[str, Any]   # raw sweep-level params (for reporting only)
     results_dir:    Path             # pre-built results directory for this sweep
+    username:       str = 'admin'   # cluster auth — kept off params so never sent to OSB
+    password:       str = 'admin'
 
 
 def _kill_proc_group(proc: subprocess.Popen) -> None:
@@ -54,12 +55,15 @@ def _kill_proc_group(proc: subprocess.Popen) -> None:
         pass
     
 
+_CERT    = '/certs/admin.pem'
+_KEY     = '/certs/admin-key.pem'
+_CA      = '/certs/root-ca.pem'
+
 def _fetch_node_stats(target_host: str) -> Optional[Dict]:
     """Snapshot _nodes/stats from the OpenSearch cluster via REST API."""
     try:
         url = f"https://{target_host}/_nodes/stats/jvm,os,process,fs,thread_pool,indices"
-        resp = requests.get(url, auth=HTTPBasicAuth('admin', 'admin'),
-                            verify=False, timeout=15)
+        resp = requests.get(url, cert=(_CERT, _KEY), verify=_CA, timeout=15)
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -160,6 +164,10 @@ class BenchmarkRunner:
             base_params.update(engine_params_config[engine])
             logger.info(f"Loaded engine params for {engine}: {list(engine_params_config[engine].keys())}")
 
+        # Extract credentials before they can bleed into workload params sent to OSB
+        username = (workload_params or {}).pop('username', 'admin')
+        password = (workload_params or {}).pop('password', 'admin')
+
         # Procedure config: scenario-level params + engine-specific overrides
         runtime_sweeps   = workload_params.pop('parameter_sweeps', None) if workload_params else None
         procedure_config = next(
@@ -215,6 +223,8 @@ class BenchmarkRunner:
                 params         = final_params,
                 sweep_params   = sweep_params,
                 results_dir    = results_dir,
+                username       = username,
+                password       = password,
             ))
 
         return sweeps
@@ -233,8 +243,7 @@ class BenchmarkRunner:
             try:
                 response = requests.get(
                     url,
-                    auth=HTTPBasicAuth('admin', 'admin'),
-                    verify=False,
+                    cert=(_CERT, _KEY), verify=_CA,
                     timeout=10
                 )
                 if response.status_code == 200:
@@ -401,7 +410,7 @@ class BenchmarkRunner:
             'opensearch-benchmark', 'run',
             '--workload-path',   ctx.workload_path,
             '--target-hosts',    ctx.target_host,
-            '--client-options',  f'timeout:{client_timeout},use_ssl:true,verify_certs:false,basic_auth_user:admin,basic_auth_password:admin',
+            '--client-options',  f'timeout:{client_timeout},use_ssl:true,verify_certs:false,basic_auth_user:{ctx.username},basic_auth_password:{ctx.password}',
             '--test-procedure',  scenario,
             '--kill-running-processes',
             f'--user-tag={user_tags_str}',
@@ -592,8 +601,7 @@ class BenchmarkRunner:
         try:
             response = requests.get(
                 f"https://{target_host}/_cluster/health",
-                auth=HTTPBasicAuth('admin', 'admin'),
-                verify=False,
+                cert=(_CERT, _KEY), verify=_CA,
                 timeout=10,
             )
             if response.status_code == 200:

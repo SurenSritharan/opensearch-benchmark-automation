@@ -19,6 +19,12 @@
 #   num_vectors        →  numeric value (1m=1000000, 5m=5000000, etc.)
 #   label              →  <dataset-short>-<corpus_size>-<scenario>[-k<N>]
 #
+# Cluster credentials (optional, default to admin/admin):
+#   Set "username" and "password" under the top-level "params" key in the pipeline JSON.
+#   They are passed through to all API calls and the opensearch-benchmark --client-options flag.
+#   Example in pipeline JSON:
+#     "params": { "username": "myuser", "password": "mypass", "corpus_size": "1m" }
+#
 # Environment variables:
 #   API_URL   Base URL of the benchmark cloud service (default: http://34.132.114.18)
 #
@@ -82,6 +88,10 @@ LOG_LEVEL="${CLI_LOG_LEVEL:-$(echo "$PIPELINE_JSON" | jq -r '.log_level // ""')}
 
 # Top-level pipeline params merged into every step (later keys win)
 PIPELINE_PARAMS=$(echo "$PIPELINE_JSON" | jq '.params // {}')
+
+# Cluster credentials — read from pipeline params (fall back to empty string = server default)
+USERNAME=$(echo "$PIPELINE_PARAMS" | jq -r '.username // ""')
+PASSWORD=$(echo "$PIPELINE_PARAMS" | jq -r '.password // ""')
 
 # When --first-run is set and the pipeline defines first_run_steps, prepend them
 # to steps so the first run does: build (first_run_steps) + search (steps).
@@ -167,16 +177,22 @@ PAYLOAD=$(jq -n \
   --argjson no_profiling "$NO_PROFILING" \
   --argjson no_metrics   "$NO_METRICS" \
   --arg     log_level    "$LOG_LEVEL" \
+  --arg     username     "$USERNAME" \
+  --arg     password     "$PASSWORD" \
   --argjson tests        "$TESTS_JSON" \
   '{
     engine: $engine,
     no_profiling: $no_profiling,
     no_metrics: $no_metrics,
     log_level: $log_level,
+    username: $username,
+    password: $password,
     tests: $tests
   } | if .no_profiling == false then del(.no_profiling) else . end
     | if .no_metrics   == false then del(.no_metrics)   else . end
-    | if .log_level    == ""    then del(.log_level)    else . end')
+    | if .log_level    == ""    then del(.log_level)    else . end
+    | if .username     == ""    then del(.username)     else . end
+    | if .password     == ""    then del(.password)     else . end')
 
 # ── Print header ───────────────────────────────────────────────────────────────
 echo "=========================================="

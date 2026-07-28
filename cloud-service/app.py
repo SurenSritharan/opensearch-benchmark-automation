@@ -18,7 +18,6 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from filelock import FileLock
 import requests
-from requests.auth import HTTPBasicAuth
 from config_loader import ConfigLoader
 from benchmark_runner import BenchmarkRunner
 
@@ -589,8 +588,7 @@ def _save_index_snapshot(engine: str, index_name: str, results_dir: Path) -> Non
     try:
         host = config_loader.get_target_host(engine)
         base_url = f"https://{host}/{index_name}"
-        auth = ("admin", "admin")
-        kwargs = dict(auth=auth, verify=False, timeout=15)
+        kwargs = dict(cert=('/certs/admin.pem', '/certs/admin-key.pem'), verify='/certs/root-ca.pem', timeout=15)
 
         snapshot = {"index": index_name, "engine": engine}
         for key, path in [("mapping", "/_mapping"), ("settings", "/_settings"), ("stats", "/_stats")]:
@@ -1833,14 +1831,15 @@ def view_results(job_id: str):
 @app.route('/api/v1/cluster/<engine>/health')
 def get_cluster_health(engine: str):
     """Check OpenSearch cluster health for a specific engine"""
+    if not _IS_WORKER:
+        return _proxy(engine, f'/api/v1/cluster/{engine}/health')
     try:
         target_host = config_loader.get_target_host(engine)
         url = f"https://{target_host}/_cluster/health"
         
         response = requests.get(
             url,
-            auth=HTTPBasicAuth('admin', 'admin'),
-            verify=False,
+            cert=('/certs/admin.pem', '/certs/admin-key.pem'), verify='/certs/root-ca.pem',
             timeout=10
         )
         
