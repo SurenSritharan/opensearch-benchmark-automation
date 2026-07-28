@@ -687,15 +687,14 @@ EOF
                     ? ['jvector', 'faiss', 'lucene']
                     : [params.ENGINE_TARGET.replace('os-', '')]
 
-                // Cancel cloud service jobs first if the build was aborted,
-                // before scale-down kills the worker pods.
-                if (currentBuild.currentResult == 'ABORTED') {
-                    echo "Build aborted — cancelling any running cloud service jobs..."
+                // Cancel any running cloud service jobs before scale-down kills the worker pods.
+                // Runs on ABORTED and FAILURE — both end with a scale-down that would orphan
+                // running jobs and leave them stuck in 'running' state indefinitely.
+                if (currentBuild.currentResult in ['ABORTED', 'FAILURE']) {
+                    echo "Build ${currentBuild.currentResult} — cancelling any running cloud service jobs..."
 
                     // Only send cancel requests if the API server pod is running.
                     // If it's already down, the worker process is gone and there is nothing to cancel.
-                    // Note: on pod restart, init_db() cancels any orphaned 'running' jobs —
-                    // so skipping cancel here does not leave jobs permanently stuck in a running state.
                     def apiRunning = sh(
                         script: """
                             PHASE=\$(kubectl get pods -n benchmark-api -l app=opensearch-benchmark-api \
@@ -708,9 +707,13 @@ EOF
                     if (apiRunning) {
                         engines.each { engine ->
                             sh """
-                                if [ -f job_id_${engine}.txt ]; then
-                                    JOB_ID=\$(cat job_id_${engine}.txt)
-                                    echo "Cancelling ${engine} job \$JOB_ID..."
+                                # job_id files are named job_id_<engine>-<version>-<size>.txt;
+                                # glob all of them so every run in a multi-version/multi-size
+                                # pipeline is cancelled, not just the last one written.
+                                for JOB_FILE in job_id_${engine}-*.txt; do
+                                    [ -f "\$JOB_FILE" ] || continue
+                                    JOB_ID=\$(cat "\$JOB_FILE")
+                                    echo "Cancelling ${engine} job \$JOB_ID (\$JOB_FILE)..."
                                     curl -s -X POST "${params.API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=${engine}" || true
 
                                     # Poll until the job reaches a terminal status (max 60s)
@@ -724,7 +727,7 @@ EOF
                                         esac
                                         sleep 5
                                     done
-                                fi
+                                done
                             """
                         }
                     } else {
