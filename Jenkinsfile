@@ -314,12 +314,14 @@ pipeline {
                     // Versions appearing exactly once keep their label as-is.
                     def versionOccurrence = [:]
                     def runs = []
-                    rawVersions.each { v -> rawSizes.each { s ->
-                        def occ   = (versionOccurrence[v] ?: 0) + 1
+                    rawVersions.each { v ->
+                        def occ = (versionOccurrence[v] ?: 0) + 1
                         versionOccurrence[v] = occ
                         def versionLabel = (versionCounts[v] > 1) ? "${v}_run${occ}" : v
-                        runs << [version: v, nodeSize: s, versionLabel: versionLabel]
-                    }}
+                        rawSizes.each { s ->
+                            runs << [version: v, nodeSize: s, versionLabel: versionLabel]
+                        }
+                    }
 
                     sh "mkdir -p ${RESULTS_DIR}"
 
