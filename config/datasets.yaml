@@ -73,6 +73,7 @@ datasets:
           target_index_bulk_index_data_set_format: "hdf5"
           target_index_bulk_index_data_set_corpus: "{{corpus_name}}"
           target_index_bulk_indexing_clients: 8
+          detailed-results: false
 
         # uses make_blobs synthetic generation — no corpus file, supports any num_vectors
       - name: "bulk-ingest-random"
@@ -184,6 +185,7 @@ datasets:
           target_index_bulk_size: 5000
           target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base_{{corpus_size}}.fvec"
           target_index_bulk_indexing_clients: 8
+          detailed-results: false
       
       - name: "refresh-index"
         params: {}
