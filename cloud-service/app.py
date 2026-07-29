@@ -654,8 +654,8 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             # Mark all remaining scenarios as cancelled
             job_data = get_job(job_id)
             if job_data and 'scenario_status' in job_data:
-                for remaining in scenarios[idx:]:
-                    key = f"{remaining['dataset']}-{remaining['label']}"
+                for rem_idx, remaining in enumerate(scenarios[idx:], start=idx):
+                    key = f"{rem_idx}:{remaining['dataset']}-{remaining['label']}"
                     if job_data['scenario_status'].get(key) == 'queued':
                         job_data['scenario_status'][key] = 'cancelled'
                 save_job(job_id, job_data)
@@ -664,7 +664,8 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
         dataset = scenario['dataset']
         label = scenario['label']
         procedure_name = scenario['procedure_name']
-        scenario_key = f"{dataset}-{label}"
+        scenario_key = f"{idx}:{dataset}-{label}"   # unique status/times dict key
+        path_key = f"{dataset}-{label}"             # filesystem path (no index prefix)
 
         # Skip scenarios that already completed before a pod restart.
         # scenario_status is persisted in the options blob (survives restarts);
@@ -678,7 +679,7 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
         try:
             # Create unique path for each test: results_base/dataset-label
             # This prevents tests from overwriting each other
-            scenario_job_id = f"{results_base}/{scenario_key}"
+            scenario_job_id = f"{results_base}/{path_key}"
             
             # Update current scenario in job
             scenario_started_at = datetime.utcnow().isoformat()
@@ -747,7 +748,7 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             # This ensures any work completed before the kill signal is not lost.
             result['dataset'] = dataset
             result['scenario_label'] = label
-            result['results_subdir'] = scenario_key
+            result['results_subdir'] = path_key
             batch_results['scenario_results'][scenario_key] = result
 
             scenario_run_status = result.get('status')
@@ -770,7 +771,7 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
                 # Save index mapping/settings/stats for this scenario's index
                 index_name = workload_params.get('target_index_name')
                 if index_name:
-                    scenario_results_dir = RESULTS_DIR / results_base / scenario_key
+                    scenario_results_dir = RESULTS_DIR / results_base / path_key
                     _save_index_snapshot(engine, index_name, scenario_results_dir)
             else:
                 logger.error(f"Batch job {job_id}: Scenario {scenario_key} finished with status '{scenario_run_status}'")
@@ -781,8 +782,8 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
                 logger.info(f"Batch job {job_id}: Cancellation detected after {scenario_key}, stopping loop")
                 job_data = get_job(job_id)
                 if job_data and 'scenario_status' in job_data:
-                    for remaining in scenarios[idx + 1:]:
-                        remaining_key = f"{remaining['dataset']}-{remaining['label']}"
+                    for rem_idx, remaining in enumerate(scenarios[idx + 1:], start=idx + 1):
+                        remaining_key = f"{rem_idx}:{remaining['dataset']}-{remaining['label']}"
                         if job_data['scenario_status'].get(remaining_key) == 'queued':
                             job_data['scenario_status'][remaining_key] = 'cancelled'
                     save_job(job_id, job_data)
@@ -799,8 +800,8 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
                     job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = datetime.utcnow().isoformat()
                     
                     # Clean up all future scenarios in the queue
-                    for remaining in scenarios[idx + 1:]:
-                        remaining_key = f"{remaining['dataset']}-{remaining['label']}"
+                    for rem_idx, remaining in enumerate(scenarios[idx + 1:], start=idx + 1):
+                        remaining_key = f"{rem_idx}:{remaining['dataset']}-{remaining['label']}"
                         if job_data['scenario_status'].get(remaining_key) == 'queued':
                             job_data['scenario_status'][remaining_key] = 'cancelled'
                     save_job(job_id, job_data)
@@ -1113,7 +1114,7 @@ def trigger_batch_benchmark():
             'results_base': results_base,
             'created_at': datetime.utcnow().isoformat(),
             'queue_position': queue_position,
-            'scenario_status': {f"{s['dataset']}-{s['label']}": 'queued' for s in scenarios},
+            'scenario_status': {f"{i}:{s['dataset']}-{s['label']}": 'queued' for i, s in enumerate(scenarios)},
             'scenario_results': {},
             'current_scenario': None,
             'current_scenario_index': 0,
