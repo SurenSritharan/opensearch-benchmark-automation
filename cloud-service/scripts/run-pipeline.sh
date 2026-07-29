@@ -253,7 +253,7 @@ while true; do
     (.current_scenario // "") as $cur |
     (.scenarios // []) as $scens |
     ( if $cur == "" then ""
-      else ( $scens[] | select( (.dataset + "-" + .label) == $cur ) | .label ) // $cur
+      else ( $scens[] | select( $cur | endswith(.dataset + "-" + .label) ) | .label ) // $cur
       end ) as $label |
     ([ .scenario_status // {} | to_entries[] | select(.value | test("completed|failed|partial_failure|error|cancelled")) ] | length) as $done |
     ([ .scenarios // [] | .[] ] | length) as $total |
