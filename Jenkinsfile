@@ -298,6 +298,19 @@ pipeline {
                         ? ['jvector', 'faiss', 'lucene']
                         : [params.ENGINE_TARGET.replace('os-', '')]
 
+                    // Cancel any running/queued jobs from a previous build.
+                    // Workers are up at this point so the cancel requests will be handled.
+                    sh """
+                        for engine in ${engines.join(' ')}; do
+                            JOBS=\$(curl -s "${params.API_URL}/api/v1/benchmark?engine=\$engine" \
+                                | jq -r '.jobs[] | select(.status == "running" or .status == "queued") | .job_id' 2>/dev/null || true)
+                            for JOB_ID in \$JOBS; do
+                                echo "Cancelling stale \$engine job: \$JOB_ID"
+                                curl -s -X POST "${params.API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=\$engine" || true
+                            done
+                        done
+                    """
+
                     def pipeline     = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
                     def pipelineJson = readJSON file: "pipelines/${pipeline}.json"
 
