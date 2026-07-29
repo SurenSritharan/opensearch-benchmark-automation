@@ -280,18 +280,16 @@ pipeline {
             }
         }
 
-        // ── 6. Per-Engine (parallel) ───────────────────────────────────────────
-        //    One branch per engine runs all four per-engine steps in sequence:
-        //      a) Wait for cluster health (green/yellow)
-        //      b) Run benchmark (once per version declared in the pipeline file)
+        // ── 6. Run Benchmarks ──────────────────────────────────────────────────
+        //    Outer loop: iterates over each (version, node_size) combination.
+        //    Inner loop: runs all engines in parallel, each executing:
+        //      a) Scale up / deploy cluster
+        //      b) Run benchmark pipeline
         //      c) Fetch & save results
         //      d) Collect server logs & telemetry
         //
-        //    If the pipeline file contains a "versions" array, the benchmark loop
-        //    runs once per version — redeploying clusters between each pass.
-        //    Results land in <RESULTS_DIR>/<version>/ which is sufficient to
-        //    distinguish runs — no version stamping in step labels needed.
-        stage('Per-Engine') {
+        //    Results land in <RESULTS_DIR>/<version>/<node_size>/.
+        stage('Run Benchmarks') {
             steps {
                 script {
                     def engines = params.ENGINE_TARGET == 'all'
