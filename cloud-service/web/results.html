@@ -764,7 +764,7 @@
 
             // Scenario queue
             if (scenarios.length > 0) {
-                const completedCount = scenarios.filter((s, i) => scenarioStatus[`${i}:${s.dataset}-${s.label}`] === 'completed').length;
+                const completedCount = scenarios.filter(s => scenarioStatus[`${s.dataset}-${s.label}`] === 'completed').length;
                 html += `
                     <div id="live-queue-section" style="margin-bottom: 20px;">
                         <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px;">
@@ -828,7 +828,7 @@
             // Patch scenario queue rows in-place
             if (scenarios.length > 0) {
                 const countEl = document.getElementById('live-queue-count');
-                const completedCount = scenarios.filter((s, i) => scenarioStatus[`${i}:${s.dataset}-${s.label}`] === 'completed').length;
+                const completedCount = scenarios.filter(s => scenarioStatus[`${s.dataset}-${s.label}`] === 'completed').length;
                 if (countEl) countEl.textContent = `${completedCount} / ${scenarios.length} completed`;
 
                 scenarios.forEach((s, idx) => {
@@ -965,8 +965,8 @@
             return entries.length ? `${entries[0][0]}=${entries[0][1]}` : '';
         }
 
-        function renderSweepPanel(s, idx, scenarioStatus, data, panelBg) {
-            const key = `${idx}:${s.dataset}-${s.label}`;
+        function renderSweepPanel(s, scenarioStatus, data, panelBg) {
+            const key = `${s.dataset}-${s.label}`;
             const st = scenarioStatus[key] || 'queued';
             const sweepResults = s.sweep_results || [];
             const sweepCount = s.sweep_count || sweepResults.length;
@@ -1072,7 +1072,7 @@
         }
 
         function renderScenarioRow(s, idx, scenarioStatus, data) {
-            const key = `${idx}:${s.dataset}-${s.label}`;
+            const key = `${s.dataset}-${s.label}`;
             const st = scenarioStatus[key] || 'queued';
             const isRunning = st === 'running';
             const isCurrent = data.status === 'running' && idx === (data.current_scenario_index ?? null);
@@ -1114,7 +1114,7 @@
             const isExpanded = _expandedScenarios.has(idx);
             const panelHtml = canExpand
                 ? `<div class="sweep-detail-panel${isExpanded ? ' open' : ''}" id="sdrill-panel-${idx}" style="background:${bg};">
-                       ${renderSweepPanel(s, idx, scenarioStatus, data, bg)}
+                       ${renderSweepPanel(s, scenarioStatus, data, bg)}
                    </div>`
                 : '';
             const chevronHtml = canExpand
@@ -1151,7 +1151,7 @@
 
             const scenarios = data.scenarios || [];
             const scenarioStatus = data.scenario_status || {};
-            const hasTimes = scenarios.some((s, i) => (data.scenario_times || {})[`${i}:${s.dataset}-${s.label}`]?.started_at)
+            const hasTimes = scenarios.some(s => (data.scenario_times || {})[`${s.dataset}-${s.label}`]?.started_at)
                 || scenarios.some(s => (s.sweep_results || []).length > 0);
 
             if (scenarios.length === 0 || !hasTimes) { section.style.display = 'none'; return; }
