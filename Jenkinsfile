@@ -5,7 +5,7 @@ pipeline {
     //   - HTTP access to the benchmark API LoadBalancer (outbound to GCP)
     // The GKE pod → Jenkins callback (JNLP) is not needed at all.
     //
-    // Prerequisites on the Jenkins node: kubectl, curl, jq, bash
+    // Prerequisites on the Jenkins node: kubectl, curl, jq, bash, openssl
     // Kubeconfig is sourced from the gke-kubeconfig Secret file credential,
     // generated from the jenkins ServiceAccount in benchmark-api namespace.
     agent any
@@ -112,6 +112,8 @@ pipeline {
                 sh '''
                     chmod +x gke-manifest/*.sh cloud-service/scripts/*.sh
                 '''
+                // Sync TLS certs to all namespaces so workers and clusters share the same CA.
+                sh './gke-manifest/sync-certs.sh'
             }
         }
 
