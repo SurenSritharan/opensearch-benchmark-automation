@@ -356,6 +356,7 @@ pipeline {
                     def firstRun  = true   // flipped to false after the first run executes
 
                     runs.each { run ->
+                        if (currentBuild.currentResult == 'ABORTED') { return }
                         def version      = run.version
                         def runSize      = run.nodeSize
                         def versionLabel = run.versionLabel
@@ -631,7 +632,11 @@ pipeline {
                             }]
                         }
 
-                        parallel engineBranches
+                        if (currentBuild.currentResult != 'ABORTED') {
+                            parallel engineBranches
+                        } else {
+                            echo "Build aborted — skipping engine runs"
+                        }
                     }
                 }
             }
