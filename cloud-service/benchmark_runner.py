@@ -902,6 +902,68 @@ class BenchmarkRunner:
         except Exception as e:
             logger.warning(f"Could not refresh [{index}]: {e}")
 
+    def _wait_for_stable_count(
+        self,
+        target_host: str,
+        index: str,
+        expected: int,
+        stable_for: int = 3,
+        poll_interval: int = 10,
+        timeout: int = 300,
+    ) -> Optional[int]:
+        """Refresh repeatedly until the doc count either reaches *expected* or
+        stabilises (does not change for *stable_for* consecutive polls).
+
+        Large indices with ``refresh_interval: -1`` may still be flushing
+        segments after OSB exits — a single refresh call returns as soon as the
+        refresh *starts*, not when all buffered docs are visible.  Polling until
+        the count stops moving gives an accurate final count before we decide
+        whether to retry the ingest.
+
+        Returns the last observed count, or None if every poll failed.
+        """
+        deadline    = time.monotonic() + timeout
+        last_count  = None
+        stable_runs = 0
+
+        while time.monotonic() < deadline:
+            self._refresh_index(target_host, index)
+            count = self._get_doc_count(target_host, index)
+
+            if count is None:
+                time.sleep(poll_interval)
+                continue
+
+            if count >= expected:
+                logger.info(f"[{index}] doc count reached {count}/{expected} — done.")
+                return count
+
+            if count == last_count:
+                stable_runs += 1
+                logger.info(
+                    f"[{index}] doc count stable at {count}/{expected} "
+                    f"({stable_runs}/{stable_for} stable polls)"
+                )
+                if stable_runs >= stable_for:
+                    logger.info(f"[{index}] count stabilised at {count} — stopping poll.")
+                    return count
+            else:
+                if last_count is not None:
+                    logger.info(
+                        f"[{index}] doc count still growing: {last_count} → {count} "
+                        f"(need {expected})"
+                    )
+                stable_runs = 0
+
+            last_count = count
+            time.sleep(poll_interval)
+
+        logger.warning(
+            f"[{index}] _wait_for_stable_count timed out after {timeout}s "
+            f"— last count: {last_count}"
+        )
+        return last_count
+
     def run_ingest(
         self,
         dataset: str,
@@ -951,10 +1013,9 @@ class BenchmarkRunner:
             )
 
         # ----------------------------------------------------------------
-        # Pre-flight check: refresh then count — skip ingest if already complete
+        # Pre-flight check: wait for stable count — skip ingest if already complete
         # ----------------------------------------------------------------
-        self._refresh_index(target_host, index)
-        pre_count = self._get_doc_count(target_host, index)
+        pre_count = self._wait_for_stable_count(target_host, index, expected)
         if pre_count is not None and pre_count >= expected:
             logger.info(
                 f"Index [{index}] already has {pre_count}/{expected} docs — skipping ingest."
@@ -1005,10 +1066,8 @@ class BenchmarkRunner:
                 logger.error(f"bulk-ingest-data failed on attempt {attempt}: {ingest_result.get('error')}")
                 break
 
-            # Refresh so the count reflects everything just written
-            self._refresh_index(target_host, index)
-
-            actual = self._get_doc_count(target_host, index)
+            # Wait for the count to stabilise before deciding whether to retry
+            actual = self._wait_for_stable_count(target_host, index, expected)
             if actual is None:
                 logger.warning(f"Could not verify doc count on attempt {attempt} — accepting ingest result")
                 break
@@ -1027,9 +1086,8 @@ class BenchmarkRunner:
                 + ("Retrying..." if attempt < max_attempts else "Max attempts reached — ingest incomplete.")
             )
 
-        # Final refresh + count to determine true outcome
-        self._refresh_index(target_host, index)
-        final_actual = self._get_doc_count(target_host, index)
+        # Final stable count to determine true outcome
+        final_actual = self._wait_for_stable_count(target_host, index, expected)
         last         = all_attempt_results[-1] if all_attempt_results else {}
         final_status = (
             "completed" if final_actual is not None and final_actual >= expected
