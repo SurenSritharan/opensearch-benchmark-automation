@@ -1086,13 +1086,22 @@ class BenchmarkRunner:
                 + ("Retrying..." if attempt < max_attempts else "Max attempts reached — ingest incomplete.")
             )
 
-        # Final stable count to determine true outcome
+        # Final stable count to determine true outcome.
+        # OSB exits 0 even on a partial ingest (it ingested what it could), so
+        # we must derive status from the doc count, not the OSB exit code.
         final_actual = self._wait_for_stable_count(target_host, index, expected)
         last         = all_attempt_results[-1] if all_attempt_results else {}
-        final_status = (
-            "completed" if final_actual is not None and final_actual >= expected
-            else last.get("status", "failed")
-        )
+
+        if final_actual is not None and final_actual >= expected:
+            final_status = "completed"
+        elif last.get("status") in ("cancelled",):
+            final_status = "cancelled"
+        else:
+            final_status = "failed"
+            logger.error(
+                f"Ingest failed after {len(all_attempt_results)} attempt(s): "
+                f"expected {expected} docs in [{index}], got {final_actual}."
+            )
 
         return {
             **last,
