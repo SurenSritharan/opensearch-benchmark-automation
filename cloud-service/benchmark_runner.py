@@ -404,7 +404,7 @@ class BenchmarkRunner:
             'method_name':    ctx.params.get('method_name'),
         }
         user_tags_str  = ','.join(f"{k}:{v}" for k, v in user_tags.items() if v is not None)
-        client_timeout = ctx.params.get('client_timeout', 300)
+        client_timeout = ctx.params.get('client_timeout', 600)
 
         cmd = [
             'opensearch-benchmark', 'run',
@@ -877,3 +877,174 @@ class BenchmarkRunner:
         except Exception as e:
             logger.error(f"Benchmark execution error: {e}", exc_info=True)
             return {'status': 'error', 'error': str(e)}
+
+    # ------------------------------------------------------------------
+    # Ingest helpers
+    # ------------------------------------------------------------------
+
+    def _get_doc_count(self, target_host: str, index: str) -> Optional[int]:
+        """Return the doc count for *index* via GET /{index}/_count, or None on error."""
+        try:
+            url  = f"https://{target_host}/{index}/_count"
+            resp = requests.get(url, cert=(_CERT, _KEY), verify=_CA, timeout=15)
+            resp.raise_for_status()
+            return resp.json().get("count")
+        except Exception as e:
+            logger.warning(f"Could not fetch _count for [{index}]: {e}")
+            return None
+
+    def _refresh_index(self, target_host: str, index: str) -> None:
+        """POST /{index}/_refresh so the doc count is current before verification."""
+        try:
+            url  = f"https://{target_host}/{index}/_refresh"
+            resp = requests.post(url, cert=(_CERT, _KEY), verify=_CA, timeout=30)
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning(f"Could not refresh [{index}]: {e}")
+
+    def run_ingest(
+        self,
+        dataset: str,
+        engine: str,
+        job_id: Optional[str] = None,
+        enable_profiling: bool = True,
+        enable_metrics: bool = True,
+        workload_params: Optional[Dict[str, Any]] = None,
+        cancel_event: Optional[threading.Event] = None,
+        log_level: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run the bulk-ingest-data test procedure and verify the resulting doc count
+        matches ``target_index_num_vectors``.
+
+        On a count mismatch the index is deleted and re-created, then the full
+        ingest is retried up to ``ingest_max_attempts`` times (default 3).
+        Each attempt's OSB result is stored so timing data is never lost.
+
+        A pre-flight refresh + count is performed first: if the index already
+        has the expected number of docs the ingest is skipped entirely.
+
+        Parameters
+        ----------
+        workload_params : dict, optional
+            Must contain ``target_index_num_vectors`` and ``target_index_name``
+            for doc-count verification to be active.  If either is absent,
+            the method falls back to a plain single-attempt ingest.
+        """
+        if job_id is None:
+            job_id = str(uuid.uuid4())
+
+        wp           = workload_params or {}
+        expected     = wp.get("target_index_num_vectors")
+        index        = wp.get("target_index_name")
+        max_attempts = wp.get("ingest_max_attempts", 3)
+        target_host  = self._resolve_target_host(engine)
+
+        # No verification params → plain ingest, no retry logic needed
+        if not expected or not index:
+            logger.info("target_index_num_vectors / target_index_name not set — skipping doc-count verification")
+            return self.run_benchmark(
+                dataset, engine, scenario="bulk-ingest-data",
+                job_id=job_id, enable_profiling=enable_profiling,
+                enable_metrics=enable_metrics, workload_params=workload_params,
+                cancel_event=cancel_event, log_level=log_level,
+            )
+
+        # ----------------------------------------------------------------
+        # Pre-flight check: refresh then count — skip ingest if already complete
+        # ----------------------------------------------------------------
+        self._refresh_index(target_host, index)
+        pre_count = self._get_doc_count(target_host, index)
+        if pre_count is not None and pre_count >= expected:
+            logger.info(
+                f"Index [{index}] already has {pre_count}/{expected} docs — skipping ingest."
+            )
+            return {
+                "status":          "completed",
+                "ingest_attempts": 0,
+                "expected_docs":   expected,
+                "actual_docs":     pre_count,
+                "all_attempts":    [],
+                "skipped":         True,
+            }
+
+        all_attempt_results = []
+
+        for attempt in range(1, max_attempts + 1):
+            if cancel_event and cancel_event.is_set():
+                break
+
+            logger.info(f"Ingest attempt {attempt}/{max_attempts}: dataset={dataset} engine={engine} index={index}")
+
+            # On retry: wipe and re-create the index for a clean slate
+            if attempt > 1:
+                logger.info(f"Re-creating index [{index}] before retry attempt {attempt}")
+                create_result = self.run_benchmark(
+                    dataset, engine, scenario="create-index",
+                    job_id=f"{job_id}/create-{attempt}",
+                    enable_profiling=False, enable_metrics=False,
+                    workload_params=workload_params,
+                    cancel_event=cancel_event, log_level=log_level,
+                )
+                if create_result.get("status") != "completed":
+                    logger.error(f"create-index failed on attempt {attempt}: {create_result.get('error')}")
+                    all_attempt_results.append(create_result)
+                    break
+
+            ingest_result = self.run_benchmark(
+                dataset, engine, scenario="bulk-ingest-data",
+                job_id=f"{job_id}/ingest-{attempt}",
+                enable_profiling=enable_profiling,
+                enable_metrics=enable_metrics,
+                workload_params=workload_params,
+                cancel_event=cancel_event, log_level=log_level,
+            )
+            all_attempt_results.append(ingest_result)
+
+            if ingest_result.get("status") != "completed":
+                logger.error(f"bulk-ingest-data failed on attempt {attempt}: {ingest_result.get('error')}")
+                break
+
+            # Refresh so the count reflects everything just written
+            self._refresh_index(target_host, index)
+
+            actual = self._get_doc_count(target_host, index)
+            if actual is None:
+                logger.warning(f"Could not verify doc count on attempt {attempt} — accepting ingest result")
+                break
+
+            shortfall = expected - actual
+            if shortfall <= 0:
+                logger.info(
+                    f"Doc count verified: {actual}/{expected} docs in [{index}] "
+                    f"after attempt {attempt}."
+                )
+                break
+
+            logger.warning(
+                f"Doc count mismatch after attempt {attempt}: "
+                f"expected {expected}, got {actual} (shortfall {shortfall}). "
+                + ("Retrying..." if attempt < max_attempts else "Max attempts reached — ingest incomplete.")
+            )
+
+        # Final refresh + count to determine true outcome
+        self._refresh_index(target_host, index)
+        final_actual = self._get_doc_count(target_host, index)
+        last         = all_attempt_results[-1] if all_attempt_results else {}
+        final_status = (
+            "completed" if final_actual is not None and final_actual >= expected
+            else last.get("status", "failed")
+        )
+
+        return {
+            **last,
+            "status":          final_status,
+            "ingest_attempts": len(all_attempt_results),
+            "expected_docs":   expected,
+            "actual_docs":     final_actual,
+            "all_attempts":    all_attempt_results,
+        }
+
+    def _resolve_target_host(self, engine: str) -> str:
+        """Return the target host for *engine* from config."""
+        return self.config.get_target_host(engine)
