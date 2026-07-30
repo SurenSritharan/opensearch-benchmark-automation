@@ -350,32 +350,32 @@ pipeline {
                     def hasFirstRunSteps = pipelineJson.first_run_steps && pipelineJson.first_run_steps.size() > 0
                     // A multi-run pipeline (multiple versions or sizes) always redeploys the
                     // cluster on every iteration so the correct version + node resources are applied.
-                    def multiRun  = pipelineJson.versions || pipelineJson.node_sizes
-                    def firstRun  = true   // flipped to false after the first run executes
+                    def multiRun = pipelineJson.versions || pipelineJson.node_sizes
 
-                    runs.each { run ->
-                        if (currentBuild.currentResult == 'ABORTED') { return }
-                        def version      = run.version
-                        def runSize      = run.nodeSize
-                        def versionLabel = run.versionLabel
-                        def runKey       = "${versionLabel}/${runSize}"
-                        def isFirstRun   = firstRun
-                        firstRun = false
+                    def engineBranches = engines.collectEntries { engine ->
+                        def ns = "os-${engine}"
+                        [(engine): {
+                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                                def engineFirstRun = true
+                                runs.each { run ->
+                                    if (currentBuild.currentResult == 'ABORTED') { return }
+                                    def version      = run.version
+                                    def runSize      = run.nodeSize
+                                    def versionLabel = run.versionLabel
+                                    def runKey       = "${versionLabel}/${runSize}"
+                                    def isFirstRun   = engineFirstRun
+                                    engineFirstRun   = false
 
-                        def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
-                        // Always wipe the PVC on the first run when first_run_steps are defined —
-                        // stale indexes from a previous build would otherwise conflict with create-index.
-                        // Also wipe on subsequent runs if DELETE_PVCS was explicitly requested.
-                        if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
+                                    def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
+                                    // Always wipe the PVC on the first run when first_run_steps are defined —
+                                    // stale indexes from a previous build would otherwise conflict with create-index.
+                                    // Also wipe on subsequent runs if DELETE_PVCS was explicitly requested.
+                                    if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
 
-                        echo "════════════════════════════════════════"
-                        echo "Benchmarking OpenSearch ${version} / ${runSize}"
-                        echo "════════════════════════════════════════"
+                                    echo "════════════════════════════════════════"
+                                    echo "[${engine}] Benchmarking OpenSearch ${version} / ${runSize}"
+                                    echo "════════════════════════════════════════"
 
-                        def engineBranches = engines.collectEntries { engine ->
-                            def ns = "os-${engine}"
-                            [(engine): {
-                                catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
                                     try {
                                         // ── a) Scale up or deploy this engine's cluster ────
                                         if (params.SCALE_CLUSTERS) {
@@ -627,14 +627,14 @@ pipeline {
                                         """
                                     }
                                 }
-                            }]
-                        }
+                            }
+                        }]
+                    }
 
-                        if (currentBuild.currentResult != 'ABORTED') {
-                            parallel engineBranches
-                        } else {
-                            echo "Build aborted — skipping engine runs"
-                        }
+                    if (currentBuild.currentResult != 'ABORTED') {
+                        parallel engineBranches
+                    } else {
+                        echo "Build aborted — skipping engine runs"
                     }
                 }
             }
