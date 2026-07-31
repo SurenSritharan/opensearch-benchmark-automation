@@ -20,8 +20,17 @@ CERT_DIR="$SCRIPT_DIR/certs"
 
 echo ""
 echo "=== Syncing opensearch-shared-certs to all namespaces ==="
-for ns in benchmark-api benchmark-api-develop os-jvector os-faiss os-lucene os-develop-jvector os-develop-faiss os-develop-lucene; do
-    if kubectl get namespace "$ns" &>/dev/null; then
+# Discover all develop namespaces dynamically so new engines are covered
+# automatically without editing this script.
+NAMESPACES=$(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}' \
+    | tr ' ' '\n' \
+    | grep -E '^(benchmark-api-develop|os-develop-)' \
+    || true)
+
+if [ -z "$NAMESPACES" ]; then
+    echo "  ⚠️  No matching namespaces found (benchmark-api-develop or os-develop-*)"
+else
+    for ns in $NAMESPACES; do
         kubectl create secret generic opensearch-shared-certs \
             --from-file="$CERT_DIR/root-ca.pem" \
             --from-file="$CERT_DIR/root-ca-key.pem" \
@@ -31,10 +40,8 @@ for ns in benchmark-api benchmark-api-develop os-jvector os-faiss os-lucene os-d
             --from-file="$CERT_DIR/admin-key.pem" \
             -n "$ns" --dry-run=client -o yaml | kubectl apply -f -
         echo "  ✅ $ns"
-    else
-        echo "  ⏭  $ns (namespace not found — skipping)"
-    fi
-done
+    done
+fi
 
 echo ""
 echo "✅ Done. Restart affected pods to pick up the new certs."

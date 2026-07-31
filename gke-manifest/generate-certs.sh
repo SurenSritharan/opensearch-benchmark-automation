@@ -46,6 +46,9 @@ DNS.3 = *.*.svc.cluster.local
 DNS.4 = opensearch-cluster-manager
 DNS.5 = opensearch-data
 DNS.6 = opensearch-benchmark-client
+DNS.7 = opensearch-cluster.os-develop-jvector.svc.cluster.local
+DNS.8 = opensearch-cluster.os-develop-faiss.svc.cluster.local
+DNS.9 = opensearch-cluster.os-develop-lucene.svc.cluster.local
 IP.1 = 127.0.0.1
 EOF
 
@@ -67,6 +70,9 @@ DNS.3 = *.*.svc.cluster.local
 DNS.4 = opensearch-cluster-manager
 DNS.5 = opensearch-data
 DNS.6 = opensearch-benchmark-client
+DNS.7 = opensearch-cluster.os-develop-jvector.svc.cluster.local
+DNS.8 = opensearch-cluster.os-develop-faiss.svc.cluster.local
+DNS.9 = opensearch-cluster.os-develop-lucene.svc.cluster.local
 IP.1 = 127.0.0.1
 EOF
 openssl x509 -req -in "${CERT_DIR}/esnode.csr" -CA "${CERT_DIR}/root-ca.pem" -CAkey "${CERT_DIR}/root-ca-key.pem" \
