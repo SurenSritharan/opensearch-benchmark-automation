@@ -128,6 +128,8 @@ class BenchmarkRunner:
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_collector = None
         self.metrics_thread = None
+        self.profiler_thread: Optional[threading.Thread] = None
+        self._profiler_stop = threading.Event()
         # Maps job_id -> (Popen process, cancel_event) for active benchmarks
         self._active: Dict[str, tuple] = {}
         self._active_lock = threading.Lock()
@@ -647,6 +649,111 @@ class BenchmarkRunner:
             finally:
                 self.metrics_thread = None
 
+    def _start_profiling(self, engine: str, results_dir: Path, duration: int = 60) -> None:
+        """Start async-profiler on a dedicated thread that owns the full lifecycle:
+        start → wait(duration) → stop → collect flame graphs.
+
+        The wait is interruptible — _stop_profiling() sets _profiler_stop so the
+        thread wakes early when OSB finishes before duration elapses, then still
+        collects whatever was captured. No shared mutable state, no locks needed.
+        """
+        namespace = f"os-{engine}"
+        logger.info(f"🔍 [profiling] Starting async-profiler on {namespace} (duration: up to {duration}s)")
+        self._profiler_stop.clear()
+        try:
+            pods_out = subprocess.run(
+                ['kubectl', 'get', 'pods', '-n', namespace,
+                 '-l', 'app=opensearch-data',
+                 '-o', 'jsonpath={.items[*].metadata.name}'],
+                capture_output=True, text=True, timeout=15,
+            )
+            pods = pods_out.stdout.split() if pods_out.returncode == 0 else []
+        except Exception as e:
+            logger.warning(f"[profiling] Could not list pods in {namespace}: {e}")
+            return
+
+        if not pods:
+            logger.warning(f"[profiling] No opensearch-data pods found in {namespace} — skipping")
+            return
+
+        def _run_profiler():
+            # Start asprof on every pod
+            started = []
+            for pod in pods:
+                try:
+                    r = subprocess.run(
+                        ['kubectl', 'exec', pod, '-c', 'opensearch', '-n', namespace, '--',
+                         '/usr/share/opensearch/async-profiler/bin/asprof',
+                         'start', '--event', 'cpu', '1'],   # PID 1 = JVM in container
+                        capture_output=True, text=True, timeout=30,
+                    )
+                    if r.returncode == 0:
+                        logger.info(f"[profiling] Started on {pod}")
+                        started.append(pod)
+                    else:
+                        logger.warning(f"[profiling] asprof start failed on {pod}: {r.stderr.strip()}")
+                except Exception as e:
+                    logger.warning(f"[profiling] Could not start profiler on {pod}: {e}")
+
+            if not started:
+                logger.warning("[profiling] No pods started — nothing to collect")
+                return
+
+            logger.info(f"[profiling] Running on {len(started)}/{len(pods)} pods in {namespace} for up to {duration}s")
+            # Wait up to duration seconds, but wake immediately if OSB finishes early
+            self._profiler_stop.wait(timeout=duration)
+            elapsed = "early" if self._profiler_stop.is_set() else f"{duration}s elapsed"
+            logger.info(f"[profiling] {elapsed} — collecting flame graphs")
+
+            # Stop asprof and copy flame graphs
+            profiling_dir = results_dir / 'profiling'
+            profiling_dir.mkdir(parents=True, exist_ok=True)
+
+            for pod in started:
+                remote_path = f'/tmp/flamegraph-{pod}.html'
+                local_path  = profiling_dir / f'{pod}-flamegraph.html'
+                try:
+                    r = subprocess.run(
+                        ['kubectl', 'exec', pod, '-c', 'opensearch', '-n', namespace, '--',
+                         '/usr/share/opensearch/async-profiler/bin/asprof',
+                         'stop', '--output', 'flamegraph', '--file', remote_path, '1'],
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    if r.returncode != 0:
+                        logger.warning(f"[profiling] asprof stop failed on {pod}: {r.stderr.strip()}")
+                        continue
+
+                    cp = subprocess.run(
+                        ['kubectl', 'cp',
+                         f'{namespace}/{pod}:{remote_path}', str(local_path),
+                         '-c', 'opensearch'],
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    if cp.returncode == 0:
+                        logger.info(f"[profiling] Flame graph saved: {local_path}")
+                    else:
+                        logger.warning(f"[profiling] kubectl cp failed for {pod}: {cp.stderr.strip()}")
+                except Exception as e:
+                    logger.warning(f"[profiling] Error collecting from {pod}: {e}")
+
+        self.profiler_thread = threading.Thread(target=_run_profiler, daemon=True)
+        self.profiler_thread.start()
+
+    def _stop_profiling(self) -> None:
+        """Signal the profiler thread to stop waiting and collect, then join it.
+        No-op if profiling was not started.
+        """
+        if self.profiler_thread is not None:
+            logger.info("🔍 [profiling] Stopping profiler and collecting flame graphs...")
+            self._profiler_stop.set()   # wake the thread early if still sleeping
+            # Cap the wait — asprof stop + kubectl cp per pod, 60s each, up to 3 pods
+            self.profiler_thread.join(timeout=200)
+            if self.profiler_thread.is_alive():
+                logger.warning("[profiling] profiler thread did not finish in time — continuing")
+            self.profiler_thread = None
+
+
+
     def _download_artifacts(self, console_output: str, target_dir: Path,
                             stderr: str = ''):
         """
@@ -786,7 +893,8 @@ class BenchmarkRunner:
         engine: str,
         scenario: str = 'search',
         job_id: Optional[str] = None,
-        enable_profiling: bool = True,
+        enable_profiling: bool = False,
+        profiling_duration: int = 60,
         enable_metrics: bool = True,
         workload_params: Optional[Dict[str, Any]] = None,
         cancel_event: Optional[threading.Event] = None,
@@ -823,6 +931,8 @@ class BenchmarkRunner:
 
                 if enable_metrics:
                     self._start_metrics_collection(engine, ctx.target_host, ctx.results_dir, dataset, scenario, idx)
+                if enable_profiling:
+                    self._start_profiling(engine, ctx.results_dir, profiling_duration)
 
                 self._clear_benchmark_logs()
                 cmd = self._build_osb_command(ctx, scenario, dataset, engine)
@@ -840,6 +950,7 @@ class BenchmarkRunner:
                         end_time = datetime.utcnow()
                         self._save_server_stats(ctx.results_dir, start_time, end_time, ctx.target_host, stats_before)
                         self._stop_metrics_collection()
+                        self._stop_profiling()
 
                 duration = (end_time - start_time).total_seconds()
 
@@ -969,7 +1080,8 @@ class BenchmarkRunner:
         dataset: str,
         engine: str,
         job_id: Optional[str] = None,
-        enable_profiling: bool = True,
+        enable_profiling: bool = False,
+        profiling_duration: int = 60,
         enable_metrics: bool = True,
         workload_params: Optional[Dict[str, Any]] = None,
         cancel_event: Optional[threading.Event] = None,
@@ -1008,6 +1120,7 @@ class BenchmarkRunner:
             return self.run_benchmark(
                 dataset, engine, scenario="bulk-ingest-data",
                 job_id=job_id, enable_profiling=enable_profiling,
+                profiling_duration=profiling_duration,
                 enable_metrics=enable_metrics, workload_params=workload_params,
                 cancel_event=cancel_event, log_level=log_level,
             )
@@ -1056,6 +1169,7 @@ class BenchmarkRunner:
                 dataset, engine, scenario="bulk-ingest-data",
                 job_id=f"{job_id}/ingest-{attempt}",
                 enable_profiling=enable_profiling,
+                profiling_duration=profiling_duration,
                 enable_metrics=enable_metrics,
                 workload_params=workload_params,
                 cancel_event=cancel_event, log_level=log_level,

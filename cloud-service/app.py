@@ -482,7 +482,8 @@ def process_engine_queue(engine: str):
                                 dataset=dataset,
                                 engine=engine,
                                 job_id=job_id,
-                                enable_profiling=not options.get('no_profiling', False),
+                                enable_profiling=options.get('enable_profiling', False),
+                                profiling_duration=options.get('profiling_duration', 60),
                                 enable_metrics=not options.get('no_metrics', False),
                                 workload_params=workload_params,
                                 cancel_event=cancel_event,
@@ -494,7 +495,8 @@ def process_engine_queue(engine: str):
                                 engine=engine,
                                 scenario=scenario,
                                 job_id=job_id,
-                                enable_profiling=not options.get('no_profiling', False),
+                                enable_profiling=options.get('enable_profiling', False),
+                                profiling_duration=options.get('profiling_duration', 60),
                                 enable_metrics=not options.get('no_metrics', False),
                                 workload_params=workload_params,
                                 cancel_event=cancel_event,
@@ -702,13 +704,22 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             
             logger.info(f"Batch job {job_id}, test {label}: merged params = {workload_params}")
             
+            # Per-step profile flag overrides the job-level enable_profiling.
+            # A step with "profile": true is profiled even when the job flag is off,
+            # and "profile": false suppresses profiling even when the job flag is on.
+            job_profiling      = options.get('enable_profiling', False)
+            step_profile       = scenario.get('profile')   # None if not set on this step
+            scenario_profiling = step_profile if step_profile is not None else job_profiling
+            profiling_duration = options.get('profiling_duration', 60)
+
             # --- bulk-ingest-data: doc-count verification + retry ---
             if procedure_name == "bulk-ingest-data":
                 result = benchmark_runner.run_ingest(
                     dataset=dataset,
                     engine=engine,
                     job_id=scenario_job_id,
-                    enable_profiling=not options.get('no_profiling', False),
+                    enable_profiling=scenario_profiling,
+                    profiling_duration=profiling_duration,
                     enable_metrics=not options.get('no_metrics', False),
                     workload_params=workload_params if workload_params else None,
                     cancel_event=cancel_event,
@@ -722,7 +733,8 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
                     engine=engine,
                     scenario=procedure_name,
                     job_id=scenario_job_id,
-                    enable_profiling=not options.get('no_profiling', False),
+                    enable_profiling=scenario_profiling,
+                    profiling_duration=profiling_duration,
                     enable_metrics=not options.get('no_metrics', False),
                     workload_params=workload_params if workload_params else None,
                     cancel_event=cancel_event,
@@ -1059,7 +1071,8 @@ def trigger_batch_benchmark():
                 'dataset': dataset,
                 'label': scenario_label,
                 'procedure_name': procedure_name,
-                'params': scenario_params
+                'params': scenario_params,
+                'profile': test.get('profile'),  # per-step profiling
             })
             
             logger.info(f"Test: dataset='{dataset}', scenario='{scenario_label}' -> procedure '{procedure_name}'")
@@ -1103,10 +1116,11 @@ def trigger_batch_benchmark():
             'current_scenario': None,
             'current_scenario_index': 0,
             'options': {
-                'no_profiling': request_data.get('no_profiling', False),
-                'no_metrics': request_data.get('no_metrics', False),
-                'log_level': request_data.get('log_level', None),
-                'workload_params': request_data.get('workload_params', None)
+                'enable_profiling':   request_data.get('enable_profiling', False),
+                'profiling_duration': request_data.get('profiling_duration', 60),
+                'no_metrics':         request_data.get('no_metrics', False),
+                'log_level':          request_data.get('log_level', None),
+                'workload_params':    request_data.get('workload_params', None)
             }
         }
         
@@ -1200,9 +1214,10 @@ def trigger_benchmark():
             'created_at': datetime.utcnow().isoformat(),
             'queue_position': queue_position,
             'options': {
-                'no_profiling': request_data.get('no_profiling', False),
-                'no_metrics': request_data.get('no_metrics', False),
-                'workload_params': request_data.get('workload_params', None)
+                'enable_profiling':   request_data.get('enable_profiling', False),
+                'profiling_duration': request_data.get('profiling_duration', 60),
+                'no_metrics':         request_data.get('no_metrics', False),
+                'workload_params':    request_data.get('workload_params', None)
             }
         }
         

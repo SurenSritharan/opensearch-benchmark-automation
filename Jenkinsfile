@@ -23,6 +23,8 @@ pipeline {
                 'complete-1m',
                 'complete-5m',
                 'complete',
+                'complete-1m-profile-ingest',
+                'complete-5m-profile-ingest',
                 'msmarco-jvector-hq-build',
                 'msmarco-jvector-hq-full',
                 'msmarco-jvector-hq-search',
@@ -73,6 +75,16 @@ pipeline {
             name: 'LOG_LEVEL',
             choices: ['', 'debug', 'info', 'warning', 'error'],
             description: 'opensearch-benchmark log level. Leave blank to use the pipeline default. Set to "debug" to enable verbose OSB internal logging.'
+        )
+        booleanParam(
+            name: 'ENABLE_PROFILING',
+            defaultValue: false,
+            description: 'Profile all steps in this run. Off by default. Use for ad-hoc investigation without editing pipeline JSON — e.g. pick search-1m and check this to profile every step. Individual steps can also be profiled permanently via "profile": true in the pipeline JSON, which takes precedence over this flag.'
+        )
+        string(
+            name: 'PROFILING_DURATION',
+            defaultValue: '60',
+            description: 'How many seconds to run async-profiler per step (default: 60). The profiler starts at the beginning of each profiled step and stops after this duration — the step itself continues to completion. Recommended: 30–60s for CPU flame graphs.'
         )
     }
 
@@ -487,6 +499,8 @@ pipeline {
                                                 --pipeline ${pipeline} \
                                                 ${hasFirstRunSteps && isFirstRun ? "--first-run" : ""} \
                                                 ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
+                                                ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
+                                                ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
                                                 ${engine} \
                                                 2>&1 | tee benchmark-run-${engine}-${version}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
@@ -664,6 +678,7 @@ Parameters:
   Scale Clusters:     ${params.SCALE_CLUSTERS}
   Redeploy Clusters:  ${params.REDEPLOY_CLUSTERS}
   OpenSearch Version: ${params.OPENSEARCH_VERSION}
+  Enable Profiling:   ${params.ENABLE_PROFILING}
 
 Results per engine:
 EOF

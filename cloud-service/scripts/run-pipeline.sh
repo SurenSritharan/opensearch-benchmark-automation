@@ -38,6 +38,8 @@ set -euo pipefail
 PIPELINE_FILE=""
 CLI_LOG_LEVEL=""
 FIRST_RUN=false
+ENABLE_PROFILING=false
+PROFILING_DURATION=60
 while true; do
   case "${1:-}" in
     --pipeline)
@@ -51,6 +53,14 @@ while true; do
     --first-run)
       FIRST_RUN=true
       shift
+      ;;
+    --enable-profiling)
+      ENABLE_PROFILING=true
+      shift
+      ;;
+    --profiling-duration)
+      PROFILING_DURATION="${2:?--profiling-duration requires a value in seconds}"
+      shift 2
       ;;
     *)
       break
@@ -81,8 +91,10 @@ fi
 PIPELINE_JSON=$(sed "s/__ENGINE__/${ENGINE}/g" "$PIPELINE_FILE")
 
 DESCRIPTION=$(echo "$PIPELINE_JSON" | jq -r '.description // ""')
-NO_PROFILING=$(echo "$PIPELINE_JSON" | jq -r '.no_profiling // false')
-NO_METRICS=$(echo "$PIPELINE_JSON"  | jq -r '.no_metrics   // false')
+# --enable-profiling flag forces profiling on, overriding the pipeline JSON value.
+PROFILING_ENABLED=$([ "$ENABLE_PROFILING" = "true" ] && echo "true" || \
+  echo "$PIPELINE_JSON" | jq -r '.enable_profiling // false')
+NO_METRICS=$(echo "$PIPELINE_JSON"  | jq -r '.no_metrics // false')
 # CLI --log-level overrides the pipeline JSON value
 LOG_LEVEL="${CLI_LOG_LEVEL:-$(echo "$PIPELINE_JSON" | jq -r '.log_level // ""')}"
 
@@ -129,6 +141,8 @@ while IFS= read -r raw_step; do
   dataset=$(echo  "$raw_step" | jq -r '.dataset')
   procedure=$(echo "$raw_step" | jq -r '.scenario')
   step_params=$(echo "$raw_step" | jq '.params // {}')
+  # Per-step profile flag — null means "inherit job-level enable_profiling"
+  step_profile=$(echo "$raw_step" | jq '.profile // null')
 
   # Merge: pipeline-level params first, then step-level params override
   merged_params=$(jq -n \
@@ -161,11 +175,13 @@ while IFS= read -r raw_step; do
   [ -n "$query_k" ] && label="${label}-k${query_k}"
 
   test_entry=$(jq -n \
-    --arg     dataset   "$dataset" \
-    --arg     scenario  "$procedure" \
-    --arg     label     "$label" \
-    --argjson params    "$merged_params" \
-    '{ dataset: $dataset, scenario: $scenario, label: $label, params: $params }')
+    --arg     dataset      "$dataset" \
+    --arg     scenario     "$procedure" \
+    --arg     label        "$label" \
+    --argjson params       "$merged_params" \
+    --argjson step_profile "$step_profile" \
+    '{ dataset: $dataset, scenario: $scenario, label: $label, params: $params }
+     | if $step_profile != null then .profile = $step_profile else . end')
 
   TESTS_JSON=$(echo "$TESTS_JSON" | jq --argjson t "$test_entry" '. + [$t]')
 
@@ -173,26 +189,27 @@ done < <(echo "$EFFECTIVE_STEPS" | jq -c '.[]')
 
 # ── Build final payload ────────────────────────────────────────────────────────
 PAYLOAD=$(jq -n \
-  --arg     engine       "$ENGINE" \
-  --argjson no_profiling "$NO_PROFILING" \
-  --argjson no_metrics   "$NO_METRICS" \
-  --arg     log_level    "$LOG_LEVEL" \
-  --arg     username     "$USERNAME" \
-  --arg     password     "$PASSWORD" \
-  --argjson tests        "$TESTS_JSON" \
+  --arg     engine              "$ENGINE" \
+  --argjson enable_profiling    "$PROFILING_ENABLED" \
+  --argjson profiling_duration  "$PROFILING_DURATION" \
+  --argjson no_metrics          "$NO_METRICS" \
+  --arg     log_level           "$LOG_LEVEL" \
+  --arg     username            "$USERNAME" \
+  --arg     password            "$PASSWORD" \
+  --argjson tests               "$TESTS_JSON" \
   '{
     engine: $engine,
-    no_profiling: $no_profiling,
+    enable_profiling: $enable_profiling,
+    profiling_duration: $profiling_duration,
     no_metrics: $no_metrics,
     log_level: $log_level,
     username: $username,
     password: $password,
     tests: $tests
-  } | if .no_profiling == false then del(.no_profiling) else . end
-    | if .no_metrics   == false then del(.no_metrics)   else . end
-    | if .log_level    == ""    then del(.log_level)    else . end
-    | if .username     == ""    then del(.username)     else . end
-    | if .password     == ""    then del(.password)     else . end')
+  } | if .no_metrics == false then del(.no_metrics)   else . end
+    | if .log_level  == ""    then del(.log_level)    else . end
+    | if .username   == ""    then del(.username)     else . end
+    | if .password   == ""    then del(.password)     else . end')
 
 # ── Print header ───────────────────────────────────────────────────────────────
 echo "=========================================="
