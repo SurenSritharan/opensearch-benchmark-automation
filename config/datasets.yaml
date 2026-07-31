@@ -78,6 +78,12 @@ datasets:
           target_index_bulk_index_data_set_corpus: "{{corpus_name}}"
           target_index_bulk_indexing_clients: 8
           detailed_results: false
+        # JVector builds a DiskANN graph in-memory during indexing, consuming
+        # significantly more heap than FAISS/Lucene. Fewer concurrent bulk clients
+        # reduces in-flight request pressure and prevents parent circuit breaker trips.
+        engine_params:
+          jvector:
+            target_index_bulk_indexing_clients: 4
 
         # uses make_blobs synthetic generation — no corpus file, supports any num_vectors
       - name: "bulk-ingest-random"
