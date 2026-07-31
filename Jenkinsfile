@@ -406,12 +406,12 @@ print(json.dumps(s))
                                                 ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
                                                 ${engine} \
-                                                2>&1 | tee benchmark-run-develop-${versionLabel}-${runSize}.log
+                                                2>&1 | tee benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
 
-                                    JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-develop-${versionLabel}-${runSize}.log | tail -1 || true)
+                                    JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log | tail -1 || true)
                                     if [ -n "\$JOB_ID" ]; then
-                                        echo "\$JOB_ID" > job_id_develop-${versionLabel}-${runSize}.txt
+                                        echo "\$JOB_ID" > job_id_develop-${params.ENGINE}-${versionLabel}-${runSize}.txt
                                         echo "[develop] Job ID captured: \$JOB_ID"
                                     fi
 
@@ -421,10 +421,10 @@ print(json.dumps(s))
                                 // ── c) Collect results ────────────────────────────
                                 sh """
                                     mkdir -p ${RESULTS_DIR}/${runKey}
-                                    cp benchmark-run-develop-${versionLabel}-${runSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
+                                    cp benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
 
-                                    if [ -f job_id_develop-${versionLabel}-${runSize}.txt ]; then
-                                        JOB_ID=\$(cat job_id_develop-${versionLabel}-${runSize}.txt)
+                                    if [ -f job_id_develop-${params.ENGINE}-${versionLabel}-${runSize}.txt ]; then
+                                        JOB_ID=\$(cat job_id_develop-${params.ENGINE}-${versionLabel}-${runSize}.txt)
                                         echo "=== develop @ ${versionLabel}/${runSize} (job: \$JOB_ID) ==="
 
                                         curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${params.ENGINE}" \
@@ -584,7 +584,7 @@ EOF
                             for size_dir in "\$version_dir"*/; do
                                 size=\$(basename "\$size_dir")
                                 echo "  --- OpenSearch \$version / \$size ---" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
-                                JOB_FILE="job_id_develop-\${version}-\${size}.txt"
+                                JOB_FILE="job_id_develop-${params.ENGINE}-\${version}-\${size}.txt"
                                 if [ -f "\$JOB_FILE" ]; then
                                     JOB_ID=\$(cat "\$JOB_FILE")
                                     echo "    develop: ${params.API_URL}/results.html?job_id=\${JOB_ID}" \
