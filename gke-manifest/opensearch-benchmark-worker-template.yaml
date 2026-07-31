@@ -105,17 +105,17 @@ spec:
               git pull origin main || echo "Git pull failed, using existing version"
             fi
             
-            echo "Setting up workspace (develop branch)..."
+            echo "Setting up workspace (merge-main-to-develop branch)..."
             if [ ! -d "/workspace/.git" ]; then
-              echo "Cloning benchmark automation project (develop branch, first time)..."
-              git clone --depth 1 --branch develop https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
+              echo "Cloning benchmark automation project (merge-main-to-develop branch, first time)..."
+              git clone --depth 1 --branch merge-main-to-develop https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
               cp -r /workspace-tmp/* /workspace/ 2>/dev/null || true
               cp -r /workspace-tmp/.git /workspace/ 2>/dev/null || true
               rm -rf /workspace-tmp
             else
-              echo "Workspace already exists, pulling latest develop changes..."
+              echo "Workspace already exists, pulling latest merge-main-to-develop changes..."
               cd /workspace
-              git pull origin develop || echo "Git pull failed, using existing version"
+              git pull origin merge-main-to-develop || echo "Git pull failed, using existing version"
             fi
             
             echo "Setting up worker service..."
