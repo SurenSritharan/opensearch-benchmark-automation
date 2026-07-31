@@ -589,6 +589,12 @@
                     <div class="section-title">Detailed Metrics</div>
                     <div id="detailedMetricsContent"></div>
                 </div>
+
+                <!-- All Benchmark Logs (batch jobs) -->
+                <div id="allLogsSection" class="section" style="display: none;">
+                    <div class="section-title">📋 Benchmark Logs</div>
+                    <div id="allLogsContent"></div>
+                </div>
                 
             </div>
         </div>
@@ -1332,6 +1338,9 @@
                 // Scenario timeline (uses job-level timing data)
                 displayScenarioTimeline(job);
 
+                // Always render all benchmark logs regardless of scenario dropdown
+                displayAllLogs(sweeps);
+
                 // Group sweeps by scenario
                 const scenarioGroups = groupSweepsByScenario(sweeps, job);
                 const scenarioNames = Object.keys(scenarioGroups);
@@ -1681,6 +1690,52 @@
         // strings into innerHTML (which forces the browser to parse them all upfront).
         const _sweepLogText = {};
 
+        // Render all benchmark logs from every scenario into the static #allLogsSection.
+        // Each entry is labelled by scenario so the user can find a specific run without
+        // needing to cycle through the scenario dropdown.
+        function displayAllLogs(sweeps) {
+            const sweepsWithLogs = sweeps.filter(s => s.benchmark_log);
+            if (sweepsWithLogs.length === 0) return;
+
+            const storeKey = 'allLogs';
+            _sweepLogText[storeKey] = {};
+
+            const html = sweepsWithLogs.map((sweep, idx) => {
+                // Use the scenario label (e.g. "wiki-en-768-1m-vector-search-k100") as the
+                // display title, falling back to sweep_name then a plain index.
+                const label = sweep.scenario_label || sweep.sweep_name || `Run ${idx + 1}`;
+
+                _sweepLogText[storeKey][idx] = sweep.benchmark_log;
+
+                let downloadUrl = null;
+                if (currentResultsBase && sweep.dataset && sweep.scenario_label) {
+                    const sweepSeg = sweep.sweep_name ? `/${sweep.sweep_name}` : '';
+                    downloadUrl = `/results/${currentResultsBase}/${sweep.dataset}-${sweep.scenario_label}${sweepSeg}/benchmark.log`;
+                }
+
+                return `
+                    <div style="margin-bottom: 12px; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+                        <div style="background: #f3f4f6; padding: 10px 14px; font-weight: 600; display: flex; justify-content: space-between; align-items: center;">
+                            <span>${label}</span>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                ${downloadUrl ? `<a href="${downloadUrl}" download="benchmark-${label}.log"
+                                    style="padding: 4px 10px; background: #6366f1; color: white; border-radius: 4px; font-size: 0.85em; text-decoration: none;">
+                                    ⬇ Download full log
+                                </a>` : ''}
+                                <button onclick="toggleSweepLog(this, '${storeKey}', ${idx})"
+                                        style="padding: 4px 10px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85em;">
+                                    Toggle tail
+                                </button>
+                            </div>
+                        </div>
+                        <pre id="sweep-log-pre-${storeKey}-${idx}" style="display: none; margin: 0; padding: 14px; background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 12px; max-height: 400px; overflow: auto; white-space: pre-wrap; word-wrap: break-word;"></pre>
+                    </div>`;
+            }).join('');
+
+            document.getElementById('allLogsContent').innerHTML = html;
+            document.getElementById('allLogsSection').style.display = '';
+        }
+
         function displayLogsInContainer(sweeps, contentId, sectionId) {
             const sweepsWithLogs = sweeps.filter(s => s.benchmark_log);
             if (sweepsWithLogs.length === 0) return;
@@ -1689,15 +1744,17 @@
             _sweepLogText[storeKey] = {};
 
             const html = sweepsWithLogs.map((sweep, idx) => {
-                const label = sweep.sweep_name || `Sweep ${idx + 1}`;
+                const label = sweep.scenario_label || sweep.sweep_name || `Run ${idx + 1}`;
 
                 // Store text for lazy injection rather than embedding in the HTML string.
                 _sweepLogText[storeKey][idx] = sweep.benchmark_log;
 
-                // Build download URL: /results/<results_base>/<dataset>-<scenario_label>/<sweep_name>/benchmark.log
+                // Build download URL: /results/<results_base>/<dataset>-<scenario_label>/benchmark.log
+                // or .../benchmark.log when artifacts live directly in the scenario dir (sweep_name is null).
                 let downloadUrl = null;
-                if (currentResultsBase && sweep.dataset && sweep.scenario_label && sweep.sweep_name) {
-                    downloadUrl = `/results/${currentResultsBase}/${sweep.dataset}-${sweep.scenario_label}/${sweep.sweep_name}/benchmark.log`;
+                if (currentResultsBase && sweep.dataset && sweep.scenario_label) {
+                    const sweepSeg = sweep.sweep_name ? `/${sweep.sweep_name}` : '';
+                    downloadUrl = `/results/${currentResultsBase}/${sweep.dataset}-${sweep.scenario_label}${sweepSeg}/benchmark.log`;
                 }
 
                 return `

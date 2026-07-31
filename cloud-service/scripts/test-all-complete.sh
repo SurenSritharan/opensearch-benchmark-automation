@@ -31,6 +31,14 @@ PAYLOAD=$(cat <<'EOF'
   "tests": [
     {
       "dataset": "cohere-wiki-en-768",
+      "scenario": "delete-index",
+      "label": "wiki-1m-delete-index",
+      "params": {
+        "target_index_name": "cohere-wiki-en-768-1m"
+      }
+    },
+    {
+      "dataset": "cohere-wiki-en-768",
       "scenario": "create-index",
       "label": "wiki-1m-create-index",
       "params": {
@@ -109,6 +117,14 @@ PAYLOAD=$(cat <<'EOF'
     },
     {
       "dataset": "cohere-wiki-en-768",
+      "scenario": "delete-index",
+      "label": "wiki-5m-delete-index",
+      "params": {
+        "target_index_name": "cohere-wiki-en-768-5m"
+      }
+    },
+    {
+      "dataset": "cohere-wiki-en-768",
       "scenario": "create-index",
       "label": "wiki-5m-create-index",
       "params": {
@@ -183,6 +199,14 @@ PAYLOAD=$(cat <<'EOF'
         "num_vectors": 5000000,
         "query_k": 10,
         "time_period": 300
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "label": "msmarco-1m-delete-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m"
       }
     },
     {
@@ -266,6 +290,14 @@ PAYLOAD=$(cat <<'EOF'
         "query_k": 10,
         "hnsw_ef_search": 256,
         "time_period": 300
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "label": "msmarco-5m-delete-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-5m"
       }
     },
     {

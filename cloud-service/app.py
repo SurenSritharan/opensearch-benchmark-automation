@@ -18,7 +18,6 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from filelock import FileLock
 import requests
-from requests.auth import HTTPBasicAuth
 from config_loader import ConfigLoader
 from benchmark_runner import BenchmarkRunner
 
@@ -83,12 +82,18 @@ def init_db():
                 created_at TEXT,
                 started_at TEXT,
                 completed_at TEXT,
+                last_heartbeat_at TEXT,
                 options TEXT,
                 result TEXT,
                 error TEXT,
                 queue_position INTEGER
             )
         """)
+        # Add column to existing databases that predate this field
+        try:
+            conn.execute("ALTER TABLE jobs ADD COLUMN last_heartbeat_at TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_engine_status_queue
             ON jobs(engine, status, queue_position)
@@ -105,12 +110,18 @@ def init_db():
         # 'running' entries in the UI after a cancel.  Instead we mark them
         # cancelled with a clear reason; the user can explicitly re-submit if
         # a genuine retry is needed.
-        cursor = conn.execute("SELECT job_id FROM jobs WHERE status = 'running'")
+        cursor = conn.execute(
+            "SELECT job_id FROM jobs WHERE status = 'running'"
+        )
         orphaned = [row[0] for row in cursor.fetchall()]
         if orphaned:
+            # Use last_heartbeat_at as completed_at so the displayed duration
+            # reflects how far the job actually got, not when the pod restarted.
+            # Falls back to NULL when no heartbeat was ever written (e.g. the job
+            # was killed before finishing its first scenario).
             conn.execute(
                 "UPDATE jobs SET status='cancelled', "
-                "completed_at=datetime('now'), "
+                "completed_at=last_heartbeat_at, "
                 "error='Job orphaned by pod restart — cancelled on startup recovery' "
                 f"WHERE job_id IN ({','.join('?'*len(orphaned))})",
                 orphaned
@@ -121,6 +132,30 @@ def init_db():
             )
 
         conn.commit()
+
+    # Kill any orphaned benchmark processes left over from the previous run.
+    #
+    # _launch_process() writes /workspace/run/job_<id>.pgid before each benchmark
+    # subprocess starts and deletes it when the process exits normally.  Any file
+    # still present here means the worker was killed mid-run and the subprocess is
+    # either still running (consuming CPU/memory) or already dead.  Either way,
+    # send SIGKILL to the whole process group and remove the stale file.
+    run_dir = Path("/workspace/run")
+    if run_dir.is_dir():
+        for pgid_file in run_dir.glob("*.pgid"):
+            try:
+                pgid = int(pgid_file.read_text().strip())
+                os.killpg(pgid, 9)
+                logger.warning(f"Startup: killed orphaned process group {pgid} ({pgid_file.name})")
+            except ProcessLookupError:
+                pass  # already dead — nothing to kill
+            except Exception as e:
+                logger.warning(f"Startup: could not kill pgid from {pgid_file.name}: {e}")
+            finally:
+                try:
+                    pgid_file.unlink()
+                except Exception:
+                    pass
 
     # Release any stale engine lock files left over from the previous process
     locks_dir = "/workspace/locks"
@@ -249,8 +284,9 @@ def save_job(job_id: str, job_data: Dict[str, Any]):
             conn.execute("""
                 INSERT OR REPLACE INTO jobs
                 (job_id, status, dataset, engine, scenario, ui_scenario,
-                 created_at, started_at, completed_at, options, result, error, queue_position)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 created_at, started_at, completed_at, last_heartbeat_at,
+                 options, result, error, queue_position)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job_id,
                 job_data.get('status'),
@@ -261,6 +297,7 @@ def save_job(job_id: str, job_data: Dict[str, Any]):
                 job_data.get('created_at'),
                 job_data.get('started_at'),
                 job_data.get('completed_at'),
+                job_data.get('last_heartbeat_at'),
                 options_json,
                 result_json,
                 job_data.get('error'),
@@ -439,18 +476,32 @@ def process_engine_queue(engine: str):
                         # Extract workload params from options
                         workload_params = options.get('workload_params', None)
                         
-                        # Run the benchmark
-                        result = benchmark_runner.run_benchmark(
-                            dataset=dataset,
-                            engine=engine,
-                            scenario=scenario,
-                            job_id=job_id,
-                            enable_profiling=not options.get('no_profiling', False),
-                            enable_metrics=not options.get('no_metrics', False),
-                            workload_params=workload_params,
-                            cancel_event=cancel_event,
-                            log_level=options.get('log_level'),
-                        )
+                        # Run the benchmark — ingest gets doc-count verification + retry
+                        if scenario == "bulk-ingest-data":
+                            result = benchmark_runner.run_ingest(
+                                dataset=dataset,
+                                engine=engine,
+                                job_id=job_id,
+                                enable_profiling=options.get('enable_profiling', False),
+                                profiling_duration=options.get('profiling_duration', 60),
+                                enable_metrics=not options.get('no_metrics', False),
+                                workload_params=workload_params,
+                                cancel_event=cancel_event,
+                                log_level=options.get('log_level'),
+                            )
+                        else:
+                            result = benchmark_runner.run_benchmark(
+                                dataset=dataset,
+                                engine=engine,
+                                scenario=scenario,
+                                job_id=job_id,
+                                enable_profiling=options.get('enable_profiling', False),
+                                profiling_duration=options.get('profiling_duration', 60),
+                                enable_metrics=not options.get('no_metrics', False),
+                                workload_params=workload_params,
+                                cancel_event=cancel_event,
+                                log_level=options.get('log_level'),
+                            )
                         
                         # Only save result if the job wasn't cancelled while we were running
                         job_result = get_job(job_id)
@@ -551,8 +602,7 @@ def _save_index_snapshot(engine: str, index_name: str, results_dir: Path) -> Non
     try:
         host = config_loader.get_target_host(engine)
         base_url = f"https://{host}/{index_name}"
-        auth = ("admin", "admin")
-        kwargs = dict(auth=auth, verify=False, timeout=15)
+        kwargs = dict(cert=('/certs/admin.pem', '/certs/admin-key.pem'), verify='/certs/root-ca.pem', timeout=15)
 
         snapshot = {"index": index_name, "engine": engine}
         for key, path in [("mapping", "/_mapping"), ("settings", "/_settings"), ("stats", "/_stats")]:
@@ -654,18 +704,42 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             
             logger.info(f"Batch job {job_id}, test {label}: merged params = {workload_params}")
             
-            # Run the benchmark for this test using the actual procedure name
-            result = benchmark_runner.run_benchmark(
-                dataset=dataset,
-                engine=engine,
-                scenario=procedure_name,  # Use actual procedure name
-                job_id=scenario_job_id,
-                enable_profiling=not options.get('no_profiling', False),
-                enable_metrics=not options.get('no_metrics', False),
-                workload_params=workload_params if workload_params else None,
-                cancel_event=cancel_event,
-                log_level=options.get('log_level'),
-            )
+            # Per-step profile flag overrides the job-level enable_profiling.
+            # A step with "profile": true is profiled even when the job flag is off,
+            # and "profile": false suppresses profiling even when the job flag is on.
+            job_profiling      = options.get('enable_profiling', False)
+            step_profile       = scenario.get('profile')   # None if not set on this step
+            scenario_profiling = step_profile if step_profile is not None else job_profiling
+            profiling_duration = options.get('profiling_duration', 60)
+
+            # --- bulk-ingest-data: doc-count verification + retry ---
+            if procedure_name == "bulk-ingest-data":
+                result = benchmark_runner.run_ingest(
+                    dataset=dataset,
+                    engine=engine,
+                    job_id=scenario_job_id,
+                    enable_profiling=scenario_profiling,
+                    profiling_duration=profiling_duration,
+                    enable_metrics=not options.get('no_metrics', False),
+                    workload_params=workload_params if workload_params else None,
+                    cancel_event=cancel_event,
+                    log_level=options.get('log_level'),
+                )
+
+            # --- all other steps ---
+            else:
+                result = benchmark_runner.run_benchmark(
+                    dataset=dataset,
+                    engine=engine,
+                    scenario=procedure_name,
+                    job_id=scenario_job_id,
+                    enable_profiling=scenario_profiling,
+                    profiling_duration=profiling_duration,
+                    enable_metrics=not options.get('no_metrics', False),
+                    workload_params=workload_params if workload_params else None,
+                    cancel_event=cancel_event,
+                    log_level=options.get('log_level'),
+                )
 
             scenario_completed_at = datetime.utcnow().isoformat()
 
@@ -688,6 +762,7 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             if job_data and 'scenario_status' in job_data:
                 job_data['scenario_status'][scenario_key] = scenario_run_status or 'failed'
                 job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = scenario_completed_at
+                job_data['last_heartbeat_at'] = scenario_completed_at
                 save_job(job_id, job_data)
 
             if scenario_run_status == 'completed':
@@ -996,7 +1071,8 @@ def trigger_batch_benchmark():
                 'dataset': dataset,
                 'label': scenario_label,
                 'procedure_name': procedure_name,
-                'params': scenario_params
+                'params': scenario_params,
+                'profile': test.get('profile'),  # per-step profiling
             })
             
             logger.info(f"Test: dataset='{dataset}', scenario='{scenario_label}' -> procedure '{procedure_name}'")
@@ -1040,10 +1116,11 @@ def trigger_batch_benchmark():
             'current_scenario': None,
             'current_scenario_index': 0,
             'options': {
-                'no_profiling': request_data.get('no_profiling', False),
-                'no_metrics': request_data.get('no_metrics', False),
-                'log_level': request_data.get('log_level', None),
-                'workload_params': request_data.get('workload_params', None)
+                'enable_profiling':   request_data.get('enable_profiling', False),
+                'profiling_duration': request_data.get('profiling_duration', 60),
+                'no_metrics':         request_data.get('no_metrics', False),
+                'log_level':          request_data.get('log_level', None),
+                'workload_params':    request_data.get('workload_params', None)
             }
         }
         
@@ -1137,9 +1214,10 @@ def trigger_benchmark():
             'created_at': datetime.utcnow().isoformat(),
             'queue_position': queue_position,
             'options': {
-                'no_profiling': request_data.get('no_profiling', False),
-                'no_metrics': request_data.get('no_metrics', False),
-                'workload_params': request_data.get('workload_params', None)
+                'enable_profiling':   request_data.get('enable_profiling', False),
+                'profiling_duration': request_data.get('profiling_duration', 60),
+                'no_metrics':         request_data.get('no_metrics', False),
+                'workload_params':    request_data.get('workload_params', None)
             }
         }
         
@@ -1389,9 +1467,9 @@ def list_jobs():
 
 
 def _parse_sweep_directory(
-    sweep_dir: Path, 
-    sweep_name: str, 
-    scenario_label: Optional[str] = None, 
+    sweep_dir: Path,
+    sweep_name: Optional[str],
+    scenario_label: Optional[str] = None,
     dataset: Optional[str] = None
 ) -> dict:
     """Helper function to cleanly read and parse artifacts for a single sweep directory."""
@@ -1463,15 +1541,20 @@ def get_job_results(job_id: str):
             subdir = s_data.get('results_subdir', '')
             dataset = s_data.get('dataset', '')
             label = s_data.get('scenario_label', scenario_key)
-            
+
             for sweep in s_data.get('sweep_results', []):
                 sweep_name = sweep.get('sweep_name')
-                if not sweep_name and sweep.get('results_dir'):
-                    tail = Path(sweep['results_dir']).name
+                # Prefer the sweep-level results_dir; fall back to the scenario-level one
+                # (sweep-level is absent when the run failed before the process launched).
+                raw_rd = sweep.get('results_dir') or s_data.get('results_dir', '')
+                if not sweep_name and raw_rd:
+                    tail = Path(raw_rd).name
                     # If the tail is the scenario subdir itself, artifacts live directly
-                    # in the scenario dir (no sweep-N subfolder was created)
+                    # in the scenario dir (no sweep-N subfolder was created).
+                    # sweep_name is left as None so the UI download URL omits the
+                    # non-existent sweep-N path segment.
                     if tail == subdir or not tail.startswith('sweep-'):
-                        sweep_name = f"sweep-{sweep.get('sweep_index', 1)}"
+                        sweep_name = None
                         sweep_path = results_dir / subdir
                     else:
                         sweep_name = tail
@@ -1481,6 +1564,26 @@ def get_job_results(job_id: str):
                 else:
                     continue
                 sweeps.append(_parse_sweep_directory(sweep_path, sweep_name, label, dataset))
+
+        # Scenarios that were skipped (already completed on a prior restart) are absent
+        # from scenario_results.  Fall back to filesystem discovery for those so their
+        # benchmark.log files are still served.
+        found_subdirs = {s_data.get('results_subdir', '') for s_data in scenario_results.values()}
+        for scenario in job.get('scenarios', []):
+            dataset = scenario.get('dataset', '')
+            label = scenario.get('label', '')
+            scenario_key = f"{dataset}-{label}"
+            if scenario_key in found_subdirs:
+                continue
+            # Not in scenario_results — try filesystem
+            scenario_dir = results_dir / scenario_key
+            if scenario_dir.exists():
+                sweep_dirs = sorted(scenario_dir.glob('sweep-*'))
+                if sweep_dirs:
+                    for sd in sweep_dirs:
+                        sweeps.append(_parse_sweep_directory(sd, sd.name, label, dataset))
+                else:
+                    sweeps.append(_parse_sweep_directory(scenario_dir, None, label, dataset))
     elif job.get('scenarios'):
         # --- Batch Job Path (legacy/existing jobs without scenario_results) ---
         # Reconstruct from job.scenarios and file system
@@ -1769,14 +1872,15 @@ def view_results(job_id: str):
 @app.route('/api/v1/cluster/<engine>/health')
 def get_cluster_health(engine: str):
     """Check OpenSearch cluster health for a specific engine"""
+    if not _IS_WORKER:
+        return _proxy(engine, f'/api/v1/cluster/{engine}/health')
     try:
         target_host = config_loader.get_target_host(engine)
         url = f"https://{target_host}/_cluster/health"
         
         response = requests.get(
             url,
-            auth=HTTPBasicAuth('admin', 'admin'),
-            verify=False,
+            cert=('/certs/admin.pem', '/certs/admin-key.pem'), verify='/certs/root-ca.pem',
             timeout=10
         )
         

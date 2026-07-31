@@ -78,7 +78,7 @@ pipeline {
     options {
         buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
         timestamps()
-        timeout(time: 16, unit: 'HOURS')
+        timeout(time: 7, unit: 'DAYS')
         disableConcurrentBuilds()
     }
 
@@ -254,8 +254,23 @@ print(json.dumps(s))
                     // all combinations are run sequentially.
                     def rawVersions = pipelineJson.versions   ?: [params.OPENSEARCH_VERSION]
                     def rawSizes    = pipelineJson.node_sizes ?: (pipelineJson.node_size ? [pipelineJson.node_size] : ['small'])
+                    // Count occurrences of each version so duplicate versions get _run1, _run2 labels.
+                    def versionCounts = [:]
+                    rawVersions.each { v -> versionCounts[v] = (versionCounts[v] ?: 0) + 1 }
+                    def versionOccurrence = [:]
                     def runs = []
-                    rawVersions.each { v -> rawSizes.each { s -> runs << [version: v, nodeSize: s] } }
+                    rawVersions.each { v ->
+                        def occ = (versionOccurrence[v] ?: 0) + 1
+                        versionOccurrence[v] = occ
+                        def versionLabel = (versionCounts[v] > 1) ? "${v}_run${occ}" : v
+                        rawSizes.each { s -> runs << [version: v, nodeSize: s, versionLabel: versionLabel] }
+                    }
+
+                    // first_run_steps: when a pipeline defines this key, run-pipeline.sh is
+                    // invoked with --first-run on the very first run so it reads first_run_steps
+                    // (build + search). All subsequent runs use steps (search-only).
+                    def hasFirstRunSteps = pipelineJson.first_run_steps && pipelineJson.first_run_steps.size() > 0
+                    def isFirstRun = true
 
                     def redeploy = params.REDEPLOY_CLUSTERS || pipelineJson.redeploy == true
                     def multiRun = pipelineJson.versions || pipelineJson.node_sizes
@@ -263,11 +278,14 @@ print(json.dumps(s))
                     sh "mkdir -p ${RESULTS_DIR}"
 
                     runs.each { run ->
-                        def version = run.version
-                        def runSize = run.nodeSize
-                        def runKey  = "${version}/${runSize}"
+                        def version      = run.version
+                        def runSize      = run.nodeSize
+                        def versionLabel = run.versionLabel
+                        def runKey       = "${versionLabel}/${runSize}"
                         def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
-                        if (params.DELETE_PVCS) { runExtraArgs += " --delete-pvcs" }
+                        // Always wipe the PVC on the first run when first_run_steps are defined.
+                        // Also wipe on subsequent runs if DELETE_PVCS was explicitly requested.
+                        if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
 
                         echo "════════════════════════════════════════"
                         echo "Benchmarking OpenSearch ${version} / ${runSize}"
@@ -375,19 +393,25 @@ print(json.dumps(s))
                                 }
 
                                         // ── b) Run benchmark ───────────────────────────────
+                                        // On the first run, --first-run is passed so run-pipeline.sh
+                                        // reads first_run_steps (build + search). All subsequent runs
+                                        // omit the flag and read steps (search-only), reusing the PVC.
                                         sh """
                                             set +e
                                             API_URL=${params.API_URL} \
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
+                                                ${hasFirstRunSteps && isFirstRun ? "--first-run" : ""} \
                                                 ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
+                                                ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
+                                                ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
                                                 ${engine} \
-                                                2>&1 | tee benchmark-run-${engine}-${version}-${runSize}.log
+                                                2>&1 | tee benchmark-run-develop-${versionLabel}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
 
-                                    JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-develop-${version}-${runSize}.log | tail -1 || true)
+                                    JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-develop-${versionLabel}-${runSize}.log | tail -1 || true)
                                     if [ -n "\$JOB_ID" ]; then
-                                        echo "\$JOB_ID" > job_id_develop-${version}-${runSize}.txt
+                                        echo "\$JOB_ID" > job_id_develop-${versionLabel}-${runSize}.txt
                                         echo "[develop] Job ID captured: \$JOB_ID"
                                     fi
 
@@ -397,11 +421,11 @@ print(json.dumps(s))
                                 // ── c) Collect results ────────────────────────────
                                 sh """
                                     mkdir -p ${RESULTS_DIR}/${runKey}
-                                    cp benchmark-run-develop-${version}-${runSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
+                                    cp benchmark-run-develop-${versionLabel}-${runSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
 
-                                    if [ -f job_id_develop-${version}-${runSize}.txt ]; then
-                                        JOB_ID=\$(cat job_id_develop-${version}-${runSize}.txt)
-                                        echo "=== develop @ ${version}/${runSize} (job: \$JOB_ID) ==="
+                                    if [ -f job_id_develop-${versionLabel}-${runSize}.txt ]; then
+                                        JOB_ID=\$(cat job_id_develop-${versionLabel}-${runSize}.txt)
+                                        echo "=== develop @ ${versionLabel}/${runSize} (job: \$JOB_ID) ==="
 
                                         curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${params.ENGINE}" \
                                             | jq '.' > ${RESULTS_DIR}/${runKey}/job-status-develop.json
@@ -416,7 +440,7 @@ print(json.dumps(s))
 
                                         echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
                                     else
-                                        echo "WARNING: no job_id for ${version}/${runSize} — benchmark may not have submitted"
+                                        echo "WARNING: no job_id for ${versionLabel}/${runSize} — benchmark may not have submitted"
                                     fi
 
                                     # ── Server logs ────────────────────────────────
@@ -521,6 +545,7 @@ print(json.dumps(s))
                                 """
                             }
                         }
+                        isFirstRun = false
                     }
                 }
             }
@@ -590,8 +615,11 @@ EOF
     post {
         always {
             script {
-                if (currentBuild.currentResult == 'ABORTED') {
-                    echo "Build aborted — cancelling any running cloud service jobs..."
+                // Cancel any running cloud service jobs before scale-down kills the worker pods.
+                // Runs on ABORTED and FAILURE — both end with a scale-down that would orphan
+                // running jobs and leave them stuck in 'running' state indefinitely.
+                if (currentBuild.currentResult in ['ABORTED', 'FAILURE']) {
+                    echo "Build ${currentBuild.currentResult} — cancelling any running cloud service jobs..."
 
                     // Only send cancel requests if the API server pod is running.
                     // If it's already down, the worker process is gone and there is nothing to cancel.
@@ -609,11 +637,22 @@ EOF
                     if (apiRunning) {
                         sh """
                             for JOB_FILE in job_id_develop-*.txt; do
-                                if [ -f "\$JOB_FILE" ]; then
-                                    JOB_ID=\$(cat "\$JOB_FILE")
-                                    echo "Cancelling develop job \$JOB_ID..."
-                                    curl -s -X POST "${params.API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=${params.ENGINE}" || true
-                                fi
+                                [ -f "\$JOB_FILE" ] || continue
+                                JOB_ID=\$(cat "\$JOB_FILE")
+                                echo "Cancelling develop job \$JOB_ID..."
+                                curl -s -X POST "${params.API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=${params.ENGINE}" || true
+
+                                # Poll until the job reaches a terminal status (max 60s)
+                                echo "Waiting for job \$JOB_ID to stop..."
+                                for attempt in \$(seq 1 12); do
+                                    STATUS=\$(curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${params.ENGINE}" \
+                                        | jq -r '.status // "unknown"')
+                                    echo "  status: \$STATUS"
+                                    case "\$STATUS" in
+                                        completed|failed|partial|cancelled|error) break ;;
+                                    esac
+                                    sleep 5
+                                done
                             done
                         """
                     }
