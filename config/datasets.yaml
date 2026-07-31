@@ -59,6 +59,7 @@ datasets:
           target_index_space_type: "innerproduct"
           hnsw_ef_construction: 256
           hnsw_m: 32
+          refresh_interval: "-1"
         # Engine-specific parameters for index creation
         engine_params:
           faiss:
@@ -177,6 +178,7 @@ datasets:
           target_index_space_type: "cosinesimil"
           hnsw_ef_construction: 256
           hnsw_m: 32
+          refresh_interval: "-1"
         engine_params:
           jvector:
             method_name: "disk_ann"
