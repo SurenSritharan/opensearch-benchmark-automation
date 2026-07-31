@@ -62,6 +62,11 @@ pipeline {
             choices: ['', 'debug', 'info', 'warning', 'error'],
             description: 'opensearch-benchmark log level. Leave blank to use the pipeline default. Set to "debug" to enable verbose OSB internal logging.'
         )
+        booleanParam(
+            name: 'ENABLE_PROFILING',
+            defaultValue: false,
+            description: 'Enable profiling to capture CPU profiling and flame graphs'
+        )
     }
 
     environment {
