@@ -47,6 +47,9 @@ datasets:
     
     # Test procedures with their base parameters
     test_procedures:
+      - name: "delete-index"
+        params: {}
+
       - name: "create-index"
         params:
           target_index_body: "indices/index.json"
@@ -161,6 +164,9 @@ datasets:
         url: "{{base_url}}/cohere_msmarco_queries.fvec"
     # Test procedures for msmarco
     test_procedures:
+      - name: "delete-index"
+        params: {}
+
       - name: "create-index"
         params:
           target_index_body: "indices/index.json"
