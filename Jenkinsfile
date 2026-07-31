@@ -111,26 +111,24 @@ pipeline {
 
         // ── 2. Seed Certs ──────────────────────────────────────────────────────
         //     Must complete before worker pods start — they mount this secret.
+        //     Always syncs from os-develop-<engine> so a cluster re-deploy that
+        //     regenerates certs is picked up on every run, not just the first.
         stage('Copy Certs') {
             when {
                 expression { params.SCALE_CLUSTERS }
             }
             steps {
-                sh '''
-                    if ! kubectl get secret opensearch-shared-certs -n benchmark-api-develop &>/dev/null; then
-                        echo "Copying opensearch-shared-certs into benchmark-api-develop..."
-                        kubectl get secret opensearch-shared-certs -n benchmark-api -o json | \
-                            python3 -c "
+                sh """
+                    echo "Syncing opensearch-shared-certs from os-develop-${params.ENGINE} into benchmark-api-develop..."
+                    kubectl get secret opensearch-shared-certs -n os-develop-${params.ENGINE} -o json | \
+                        python3 -c "
 import sys, json
 s = json.load(sys.stdin)
 s['metadata'] = {'name': s['metadata']['name'], 'namespace': 'benchmark-api-develop'}
 print(json.dumps(s))
 " | kubectl apply -f -
-                        echo "✅ Certs available in benchmark-api-develop"
-                    else
-                        echo "✅ opensearch-shared-certs already present in benchmark-api-develop"
-                    fi
-                '''
+                    echo "✅ Certs synced into benchmark-api-develop"
+                """
             }
         }
 
