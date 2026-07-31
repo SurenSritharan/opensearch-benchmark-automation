@@ -148,6 +148,16 @@ pipeline {
             defaultValue: '',
             description: 'Interval in seconds to poll OpenSearch _nodes/stats during the run. Set to 0 or blank to disable. Each sample is appended as an NDJSON record to server-stats-timeseries.ndjson — one record per node per interval.'
         )
+        booleanParam(
+            name: 'ENABLE_PROFILING',
+            defaultValue: false,
+            description: 'Profile all steps in this run. Off by default. Use for ad-hoc investigation without editing pipeline JSON — e.g. pick search-1m and check this to profile every step. Individual steps can also be profiled permanently via "profile": true in the pipeline JSON, which takes precedence over this flag.'
+        )
+        string(
+            name: 'PROFILING_DURATION',
+            defaultValue: '60',
+            description: 'How many seconds to run async-profiler per step (default: 60). The profiler starts at the beginning of each profiled step and stops after this duration — the step itself continues to completion. Recommended: 30–60s for CPU flame graphs.'
+        )
     }
 
     environment {
