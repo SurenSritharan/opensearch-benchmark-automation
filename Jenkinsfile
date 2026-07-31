@@ -68,6 +68,11 @@ pipeline {
             defaultValue: false,
             description: 'Enable profiling to capture CPU profiling and flame graphs'
         )
+        string(
+            name: 'PROFILING_DURATION',
+            defaultValue: '60',
+            description: 'Default profiling duration is 60, can be modified'
+        )
     }
 
     environment {
