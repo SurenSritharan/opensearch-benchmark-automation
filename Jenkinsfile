@@ -14,6 +14,7 @@ pipeline {
                 'complete',
                 'search-all',
                 'search-compare',
+                'complete-5m-profile-ingest'
             ],
             description: 'Pipeline to run. Corresponds to a file in the pipelines/ directory.'
         )
