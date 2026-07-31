@@ -405,7 +405,7 @@ print(json.dumps(s))
                                                 ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
-                                                ${engine} \
+                                                ${params.ENGINE} \
                                                 2>&1 | tee benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
 
