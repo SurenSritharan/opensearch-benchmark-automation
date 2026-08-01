@@ -492,9 +492,16 @@ pipeline {
                                         // On the first run, --first-run is passed so run-pipeline.sh
                                         // reads first_run_steps (build + search). All subsequent runs
                                         // omit the flag and read steps (search-only), reusing the PVC.
+                                        // RESULTS_DEST + WORKER_POD are consumed by run-pipeline.sh's
+                                        // incremental copy helper so each scenario is pulled to the
+                                        // Jenkins workspace as soon as it finishes.
                                         sh """
                                             set +e
+                                            DEST="${RESULTS_DIR}/${runKey}/test-runs/${engine}"
+                                            mkdir -p "\$DEST"
                                             API_URL=${params.API_URL} \
+                                            RESULTS_DEST="\$DEST" \
+                                            WORKER_POD="opensearch-benchmark-worker-${engine}-0" \
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
                                                 ${hasFirstRunSteps && isFirstRun ? "--first-run" : ""} \
@@ -515,6 +522,10 @@ pipeline {
                                         """
                                     } finally {
                                         // ── c) Fetch & save results ────────────────────────
+                                        // Scenario subdirs are already copied incrementally by
+                                        // run-pipeline.sh during the run. This block captures the
+                                        // run log and final job-status JSON, and does a catch-up
+                                        // kubectl cp in case any copy was missed mid-run.
                                         sh """
                                             mkdir -p ${RESULTS_DIR}/${runKey}
                                             cp benchmark-run-${engine}-${version}-${runSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
@@ -532,8 +543,8 @@ pipeline {
                                                 DEST="${RESULTS_DIR}/${runKey}/test-runs/${engine}"
                                                 mkdir -p "\$DEST"
                                                 kubectl cp benchmark-api/\$POD:/results/\$JOB_ID/${engine}/. "\$DEST/" 2>/dev/null \
-                                                    && echo "  Copied results from \$POD:/results/\$JOB_ID/${engine}/ -> \$DEST/" \
-                                                    || echo "WARNING: kubectl cp failed for ${engine} — worker pod may not be running"
+                                                    && echo "  Catch-up copy: \$POD:/results/\$JOB_ID/${engine}/ -> \$DEST/" \
+                                                    || echo "WARNING: catch-up kubectl cp failed for ${engine} — worker pod may not be running"
 
                                                 echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
                                             else
