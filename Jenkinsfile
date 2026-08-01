@@ -384,6 +384,7 @@ pipeline {
                                     // Also wipe on subsequent runs if DELETE_PVCS was explicitly requested.
                                     if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
 
+                                    stage("${engine} / ${versionLabel} / ${runSize}") {
                                     echo "════════════════════════════════════════"
                                     echo "[${engine}] Benchmarking OpenSearch ${version} / ${runSize}"
                                     echo "════════════════════════════════════════"
@@ -533,7 +534,7 @@ pipeline {
                                             if [ -f job_id_${engine}-${version}-${runSize}.txt ]; then
                                                 JOB_ID=\$(cat job_id_${engine}-${version}-${runSize}.txt)
                                                 POD="opensearch-benchmark-worker-${engine}-0"
-                                                echo "=== ${engine} @ ${version}/${runSize} (job: \$JOB_ID) ==="
+                                                echo "=== ${engine} @ ${versionLabel}/${runSize} (job: \$JOB_ID) ==="
 
                                                 curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${engine}" \
                                                     | jq '.' > ${RESULTS_DIR}/${runKey}/job-status-${engine}.json
@@ -650,8 +651,8 @@ pipeline {
                                                 -n benchmark-api --tail=5000 2>&1 > "\$WORKER_LOG" || true
                                             echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
                                         """
-                                    }
-                                }
+                                    } // stage
+                                    } // runs.each
                             }
                         }]
                     }
