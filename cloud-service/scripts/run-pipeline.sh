@@ -137,6 +137,12 @@ num_vectors_for() {
 
 TESTS_JSON="[]"
 
+# Associative array to track how many times each base label has been used.
+# When a label appears more than once a numeric suffix (-2, -3, …) is appended
+# so every entry in tests[] has a unique label — duplicate labels would collide
+# in the scenario_status dict on the server and cause results to be overwritten.
+declare -A _LABEL_SEEN
+
 while IFS= read -r raw_step; do
   dataset=$(echo  "$raw_step" | jq -r '.dataset')
   procedure=$(echo "$raw_step" | jq -r '.scenario')
@@ -174,6 +180,13 @@ while IFS= read -r raw_step; do
   query_k=$(echo "$merged_params" | jq -r '.query_k // ""')
   [ -n "$query_k" ] && label="${label}-k${query_k}"
 
+  # Deduplicate: if this label has appeared before, append an occurrence counter.
+  # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.
+  _LABEL_SEEN["$label"]=$(( ${_LABEL_SEEN["$label"]:-0} + 1 ))
+  if [ "${_LABEL_SEEN["$label"]}" -gt 1 ]; then
+    label="${label}-${_LABEL_SEEN["$label"]}"
+  fi
+
   test_entry=$(jq -n \
     --arg     dataset      "$dataset" \
     --arg     scenario     "$procedure" \
@@ -186,6 +199,8 @@ while IFS= read -r raw_step; do
   TESTS_JSON=$(echo "$TESTS_JSON" | jq --argjson t "$test_entry" '. + [$t]')
 
 done < <(echo "$EFFECTIVE_STEPS" | jq -c '.[]')
+
+unset _LABEL_SEEN
 
 # ── Build final payload ────────────────────────────────────────────────────────
 PAYLOAD=$(jq -n \
