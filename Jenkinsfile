@@ -405,9 +405,16 @@ print(json.dumps(s))
                                         // On the first run, --first-run is passed so run-pipeline.sh
                                         // reads first_run_steps (build + search). All subsequent runs
                                         // omit the flag and read steps (search-only), reusing the PVC.
+                                        // RESULTS_DEST + WORKER_POD are consumed by run-pipeline.sh's
+                                        // incremental copy helper so each scenario is pulled to the
+                                        // Jenkins workspace as soon as it finishes.
                                         sh """
                                             set +e
+                                            DEST="${RESULTS_DIR}/${runKey}/test-runs/${params.ENGINE}"
+                                            mkdir -p "\$DEST"
                                             API_URL=${params.API_URL} \
+                                            RESULTS_DEST="\$DEST" \
+                                            WORKER_POD="opensearch-benchmark-worker-${params.ENGINE}-0" \
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
                                                 ${hasFirstRunSteps && isFirstRun ? "--first-run" : ""} \
@@ -418,16 +425,20 @@ print(json.dumps(s))
                                                 2>&1 | tee benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
 
-                                    JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log | tail -1 || true)
-                                    if [ -n "\$JOB_ID" ]; then
-                                        echo "\$JOB_ID" > job_id_develop-${params.ENGINE}-${versionLabel}-${runSize}.txt
-                                        echo "[develop] Job ID captured: \$JOB_ID"
-                                    fi
+                                            JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log | tail -1 || true)
+                                            if [ -n "\$JOB_ID" ]; then
+                                                echo "\$JOB_ID" > job_id_develop-${params.ENGINE}-${versionLabel}-${runSize}.txt
+                                                echo "[develop] Job ID captured: \$JOB_ID"
+                                            fi
 
-                                    exit \$PIPE_RC
-                                """
+                                            exit \$PIPE_RC
+                                        """
                             } finally {
                                 // ── c) Collect results ────────────────────────────
+                                // Scenario subdirs are already copied incrementally by
+                                // run-pipeline.sh during the run. This block captures the
+                                // run log and final job-status JSON, and does a catch-up
+                                // kubectl cp in case any copy was missed mid-run.
                                 sh """
                                     mkdir -p ${RESULTS_DIR}/${runKey}
                                     cp benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
@@ -444,8 +455,8 @@ print(json.dumps(s))
                                         DEST="${RESULTS_DIR}/${runKey}/test-runs/${params.ENGINE}"
                                         mkdir -p "\$DEST"
                                         kubectl cp benchmark-api-develop/opensearch-benchmark-worker-${params.ENGINE}-0:/results/\$JOB_ID/${params.ENGINE}/. "\$DEST/" 2>/dev/null \
-                                            && echo "  Copied results -> \$DEST/" \
-                                            || echo "WARNING: kubectl cp failed — worker pod may not be running"
+                                            && echo "  Catch-up copy: -> \$DEST/" \
+                                            || echo "WARNING: catch-up kubectl cp failed — worker pod may not be running"
 
                                         echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
                                     else
@@ -459,29 +470,24 @@ print(json.dumps(s))
 
                                     echo "Collecting logs from namespace: \$NS"
 
-                                            # Collect from all opensearch pods in the namespace
-                                            # (data nodes + cluster-manager). All are pinned to
-                                            # server-pool via nodeSelector so no node-label lookup
-                                            # is needed — and the lookup was silently swallowing
-                                            # errors that left PODS empty.
-                                            PODS=\$(kubectl get pods -n ${ns} \
-                                                -l 'app in (opensearch-data,opensearch-cluster-manager)' \
-                                                --no-headers \
-                                                -o custom-columns=':metadata.name' 2>/dev/null || true)
+                                    PODS=\$(kubectl get pods -n \$NS \
+                                        -l 'app in (opensearch-data,opensearch-cluster-manager)' \
+                                        --no-headers \
+                                        -o custom-columns=':metadata.name' 2>/dev/null || true)
 
-                                            if [ -z "\$PODS" ]; then
-                                                echo "  No opensearch pods found in ${ns} — skipping"
-                                            else
-                                                for POD in \$PODS; do
-                                                    CONTAINERS=\$(kubectl get pod "\$POD" -n ${ns} \
-                                                        -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
-                                                    for CONTAINER in \$CONTAINERS; do
-                                                        LOGFILE="\$LOG_DIR/\${POD}-\${CONTAINER}.log"
-                                                        kubectl logs "\$POD" -c "\$CONTAINER" -n ${ns} \
-                                                            --tail=5000 2>&1 > "\$LOGFILE" || true
-                                                        SIZE=\$(wc -l < "\$LOGFILE" 2>/dev/null || echo 0)
-                                                        echo "  \$POD / \$CONTAINER: \${SIZE} lines -> \$LOGFILE"
-                                                    done
+                                    if [ -z "\$PODS" ]; then
+                                        echo "  No opensearch pods found in \$NS — skipping"
+                                    else
+                                        for POD in \$PODS; do
+                                            CONTAINERS=\$(kubectl get pod "\$POD" -n \$NS \
+                                                -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
+                                            for CONTAINER in \$CONTAINERS; do
+                                                LOGFILE="\$LOG_DIR/\${POD}-\${CONTAINER}.log"
+                                                kubectl logs "\$POD" -c "\$CONTAINER" -n \$NS \
+                                                    --tail=5000 2>&1 > "\$LOGFILE" || true
+                                                SIZE=\$(wc -l < "\$LOGFILE" 2>/dev/null || echo 0)
+                                                echo "  \$POD / \$CONTAINER: \${SIZE} lines -> \$LOGFILE"
+                                            done
 
                                             GC_LOGFILE="\$LOG_DIR/\${POD}-gc.log"
                                             kubectl exec "\$POD" -c opensearch -n \$NS -- \

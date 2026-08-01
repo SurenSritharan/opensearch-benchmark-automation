@@ -137,6 +137,12 @@ num_vectors_for() {
 
 TESTS_JSON="[]"
 
+# Associative array to track how many times each base label has been used.
+# When a label appears more than once a numeric suffix (-2, -3, …) is appended
+# so every entry in tests[] has a unique label — duplicate labels would collide
+# in the scenario_status dict on the server and cause results to be overwritten.
+declare -A _LABEL_SEEN
+
 while IFS= read -r raw_step; do
   dataset=$(echo  "$raw_step" | jq -r '.dataset')
   procedure=$(echo "$raw_step" | jq -r '.scenario')
@@ -174,6 +180,13 @@ while IFS= read -r raw_step; do
   query_k=$(echo "$merged_params" | jq -r '.query_k // ""')
   [ -n "$query_k" ] && label="${label}-k${query_k}"
 
+  # Deduplicate: if this label has appeared before, append an occurrence counter.
+  # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.
+  _LABEL_SEEN["$label"]=$(( ${_LABEL_SEEN["$label"]:-0} + 1 ))
+  if [ "${_LABEL_SEEN["$label"]}" -gt 1 ]; then
+    label="${label}-${_LABEL_SEEN["$label"]}"
+  fi
+
   test_entry=$(jq -n \
     --arg     dataset      "$dataset" \
     --arg     scenario     "$procedure" \
@@ -186,6 +199,8 @@ while IFS= read -r raw_step; do
   TESTS_JSON=$(echo "$TESTS_JSON" | jq --argjson t "$test_entry" '. + [$t]')
 
 done < <(echo "$EFFECTIVE_STEPS" | jq -c '.[]')
+
+unset _LABEL_SEEN
 
 # ── Build final payload ────────────────────────────────────────────────────────
 PAYLOAD=$(jq -n \
@@ -257,6 +272,29 @@ PREV_STATUS=""
 PREV_LABEL=""
 PREV_FAILURES=""
 
+# ── Incremental result copy helper ────────────────────────────────────────────
+# Called whenever a scenario transitions to a terminal state.
+# Copies only that scenario's subdirectory from the worker pod to the Jenkins
+# workspace so results are preserved as each step finishes rather than all-at-
+# once at the end (where a pod restart or scale-down could lose everything).
+#
+# Requires two env vars set by the Jenkinsfile before invoking run-pipeline.sh:
+#   RESULTS_DEST   local destination directory  (e.g. results/12/3.7.0/small/test-runs/jvector)
+#   WORKER_POD     pod name                      (e.g. opensearch-benchmark-worker-jvector-0)
+_copy_scenario_results() {
+  local scenario_key="$1"   # e.g. cohere-wiki-en-768-wiki-en-768-5m-bulk-ingest-data
+  [ -z "${RESULTS_DEST:-}" ] || [ -z "${WORKER_POD:-}" ] && return 0
+
+  local src_path="/results/${JOB_ID}/${ENGINE}/${scenario_key}"
+  local dest="${RESULTS_DEST}/${scenario_key}"
+  mkdir -p "$dest"
+  if kubectl cp "benchmark-api-develop/${WORKER_POD}:${src_path}/." "$dest/" 2>/dev/null; then
+    echo "  [copy] ${scenario_key} -> ${dest}/"
+  else
+    echo "  [copy] WARNING: kubectl cp failed for ${scenario_key} (pod may not be reachable)"
+  fi
+}
+
 while true; do
   now="[$(date '+%Y-%m-%d %H:%M:%S')]"
   resp=$(curl -s --max-time 30 "${API_URL}/api/v1/benchmark/${JOB_ID}?engine=${ENGINE}" || true)
@@ -313,10 +351,22 @@ while true; do
     else
       printf "%s  %-9s  %2d/%d\n" "$now" "$job_status" "$completed" "$total"
     fi
-    PREV_COMPLETED="$completed"
     PREV_STATUS="$job_status"
     PREV_LABEL="$label"
   fi
+
+  # Copy each newly-completed scenario as soon as it lands.
+  # We compare against PREV_COMPLETED so we only act on the delta.
+  if [ "$completed" -gt "$PREV_COMPLETED" ] && [ -n "${RESULTS_DEST:-}" ]; then
+    echo "$resp" | jq -r '
+      .scenario_status // {} | to_entries[] |
+      select(.value | test("completed|failed|partial_failure|error|cancelled")) |
+      .key
+    ' | while IFS= read -r skey; do
+      _copy_scenario_results "$skey"
+    done
+  fi
+  PREV_COMPLETED="$completed"
 
   if $terminal; then
     echo ""
