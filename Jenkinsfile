@@ -384,7 +384,7 @@ pipeline {
                                     // Also wipe on subsequent runs if DELETE_PVCS was explicitly requested.
                                     if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
 
-                                    stage("${engine} / ${versionLabel} / ${runSize}") {
+                                    stage("${engine} / ${versionLabel} / ${runSize}") { // stage open
                                     echo "════════════════════════════════════════"
                                     echo "[${engine}] Benchmarking OpenSearch ${version} / ${runSize}"
                                     echo "════════════════════════════════════════"
@@ -650,10 +650,11 @@ pipeline {
                                                 -n benchmark-api --tail=5000 2>&1 > "\$WORKER_LOG" || true
                                             echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
                                         """
+                                    } // try/finally
                                     } // stage
-                                    } // runs.each
-                            }
-                        }]
+                                } // runs.each
+                            } // catchError
+                        }] // engineBranches entry
                     }
 
                     if (currentBuild.currentResult != 'ABORTED') {
