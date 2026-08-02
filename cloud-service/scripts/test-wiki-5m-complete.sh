@@ -28,6 +28,14 @@ PAYLOAD=$(cat <<'EOF'
     {
       "dataset": "cohere-wiki-en-768",
       "engine": "jvector",
+      "scenario": "delete-index",
+      "params": {
+        "target_index_name": "cohere-wiki-en-768-5m"
+      }
+    },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "engine": "jvector",
       "scenario": "create-index",
       "params": {
         "target_index_name": "cohere-wiki-en-768-5m",
