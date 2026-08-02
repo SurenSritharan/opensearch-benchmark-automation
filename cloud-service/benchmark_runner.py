@@ -552,8 +552,11 @@ class BenchmarkRunner:
         POLL_INTERVAL      = 1.0     # seconds between loop iterations
         HEALTH_INTERVAL    = 60.0    # seconds between cluster health checks
         RED_TOLERANCE      = 5       # consecutive connection failures → kill
-        BUSY_TOLERANCE     = 20      # consecutive read timeouts → kill
-                                     # 20 × 60 s = 20 min grace for CPU-bound work
+        BUSY_TOLERANCE     = 60      # consecutive read timeouts → kill
+                                     # 60 × 60 s = 60 min grace; the 6-hour hard limit
+                                     # is the real backstop for CPU-bound work like
+                                     # jvector force-merge (final graph build can take
+                                     # 2-4 h on small nodes for a 1.67M-vector shard)
 
         elapsed            = 0.0
         health_elapsed     = 0.0
