@@ -534,16 +534,31 @@ class BenchmarkRunner:
         """Poll the benchmark subprocess until it finishes, is cancelled, times
         out, or the cluster health watchdog decides to kill it.
 
+        The watchdog uses two separate counters to avoid killing a healthy but
+        CPU-busy cluster (e.g. jvector force-merge saturating all cores so the
+        Netty HTTP thread pool can't answer /_cluster/health in time):
+
+          red_consecutive  — connection refused/reset (process is dead)
+                             → kill after RED_TOLERANCE checks
+          busy_consecutive — read timeout (process alive, HTTP thread queued)
+                             → kill after BUSY_TOLERANCE checks (extended grace)
+
+        The distinction is made entirely from the exception type raised by the
+        HTTP request — no kubectl or external dependencies required.
+
         Returns a CompletedProcess with the exit code, stdout, and stderr.
         """
         TIMEOUT_SECONDS    = 21600   # 6-hour hard limit
         POLL_INTERVAL      = 1.0     # seconds between loop iterations
         HEALTH_INTERVAL    = 60.0    # seconds between cluster health checks
-        RED_TOLERANCE      = 5       # consecutive red checks before killing
+        RED_TOLERANCE      = 5       # consecutive connection failures → kill
+        BUSY_TOLERANCE     = 20      # consecutive read timeouts → kill
+                                     # 20 × 60 s = 20 min grace for CPU-bound work
 
         elapsed            = 0.0
         health_elapsed     = 0.0
         red_consecutive    = 0
+        busy_consecutive   = 0
         pgid_file          = Path("/workspace/run") / f"job_{active_key}.pgid"
 
         try:
@@ -561,18 +576,42 @@ class BenchmarkRunner:
                 health_elapsed += POLL_INTERVAL
                 if health_elapsed >= HEALTH_INTERVAL:
                     health_elapsed = 0.0
-                    status = self._poll_cluster_health(target_host)
+                    status, timed_out = self._poll_cluster_health(target_host)
                     if status in ('green', 'yellow'):
-                        red_consecutive = 0
-                    else:
-                        red_consecutive += 1
+                        red_consecutive  = 0
+                        busy_consecutive = 0
+                    elif timed_out:
+                        # Read timeout: the TCP connection was accepted but no response
+                        # arrived within the window. The process is alive but its HTTP
+                        # threads are CPU-starved (e.g. jvector graph build monopolising
+                        # all cores). Use the longer busy tolerance.
+                        busy_consecutive += 1
+                        red_consecutive   = 0
                         logger.warning(
-                            f"Job {job_id}: cluster health is '{status}' "
+                            f"Job {job_id}: cluster health timed out (HTTP thread busy) "
+                            f"— waiting... ({busy_consecutive}/{BUSY_TOLERANCE})"
+                        )
+                        if busy_consecutive >= BUSY_TOLERANCE:
+                            logger.error(
+                                f"Job {job_id}: cluster HTTP unresponsive for "
+                                f"{busy_consecutive} consecutive checks — killing benchmark process."
+                            )
+                            _kill_proc_group(proc)
+                            return subprocess.CompletedProcess(
+                                cmd, -1, '',
+                                'Killed: cluster HTTP unresponsive (read timeout)'
+                            )
+                    else:
+                        # Connection refused/reset or other hard error: process is dead.
+                        busy_consecutive  = 0
+                        red_consecutive  += 1
+                        logger.warning(
+                            f"Job {job_id}: cluster health is '{status}' (connection failed) "
                             f"({red_consecutive}/{RED_TOLERANCE} consecutive checks)"
                         )
                         if red_consecutive >= RED_TOLERANCE:
                             logger.error(
-                                f"Job {job_id}: cluster has been red/unreachable for "
+                                f"Job {job_id}: cluster has been unreachable for "
                                 f"{red_consecutive} consecutive checks — killing benchmark process."
                             )
                             _kill_proc_group(proc)
@@ -596,10 +635,15 @@ class BenchmarkRunner:
             with self._active_lock:
                 self._active.pop(active_key, None)
 
-    def _poll_cluster_health(self, target_host: str) -> Optional[str]:
+    def _poll_cluster_health(self, target_host: str) -> tuple:
         """Single non-retrying cluster health check used by the mid-run watchdog.
-        Returns the cluster status string ('green', 'yellow', 'red') or None if
-        the cluster is unreachable."""
+
+        Returns (status, timed_out) where:
+          status    — 'green'/'yellow'/'red' or None if unreachable
+          timed_out — True if the failure was a read timeout (process alive but
+                      HTTP thread busy), False if connection was refused/reset
+                      (process likely dead)
+        """
         try:
             response = requests.get(
                 f"https://{target_host}/_cluster/health",
@@ -607,10 +651,12 @@ class BenchmarkRunner:
                 timeout=10,
             )
             if response.status_code == 200:
-                return response.json().get('status')
+                return response.json().get('status'), False
+            return None, False
+        except requests.exceptions.ReadTimeout:
+            return None, True   # TCP connected, HTTP thread didn't respond in time
         except Exception:
-            pass
-        return None
+            return None, False  # connection refused, reset, DNS failure, etc.
 
     # ── 5. Post-sweep cleanup ─────────────────────────────────────────────────
 
