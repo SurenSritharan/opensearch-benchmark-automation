@@ -543,7 +543,7 @@ pipeline {
 
                                                 DEST="${RESULTS_DIR}/${runKey}/test-runs/${engine}"
                                                 mkdir -p "\$DEST"
-                                                kubectl cp -c worker benchmark-api/\$POD:/results/\$JOB_ID/${engine}/. "\$DEST/" 2>/dev/null \
+                                                kubectl cp -c worker benchmark-api/\$POD:/results/\$JOB_ID/${engine}/. "\$DEST/" >/dev/null 2>&1 \
                                                     || echo "WARNING: catch-up kubectl cp failed for ${engine} — worker pod may not be running"
 
                                                 echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
