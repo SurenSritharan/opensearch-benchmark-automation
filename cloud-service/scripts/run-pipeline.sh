@@ -288,11 +288,8 @@ _copy_scenario_results() {
   local src_path="/results/${JOB_ID}/${ENGINE}/${scenario_key}"
   local dest="${RESULTS_DEST}/${scenario_key}"
   mkdir -p "$dest"
-  if kubectl cp "benchmark-api/${WORKER_POD}:${src_path}/." "$dest/" 2>/dev/null; then
-    echo "  [copy] ${scenario_key} -> ${dest}/"
-  else
-    echo "  [copy] WARNING: kubectl cp failed for ${scenario_key} (pod may not be reachable)"
-  fi
+  kubectl cp "benchmark-api/${WORKER_POD}:${src_path}/." "$dest/" 2>/dev/null || \
+    echo "  WARNING: kubectl cp failed for ${scenario_key} (pod may not be reachable)"
 }
 
 while true; do
