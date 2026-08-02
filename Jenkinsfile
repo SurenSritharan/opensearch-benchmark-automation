@@ -455,8 +455,7 @@ print(json.dumps(s))
 
                                         DEST="${RESULTS_DIR}/${runKey}/test-runs/${params.ENGINE}"
                                         mkdir -p "\$DEST"
-                                        kubectl cp benchmark-api-develop/opensearch-benchmark-worker-${params.ENGINE}-0:/results/\$JOB_ID/${params.ENGINE}/. "\$DEST/" 2>/dev/null \
-                                            && echo "  Catch-up copy: -> \$DEST/" \
+                                        kubectl cp -c worker benchmark-api-develop/opensearch-benchmark-worker-${params.ENGINE}-0:/results/\$JOB_ID/${params.ENGINE}/. "\$DEST/" 2>/dev/null \
                                             || echo "WARNING: catch-up kubectl cp failed — worker pod may not be running"
 
                                         echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
