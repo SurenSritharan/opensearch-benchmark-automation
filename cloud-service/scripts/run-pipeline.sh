@@ -354,7 +354,7 @@ while true; do
 
   # Copy each newly-completed scenario as soon as it lands.
   # We compare against PREV_COMPLETED so we only act on the delta.
-  if [ "$completed" -gt "$PREV_COMPLETED" ] && [ -n "${RESULTS_DEST:-}" ]; then
+  if [ "${completed:-0}" -gt "$PREV_COMPLETED" ] && [ -n "${RESULTS_DEST:-}" ]; then
     echo "$resp" | jq -r '
       .scenario_status // {} | to_entries[] |
       select(.value | test("completed|failed|partial_failure|error|cancelled")) |
@@ -363,7 +363,7 @@ while true; do
       _copy_scenario_results "$skey"
     done
   fi
-  PREV_COMPLETED="$completed"
+  PREV_COMPLETED="${completed:-0}"
 
   if $terminal; then
     echo ""
