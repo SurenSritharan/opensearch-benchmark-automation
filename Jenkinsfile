@@ -296,6 +296,7 @@ print(json.dumps(s))
                         // Also wipe on subsequent runs if DELETE_PVCS was explicitly requested.
                         if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
 
+                        stage("${params.ENGINE} / ${versionLabel} / ${runSize}") {
                         echo "════════════════════════════════════════"
                         echo "Benchmarking OpenSearch ${version} / ${runSize}"
                         echo "════════════════════════════════════════"
@@ -560,8 +561,9 @@ print(json.dumps(s))
                                 """
                             }
                         }
+                        } // stage
                         isFirstRun = false
-                    }
+                    } // runs.each
                 }
             }
         }
