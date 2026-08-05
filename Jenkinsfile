@@ -23,6 +23,9 @@ pipeline {
                 'complete-1m',
                 'complete-5m',
                 'complete',
+                'complete-1m-acl',
+                'complete-1m-acl-wiki-only',
+                'search-1m-acl',
                 'complete-1m-profile-ingest',
                 'complete-5m-profile-ingest',
                 'msmarco-jvector-hq-build',
@@ -123,6 +126,10 @@ pipeline {
                 }
                 sh '''
                     chmod +x gke-manifest/*.sh cloud-service/scripts/*.sh
+                '''
+                sh '''
+                    # Make the ACL setup script executable (no-op if already set by the line above)
+                    chmod +x gke-manifest/acl-setup.sh
                 '''
                 // Sync TLS certs to all namespaces so workers and clusters share the same CA.
                 sh './gke-manifest/sync-certs.sh'
@@ -487,6 +494,23 @@ pipeline {
                                                     sleep 10
                                                 done
                                             """
+                                        }
+
+                                        // ── a2) ACL Setup ──────────────────────────────────
+                                        // Only runs when the selected pipeline is an ACL pipeline
+                                        // (name contains "-acl"). Bootstraps the ingest pipeline,
+                                        // index template, DLS role, and benchmark user before the
+                                        // first benchmark step fires.  Idempotent — safe to re-run
+                                        // on REDEPLOY_CLUSTERS because every call is a PUT.
+                                        script {
+                                            if (pipeline.contains('-acl')) {
+                                                sh """
+                                                    echo "=== [${engine}] ACL Setup for ${ns} ==="
+                                                    gke-manifest/acl-setup.sh ${ns}
+                                                """
+                                            } else {
+                                                echo "[${engine}] Non-ACL pipeline — skipping ACL setup"
+                                            }
                                         }
 
                                         // ── b) Run benchmark ───────────────────────────────

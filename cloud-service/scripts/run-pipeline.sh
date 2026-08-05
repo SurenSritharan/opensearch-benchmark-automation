@@ -187,14 +187,28 @@ while IFS= read -r raw_step; do
     label="${label}-${_LABEL_SEEN["$label"]}"
   fi
 
+  # Hoist per-step username/password out of params so they travel as dedicated
+  # fields on the test entry and are never forwarded to OSB as workload variables.
+  # benchmark_runner._get_run_contexts() pops them from workload_params by key name,
+  # but app.py:process_batch_job merges scenario.params into workload_params first —
+  # so they must be at the top level of the scenario object to survive that merge.
+  step_username=$(echo "$merged_params" | jq -r '.username // ""')
+  step_password=$(echo "$merged_params" | jq -r '.password // ""')
+  # Strip credentials from params so they are never sent to OSB as workload variables
+  merged_params=$(echo "$merged_params" | jq 'del(.username) | del(.password)')
+
   test_entry=$(jq -n \
     --arg     dataset      "$dataset" \
     --arg     scenario     "$procedure" \
     --arg     label        "$label" \
     --argjson params       "$merged_params" \
     --argjson step_profile "$step_profile" \
+    --arg     step_user    "$step_username" \
+    --arg     step_pass    "$step_password" \
     '{ dataset: $dataset, scenario: $scenario, label: $label, params: $params }
-     | if $step_profile != null then .profile = $step_profile else . end')
+     | if $step_profile != null then .profile   = $step_profile else . end
+     | if $step_user    != ""   then .username  = $step_user    else . end
+     | if $step_pass    != ""   then .password  = $step_pass    else . end')
 
   TESTS_JSON=$(echo "$TESTS_JSON" | jq --argjson t "$test_entry" '. + [$t]')
 
