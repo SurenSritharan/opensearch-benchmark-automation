@@ -702,7 +702,18 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             global_params = options.get('workload_params', {}) or {}
             scenario_params = scenario.get('params', {}) or {}
             workload_params = {**global_params, **scenario_params}
-            
+
+            # Inject per-step credentials into workload_params so benchmark_runner
+            # can pop them in _get_run_contexts().  Only inject when non-empty so
+            # the runner's admin/admin default is used for steps with no credentials.
+            step_username = scenario.get('username', '')
+            step_password = scenario.get('password', '')
+            if step_username:
+                workload_params['username'] = step_username
+                logger.info(f"Batch job {job_id}, test {label}: using per-step username={step_username!r}")
+            if step_password:
+                workload_params['password'] = step_password
+
             logger.info(f"Batch job {job_id}, test {label}: merged params = {workload_params}")
             
             # Per-step profile flag overrides the job-level enable_profiling.
@@ -1068,13 +1079,21 @@ def trigger_batch_benchmark():
             if test_params:
                 scenario_params.update(test_params)
                 logger.info(f"Applying custom params for {dataset}/{scenario_label}: {test_params}")
-            
+
+            # Per-step credentials: hoisted to dedicated fields by run-pipeline.sh so
+            # they are never buried inside params and survive the workload_params merge.
+            # Fall back to empty string — benchmark_runner defaults to admin/admin.
+            step_username = test.get('username', '')
+            step_password = test.get('password', '')
+
             scenarios.append({
                 'dataset': dataset,
                 'label': scenario_label,
                 'procedure_name': procedure_name,
                 'params': scenario_params,
                 'profile': test.get('profile'),  # per-step profiling
+                'username': step_username,
+                'password': step_password,
             })
             
             logger.info(f"Test: dataset='{dataset}', scenario='{scenario_label}' -> procedure '{procedure_name}'")

@@ -1,0 +1,14 @@
+{
+  "description": "ACL search-only — wiki + msmarco at 1M as benchmark-acl-user (DLS enforced). Indexes must already exist from a previous complete-1m-acl run.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 100, "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 64,  "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 10,  "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 100, "hnsw_ef_search": 256, "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 64,  "hnsw_ef_search": 256, "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 10,  "hnsw_ef_search": 256, "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } }
+  ]
+}

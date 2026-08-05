@@ -1,0 +1,26 @@
+{
+  "description": "ACL benchmark — full 1M run. Write steps (delete/create/ingest/merge) run as admin. All vector-search steps run as benchmark-acl-user so DLS is enforced only during the search phase being measured.",
+  "engine": "__ENGINE__",
+  "params": {
+    "corpus_size": "1m"
+  },
+  "log_level": "info",
+  "steps": [
+    { "dataset": "cohere-wiki-en-768",  "scenario": "delete-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "create-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "force-merge" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 100, "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 10,  "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "create-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data", "params": { "target_index_bulk_size": 5000 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 100, "hnsw_ef_search": 256, "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 10,  "hnsw_ef_search": 256, "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } }
+  ]
+}
