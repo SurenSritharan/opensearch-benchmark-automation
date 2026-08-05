@@ -502,9 +502,19 @@ pipeline {
                                         // index template, DLS role, and benchmark user before the
                                         // first benchmark step fires.  Idempotent — safe to re-run
                                         // on REDEPLOY_CLUSTERS because every call is a PUT.
+                                        //
+                                        // The worker pod readiness wait is required: cluster-green
+                                        // only confirms OpenSearch is ready, not the benchmark worker
+                                        // pod. acl-setup.sh routes all curl calls through kubectl exec
+                                        // on the worker pod — if the pod is still starting its git pull
+                                        // the TCP connection to the OpenSearch service is refused (exit 7).
                                         script {
                                             if (pipeline.contains('-acl')) {
                                                 sh """
+                                                    echo "=== [${engine}] Waiting for worker pod to be Ready before ACL setup ==="
+                                                    kubectl wait --for=condition=ready pod \
+                                                        opensearch-benchmark-worker-${engine}-0 \
+                                                        -n benchmark-api --timeout=300s
                                                     echo "=== [${engine}] ACL Setup for ${ns} ==="
                                                     gke-manifest/acl-setup.sh ${ns}
                                                 """
