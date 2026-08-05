@@ -27,18 +27,13 @@ WORKER_POD="opensearch-benchmark-worker-${ENGINE}-0"
 WORKER_NS="benchmark-api"
 OS_HOST="opensearch-cluster.${NS}.svc.cluster.local:9200"
 
-# TLS client certs are mounted at this path on every worker pod (synced by sync-certs.sh)
-# Kept as separate variables so they are individually quoted when expanded — a single
-# CERT string with spaces would word-split if unquoted, breaking the curl invocation.
-CERT_FILE="/certs/admin.pem"
-CERT_KEY="/certs/admin-key.pem"
-CERT_CA="/certs/root-ca.pem"
-
-# Shorthand: run a curl command inside the worker pod
+# Shorthand: run a curl command inside the worker pod.
+# Uses -sk (silent + skip TLS verification) — identical to every other curl call
+# in this repo (Jenkinsfile telemetry block, check-index-stats.sh, benchmark_runner.py).
+# The OpenSearch cluster uses a self-signed CA so --cacert verification would fail.
 os_api() {
     kubectl exec -n "$WORKER_NS" "$WORKER_POD" -c worker -- \
-        curl -sf -u admin:admin \
-        --cert "$CERT_FILE" --key "$CERT_KEY" --cacert "$CERT_CA" \
+        curl -sk -u admin:admin \
         "$@"
 }
 
