@@ -27,13 +27,30 @@ WORKER_POD="opensearch-benchmark-worker-${ENGINE}-0"
 WORKER_NS="benchmark-api"
 OS_HOST="opensearch-cluster.${NS}.svc.cluster.local:9200"
 
-# Shorthand: run a curl command inside the worker pod.
-# Uses -sk (silent + skip TLS verification) — identical to every other curl call
-# in this repo (Jenkinsfile telemetry block, check-index-stats.sh, benchmark_runner.py).
-# The OpenSearch cluster uses a self-signed CA so --cacert verification would fail.
+# Two curl helpers — both run inside the worker pod via kubectl exec.
+#
+# os_api()       — regular REST (ingest pipeline, index template, _cat, _count …).
+#                  Basic auth only; -sk skips TLS cert verification.
+#
+# os_security()  — OpenSearch Security REST API (/_plugins/_security/api/…).
+#                  The Security plugin requires the admin TLS client certificate
+#                  in addition to basic auth; without it the plugin returns:
+#                  "No permission to access REST API: Role based access not enabled."
+#                  Certs are mounted into the worker pod at /certs/ by the
+#                  opensearch-benchmark-worker-template.yaml volumeMount.
+#
+# Both helpers use the same admin:admin credentials and -sk to skip CA verification.
 os_api() {
     kubectl exec -n "$WORKER_NS" "$WORKER_POD" -c worker -- \
         curl -sk -u admin:admin \
+        "$@"
+}
+
+os_security() {
+    kubectl exec -n "$WORKER_NS" "$WORKER_POD" -c worker -- \
+        curl -sk -u admin:admin \
+        --cert /certs/admin.pem \
+        --key  /certs/admin-key.pem \
         "$@"
 }
 
@@ -112,7 +129,7 @@ echo ""
 # Role mapping assigns backend_roles so any user with those LDAP/backend groups
 # inherits the DLS restriction automatically.
 echo "[3/4] Creating DLS role test_full_identity..."
-os_api -X PUT "https://${OS_HOST}/_plugins/_security/api/roles/test_full_identity" \
+os_security -X PUT "https://${OS_HOST}/_plugins/_security/api/roles/test_full_identity" \
   -H "Content-Type: application/json" \
   -d '{
     "cluster_permissions": ["cluster_composite_ops_ro"],
@@ -127,7 +144,7 @@ os_api -X PUT "https://${OS_HOST}/_plugins/_security/api/roles/test_full_identit
 echo "  ✅ DLS role test_full_identity created"
 
 echo "    Creating role mapping (backend_roles: grp-finance-readers, grp-all-employees, role-employee)..."
-os_api -X PUT "https://${OS_HOST}/_plugins/_security/api/rolesmapping/test_full_identity" \
+os_security -X PUT "https://${OS_HOST}/_plugins/_security/api/rolesmapping/test_full_identity" \
   -H "Content-Type: application/json" \
   -d '{
     "backend_roles": ["grp-finance-readers", "grp-all-employees", "role-employee"],
@@ -141,7 +158,7 @@ echo ""
 # Password must match the "password" param in complete-1m-acl.json.
 # backend_roles matches the role mapping above so DLS is applied at search time.
 echo "[4/4] Creating internal user benchmark-acl-user..."
-os_api -X PUT "https://${OS_HOST}/_plugins/_security/api/internalusers/benchmark-acl-user" \
+os_security -X PUT "https://${OS_HOST}/_plugins/_security/api/internalusers/benchmark-acl-user" \
   -H "Content-Type: application/json" \
   -d '{
     "password": "BenchmarkACL-2024!",
@@ -169,12 +186,12 @@ os_api "https://${OS_HOST}/_index_template/acl-benchmark-template?filter_path=in
 
 echo ""
 echo "  DLS role test_full_identity:"
-os_api "https://${OS_HOST}/_plugins/_security/api/roles/test_full_identity?filter_path=test_full_identity.index_permissions" \
+os_security "https://${OS_HOST}/_plugins/_security/api/roles/test_full_identity?filter_path=test_full_identity.index_permissions" \
   | jq -r '.test_full_identity.index_permissions[0] | "    index_patterns: \(.index_patterns)  dls: \(if .dls then "[set]" else "MISSING" end)"'
 
 echo ""
 echo "  User benchmark-acl-user:"
-os_api "https://${OS_HOST}/_plugins/_security/api/internalusers/benchmark-acl-user?filter_path=benchmark-acl-user.backend_roles" \
+os_security "https://${OS_HOST}/_plugins/_security/api/internalusers/benchmark-acl-user?filter_path=benchmark-acl-user.backend_roles" \
   | jq -r '."benchmark-acl-user".backend_roles | "    backend_roles: \(.)"'
 
 echo ""

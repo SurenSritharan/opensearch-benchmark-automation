@@ -10,7 +10,11 @@
     { "dataset": "cohere-wiki-en-768", "scenario": "create-index" },
     { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-data" },
     { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index" },
-    { "dataset": "cohere-wiki-en-768", "scenario": "force-merge" },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "force-merge",
+      "params": { "max_num_segments": 5 }
+    },
     { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index" },
     {
       "dataset": "cohere-wiki-en-768",
