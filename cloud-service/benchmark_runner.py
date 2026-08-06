@@ -178,6 +178,24 @@ class BenchmarkRunner:
         password       = (workload_params or {}).pop('password',       'admin')
         client_timeout = (workload_params or {}).get('client_timeout', 600)
 
+        # ACL tracking — log exactly which credential source won so it is visible
+        # in the worker log for every step.
+        if step_u:
+            logger.info(
+                f"[ACL] _get_run_contexts: dataset={dataset} scenario={scenario} "
+                f"credential source=STEP step_username={step_u!r}"
+            )
+        elif global_u != 'admin':
+            logger.info(
+                f"[ACL] _get_run_contexts: dataset={dataset} scenario={scenario} "
+                f"credential source=GLOBAL username={global_u!r}"
+            )
+        else:
+            logger.info(
+                f"[ACL] _get_run_contexts: dataset={dataset} scenario={scenario} "
+                f"credential source=DEFAULT (admin/admin) — no step_username or global username set"
+            )
+
         # Procedure config: scenario-level params + engine-specific overrides
         runtime_sweeps   = workload_params.pop('parameter_sweeps', None) if workload_params else None
         procedure_config = next(
@@ -433,6 +451,12 @@ class BenchmarkRunner:
         logger.info(f"Workload params written to: {params_file}")
         logger.info(f"Workload params content:\n{json.dumps(ctx.params, indent=2)}")
         logger.info(f"User tags: {user_tags_str}")
+        # ACL tracking — log the username that will appear in --client-options.
+        # This is the ground truth of who OSB actually authenticates as.
+        logger.info(
+            f"[ACL] _build_osb_command: scenario={scenario} "
+            f"OSB will authenticate as user={ctx.username!r}"
+        )
 
         cmd.extend(['--workload-params', str(params_file)])
         return cmd

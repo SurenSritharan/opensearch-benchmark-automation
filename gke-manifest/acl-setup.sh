@@ -175,24 +175,72 @@ echo "Verifying setup..."
 echo "============================================================"
 
 echo ""
-echo "  Pipeline acl_guard:"
+echo "  [1] Pipeline acl_guard:"
 os_api "https://${OS_HOST}/_ingest/pipeline/acl_guard?filter_path=*.description" \
   | jq -r 'to_entries[0] | "    \(.key) — \(.value.description)"'
 
 echo ""
-echo "  Index template acl-benchmark-template:"
-os_api "https://${OS_HOST}/_index_template/acl-benchmark-template?filter_path=index_templates.*.index_template.index_patterns,index_templates.*.index_template.template.settings.index.default_pipeline" \
-  | jq -r '.index_templates[0].index_template | "    patterns: \(.index_patterns)  default_pipeline: \(.template.settings.index.default_pipeline)"'
+echo "  [2] Index template acl-benchmark-template (default_pipeline + ACL mappings):"
+os_api "https://${OS_HOST}/_index_template/acl-benchmark-template?filter_path=index_templates.*.index_template.index_patterns,index_templates.*.index_template.template.settings.index.default_pipeline,index_templates.*.index_template.template.mappings.properties" \
+  | jq -r '
+    .index_templates[0].index_template as $t |
+    "    patterns: \($t.index_patterns)  default_pipeline: \($t.template.settings.index.default_pipeline)",
+    "    acl fields in template mappings: \($t.template.mappings.properties | keys | map(select(startswith("access_"))))"'
 
 echo ""
-echo "  DLS role test_full_identity:"
+echo "  [3] DLS role test_full_identity:"
 os_security "https://${OS_HOST}/_plugins/_security/api/roles/test_full_identity?filter_path=test_full_identity.index_permissions" \
-  | jq -r '.test_full_identity.index_permissions[0] | "    index_patterns: \(.index_patterns)  dls: \(if .dls then "[set]" else "MISSING" end)"'
+  | jq -r '.test_full_identity.index_permissions[0] | "    index_patterns: \(.index_patterns)  dls: \(if .dls then "[set — \(.dls | .[0:80])…]" else "MISSING ❌" end)  actions: \(.allowed_actions)"'
 
 echo ""
-echo "  User benchmark-acl-user:"
-os_security "https://${OS_HOST}/_plugins/_security/api/internalusers/benchmark-acl-user?filter_path=benchmark-acl-user.backend_roles" \
-  | jq -r '."benchmark-acl-user".backend_roles | "    backend_roles: \(.)"'
+echo "  [4] Role mapping test_full_identity:"
+os_security "https://${OS_HOST}/_plugins/_security/api/rolesmapping/test_full_identity" \
+  | jq -r '.test_full_identity | "    backend_roles: \(.backend_roles)  users: \(.users)"'
+
+echo ""
+echo "  [5] User benchmark-acl-user:"
+os_security "https://${OS_HOST}/_plugins/_security/api/internalusers/benchmark-acl-user?filter_path=benchmark-acl-user.backend_roles,benchmark-acl-user.attributes" \
+  | jq -r '."benchmark-acl-user" | "    backend_roles: \(.backend_roles)  (must contain grp-finance-readers)"'
+
+echo ""
+echo "  [6] Live index settings — default_pipeline on cohere-wiki-en-768-1m (if exists):"
+os_api "https://${OS_HOST}/cohere-wiki-en-768-1m/_settings?filter_path=*.settings.index.default_pipeline,*.settings.index.knn" \
+  | jq -r 'to_entries[0] | "    index: \(.key)  default_pipeline: \(.value.settings.index.default_pipeline // "NOT SET ❌")  knn: \(.value.settings.index.knn // "false")"' \
+  2>/dev/null || echo "    (index not yet created — will be checked after ingest)"
+
+echo ""
+echo "  [7] ACL field presence in indexed documents (sample 3 docs — requires index to exist):"
+os_api -X POST "https://${OS_HOST}/cohere-wiki-en-768-1m/_search" \
+  -H "Content-Type: application/json" \
+  -d '{"size":3,"_source":["access_groups","access_roles","access_users","_id"],"query":{"match_all":{}}}' \
+  2>/dev/null | jq -r '
+    if .hits.total.value > 0 then
+      "    total docs visible: \(.hits.total.value)",
+      (.hits.hits[] | "    _id=\(._id)  access_groups=\(._source.access_groups // "MISSING ❌")  access_roles=\(._source.access_roles // "[]")  access_users=\(._source.access_users // "[]")")
+    else
+      "    (index empty or not yet created)"
+    end' \
+  2>/dev/null || echo "    (index not yet created — will be checked after ingest)"
+
+echo ""
+echo "  [8] DLS verification — docs visible as benchmark-acl-user vs admin:"
+ADMIN_COUNT=$(os_api "https://${OS_HOST}/cohere-wiki-en-768-1m/_count" \
+  2>/dev/null | jq -r '.count // "N/A"')
+ACL_COUNT=$(kubectl exec -n "$WORKER_NS" "$WORKER_POD" -c worker -- \
+  curl -sk -u "benchmark-acl-user:BenchmarkACL-2024!" \
+  "https://${OS_HOST}/cohere-wiki-en-768-1m/_count" \
+  2>/dev/null | jq -r '.count // "N/A"')
+echo "    admin count:             ${ADMIN_COUNT}"
+echo "    benchmark-acl-user count: ${ACL_COUNT}"
+if [ "$ADMIN_COUNT" != "N/A" ] && [ "$ACL_COUNT" != "N/A" ]; then
+  if [ "$ADMIN_COUNT" -gt "$ACL_COUNT" ] 2>/dev/null; then
+    echo "    ✅ DLS IS restrictive — ACL user sees fewer docs than admin"
+  elif [ "$ADMIN_COUNT" -eq "$ACL_COUNT" ] 2>/dev/null; then
+    echo "    ❌ DLS NOT restrictive — ACL user sees same count as admin (check role mapping and DLS query)"
+  fi
+else
+  echo "    (index not yet created — run this script again after ingest to verify DLS)"
+fi
 
 echo ""
 echo "============================================================"
