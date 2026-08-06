@@ -171,7 +171,9 @@ class BenchmarkRunner:
         # step.params.step_username) take priority over the global job-level
         # username/password.  Both are popped so neither leaks into the OSB command
         # as a workload variable.
-        wp = workload_params or {}
+        # Work on a shallow copy so that repeated calls (e.g. ingest retries) with
+        # the same dict reference still see the credential keys on every attempt.
+        wp = dict(workload_params) if workload_params else {}
         step_u = wp.pop('step_username', '')
         step_p = wp.pop('step_password', '')
         global_u = wp.pop('username', 'admin')
@@ -198,7 +200,9 @@ class BenchmarkRunner:
             )
 
         # Procedure config: scenario-level params + engine-specific overrides
-        runtime_sweeps   = workload_params.pop('parameter_sweeps', None) if workload_params else None
+        # Use wp (the credential-stripped copy) for all remaining param work so
+        # the original workload_params dict is never mutated by this method.
+        runtime_sweeps   = wp.pop('parameter_sweeps', None)
         procedure_config = next(
             (p for p in self.config.get_test_procedures(dataset)
              if isinstance(p, dict) and p.get('name') == scenario),
@@ -225,8 +229,8 @@ class BenchmarkRunner:
         else:
             raw_sweeps = [{}]
 
-        if workload_params:
-            logger.info(f"Runtime params: {list(workload_params.keys())}")
+        if wp:
+            logger.info(f"Runtime params: {list(wp.keys())}")
 
         # Build one RunContext per sweep — all params resolved, results dir created
         sweeps = []
@@ -235,7 +239,7 @@ class BenchmarkRunner:
             if sweep_params:
                 logger.info(f"Sweep {idx} params: {list(sweep_params.keys())}")
             merged       = {**base_params, **procedure_base_params, **sweep_params}
-            final_params = self.config.resolve_workload_params(dataset, merged, workload_params)
+            final_params = self.config.resolve_workload_params(dataset, merged, wp)
 
             if '/' in job_id:
                 base = self.results_dir / job_id
