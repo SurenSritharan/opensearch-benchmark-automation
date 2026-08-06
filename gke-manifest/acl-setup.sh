@@ -61,6 +61,30 @@ echo "OpenSearch host: ${OS_HOST}"
 echo "============================================================"
 echo ""
 
+# ── 0. Wait for OpenSearch to be reachable via the Service ───────────────────
+# The worker pod can be Ready while OpenSearch's Service endpoint is still
+# propagating (or while the cluster is finishing its startup sequence).
+# curl exit-7 = connection refused.  Retry for up to 5 minutes (30 × 10 s).
+echo "[0/4] Waiting for OpenSearch to be reachable at ${OS_HOST}..."
+WAIT_RETRIES=30
+WAIT_INTERVAL=10
+for i in $(seq 1 $WAIT_RETRIES); do
+    HTTP_CODE=$(kubectl exec -n "$WORKER_NS" "$WORKER_POD" -c worker -- \
+        curl -sk -u admin:admin -o /dev/null -w "%{http_code}" \
+        "https://${OS_HOST}/_cluster/health" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" = "200" ]; then
+        echo "  ✅ OpenSearch reachable (attempt ${i})"
+        break
+    fi
+    echo "  [${i}/${WAIT_RETRIES}] HTTP ${HTTP_CODE} — waiting ${WAIT_INTERVAL}s..."
+    if [ "$i" -eq "$WAIT_RETRIES" ]; then
+        echo "❌ OpenSearch did not become reachable after $((WAIT_RETRIES * WAIT_INTERVAL))s — aborting"
+        exit 1
+    fi
+    sleep $WAIT_INTERVAL
+done
+echo ""
+
 # ── 1. acl_guard Ingest Pipeline ─────────────────────────────────────────────
 # Normalises access_roles / access_groups / access_users (lowercase + trim +
 # strip empty strings), then injects synthetic access_groups from _id mod 3
