@@ -116,7 +116,8 @@ spec:
             else
               echo "Workspace already exists, pulling latest changes..."
               cd /workspace
-              git fetch origin acl-benchmarking
+              git remote set-url origin https://github.com/kush992/opensearch-benchmark-automation.git
+              git fetch origin acl-benchmarking || echo "Git fetch failed, using existing version"
               git checkout acl-benchmarking || echo "Git checkout failed, using existing version"
               git pull origin acl-benchmarking || echo "Git pull failed, using existing version"
             fi
