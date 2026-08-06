@@ -157,7 +157,7 @@ echo "[3/4] Creating DLS role test_full_identity..."
 os_security -X PUT "https://${OS_HOST}/_plugins/_security/api/roles/test_full_identity" \
   -H "Content-Type: application/json" \
   -d '{
-    "cluster_permissions": ["cluster_composite_ops_ro"],
+    "cluster_permissions": ["cluster_composite_ops_ro", "cluster:monitor/health"],
     "index_permissions": [
       {
         "index_patterns": ["cohere-wiki-en-768-*", "cohere-msmarco-1024-*"],
