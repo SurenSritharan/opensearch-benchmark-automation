@@ -187,15 +187,18 @@ while IFS= read -r raw_step; do
     label="${label}-${_LABEL_SEEN["$label"]}"
   fi
 
-  # Hoist per-step username/password out of params so they travel as dedicated
-  # fields on the test entry and are never forwarded to OSB as workload variables.
-  # benchmark_runner._get_run_contexts() pops them from workload_params by key name,
-  # but app.py:process_batch_job merges scenario.params into workload_params first —
-  # so they must be at the top level of the scenario object to survive that merge.
-  step_username=$(echo "$merged_params" | jq -r '.username // ""')
-  step_password=$(echo "$merged_params" | jq -r '.password // ""')
-  # Strip credentials from params so they are never sent to OSB as workload variables
-  merged_params=$(echo "$merged_params" | jq 'del(.username) | del(.password)')
+  # Hoist step_username/step_password from step.params to dedicated top-level fields
+  # on the test entry so they are never forwarded to OSB as workload variables.
+  # These are distinct from the global pipeline.params.username / pipeline.params.password
+  # (which set a default for the whole job).  A step that wants a different user sets
+  # step_username/step_password in its own params block; other steps omit them and the
+  # runner falls back to the global job-level username/password (or admin/admin default).
+  step_username=$(echo "$merged_params" | jq -r '.step_username // ""')
+  step_password=$(echo "$merged_params" | jq -r '.step_password // ""')
+  # Strip ALL credential keys from params so none leak into OSB as workload variables.
+  # step_username/step_password  — per-step credentials defined in step.params
+  # username/password            — global pipeline-level credentials from pipeline.params
+  merged_params=$(echo "$merged_params" | jq 'del(.step_username, .step_password, .username, .password)')
 
   test_entry=$(jq -n \
     --arg     dataset      "$dataset" \
@@ -206,9 +209,9 @@ while IFS= read -r raw_step; do
     --arg     step_user    "$step_username" \
     --arg     step_pass    "$step_password" \
     '{ dataset: $dataset, scenario: $scenario, label: $label, params: $params }
-     | if $step_profile != null then .profile   = $step_profile else . end
-     | if $step_user    != ""   then .username  = $step_user    else . end
-     | if $step_pass    != ""   then .password  = $step_pass    else . end')
+     | if $step_profile  != null then .profile       = $step_profile  else . end
+     | if $step_user     != ""   then .step_username = $step_user     else . end
+     | if $step_pass     != ""   then .step_password = $step_pass     else . end')
 
   TESTS_JSON=$(echo "$TESTS_JSON" | jq --argjson t "$test_entry" '. + [$t]')
 

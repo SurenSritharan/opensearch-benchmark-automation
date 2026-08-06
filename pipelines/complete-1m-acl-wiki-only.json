@@ -13,7 +13,7 @@
     {
       "dataset": "cohere-wiki-en-768",
       "scenario": "force-merge",
-      "params": { "max_num_segments": 5 }
+      "params": { "target_index_max_num_segments": 5 }
     },
     { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index" },
     {
@@ -21,8 +21,8 @@
       "scenario": "vector-search",
       "params": {
         "query_k": 10,
-        "username": "benchmark-acl-user",
-        "password": "BenchmarkACL-2024!"
+        "step_username": "benchmark-acl-user",
+        "step_password": "BenchmarkACL-2024!"
       }
     }
   ]

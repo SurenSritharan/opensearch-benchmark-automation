@@ -166,9 +166,18 @@ class BenchmarkRunner:
             base_params.update(engine_params_config[engine])
             logger.info(f"Loaded engine params for {engine}: {list(engine_params_config[engine].keys())}")
 
-        # Extract credentials before they can bleed into workload params sent to OSB
-        username = (workload_params or {}).pop('username', 'admin')
-        password = (workload_params or {}).pop('password', 'admin')
+        # Extract credentials before they can bleed into workload params sent to OSB.
+        # step_username/step_password (set per-step in the pipeline JSON under
+        # step.params.step_username) take priority over the global job-level
+        # username/password.  Both are popped so neither leaks into the OSB command
+        # as a workload variable.
+        wp = workload_params or {}
+        step_u = wp.pop('step_username', '')
+        step_p = wp.pop('step_password', '')
+        global_u = wp.pop('username', 'admin')
+        global_p = wp.pop('password', 'admin')
+        username = step_u  if step_u else global_u
+        password = step_p  if step_p else global_p
 
         # Procedure config: scenario-level params + engine-specific overrides
         runtime_sweeps   = workload_params.pop('parameter_sweeps', None) if workload_params else None
