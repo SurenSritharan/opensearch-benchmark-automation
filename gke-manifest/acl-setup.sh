@@ -21,6 +21,7 @@
 set -euo pipefail
 
 NS="${1:?Usage: $0 <namespace>  (e.g. os-jvector)}"
+MODE="${2:-setup}"   # setup (default) | verify
 ENGINE="${NS#os-}"   # strip "os-" prefix → jvector | faiss | lucene
 
 WORKER_POD="opensearch-benchmark-worker-${ENGINE}-0"
@@ -255,6 +256,73 @@ echo ""
 echo "============================================================"
 echo "✅ ACL setup complete for ${NS}"
 echo "   Next: run the benchmark with pipeline complete-1m-acl"
+echo "============================================================"
+
+# Early exit for setup mode — verify mode continues below.
+if [ "$MODE" != "verify" ]; then
+    exit 0
+fi
+
+# ── Post-ingest verification (acl-setup.sh <ns> verify) ─────────────────────
+# Run this after bulk-ingest-data completes to confirm:
+#   1. The index was created with default_pipeline: acl_guard
+#   2. ACL fields are populated in the actual indexed documents
+#   3. DLS is restrictive — ACL user sees fewer docs than admin
+INDEX="cohere-wiki-en-768-1m"
+
+echo ""
+echo "============================================================"
+echo "Post-ingest ACL verification — ${INDEX}"
+echo "============================================================"
+
+echo ""
+echo "  [A] Index settings (default_pipeline + knn):"
+os_api "https://${OS_HOST}/${INDEX}/_settings" 2>/dev/null \
+  | jq --arg idx "$INDEX" \
+       '.[$idx].settings.index | {default_pipeline, knn}' \
+  2>/dev/null || echo "    (index not found)"
+
+echo ""
+echo "  [B] 10 random docs — ACL field presence:"
+os_api -X POST "https://${OS_HOST}/${INDEX}/_search" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "size": 10,
+    "_source": ["access_groups", "access_roles", "access_users"],
+    "query": { "function_score": { "query": { "match_all": {} }, "random_score": {} } }
+  }' 2>/dev/null \
+  | jq -r '
+    "    total docs in index: \(.hits.total.value)",
+    "    ---",
+    (.hits.hits[] |
+      "    _id=\(._id)  access_groups=\(._source.access_groups // "MISSING ❌")  access_roles=\(._source.access_roles // [])  access_users=\(._source.access_users // [])")
+  ' 2>/dev/null || echo "    (index empty or not found)"
+
+echo ""
+echo "  [C] Doc count — admin vs benchmark-acl-user:"
+ADMIN_COUNT=$(os_api "https://${OS_HOST}/${INDEX}/_count" \
+  2>/dev/null | jq -r '.count // "N/A"' 2>/dev/null || echo "N/A")
+ACL_COUNT=$(kubectl exec -n "$WORKER_NS" "$WORKER_POD" -c worker -- \
+  curl -sk -u "benchmark-acl-user:BenchmarkACL-2024!" \
+  "https://${OS_HOST}/${INDEX}/_count" \
+  2>/dev/null | jq -r '.count // "N/A"' 2>/dev/null || echo "N/A")
+echo "    admin count:              ${ADMIN_COUNT}"
+echo "    benchmark-acl-user count: ${ACL_COUNT}"
+if [ "$ADMIN_COUNT" != "N/A" ] && [ "$ACL_COUNT" != "N/A" ] && \
+   [ "$ADMIN_COUNT" != "0" ]; then
+  if [ "$ADMIN_COUNT" -gt "$ACL_COUNT" ] 2>/dev/null; then
+    echo "    ✅ DLS IS restrictive — ACL user sees fewer docs than admin"
+    echo "    Expected ~667k / 1M (buckets 0+2 visible to grp-finance-readers)"
+  elif [ "$ADMIN_COUNT" -eq "$ACL_COUNT" ] 2>/dev/null; then
+    echo "    ❌ DLS NOT restrictive — same count for both users"
+  fi
+else
+  echo "    ❌ Could not compare counts (index may be empty)"
+fi
+
+echo ""
+echo "============================================================"
+echo "✅ Post-ingest ACL verification complete for ${NS}"
 echo "============================================================"
 
 # Made with Bob
