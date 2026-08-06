@@ -197,7 +197,9 @@ class BenchmarkRunner:
             )
 
         # Procedure config: scenario-level params + engine-specific overrides
-        runtime_sweeps   = workload_params.pop('parameter_sweeps', None) if workload_params else None
+        # Use wp (the credential-stripped copy) for all remaining param work so
+        # the original workload_params dict is never mutated by this method.
+        runtime_sweeps   = wp.pop('parameter_sweeps', None)
         procedure_config = next(
             (p for p in self.config.get_test_procedures(dataset)
              if isinstance(p, dict) and p.get('name') == scenario),
@@ -224,8 +226,8 @@ class BenchmarkRunner:
         else:
             raw_sweeps = [{}]
 
-        if workload_params:
-            logger.info(f"Runtime params: {list(workload_params.keys())}")
+        if wp:
+            logger.info(f"Runtime params: {list(wp.keys())}")
 
         # Build one RunContext per sweep — all params resolved, results dir created
         sweeps = []
