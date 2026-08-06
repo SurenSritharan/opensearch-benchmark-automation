@@ -711,11 +711,19 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             step_password = scenario.get('step_password', '')
             if step_username:
                 workload_params['step_username'] = step_username
-                logger.info(f"Batch job {job_id}, test {label}: using step_username={step_username!r}")
+                logger.info(
+                    f"[ACL] process_batch_job: job={job_id} step='{label}' "
+                    f"step_username={step_username!r} injected into workload_params"
+                )
+            else:
+                logger.info(
+                    f"[ACL] process_batch_job: job={job_id} step='{label}' "
+                    f"no step_username found on scenario dict — falling back to admin"
+                )
             if step_password:
                 workload_params['step_password'] = step_password
 
-            logger.info(f"Batch job {job_id}, test {label}: merged params = {workload_params}")
+            logger.info(f"Batch job {job_id}, test {label}: merged params keys = {list(workload_params.keys())}")
             
             # Per-step profile flag overrides the job-level enable_profiling.
             # A step with "profile": true is profiled even when the job flag is off,
@@ -1080,11 +1088,23 @@ def trigger_batch_benchmark():
                 scenario_params.update(test_params)
                 logger.info(f"Applying custom params for {dataset}/{scenario_label}: {test_params}")
 
-            # Per-step credentials: hoisted to dedicated fields by run-pipeline.sh so
-            # they are never buried inside params and survive the workload_params merge.
+            # Per-step credentials: hoisted to dedicated top-level fields by run-pipeline.sh
+            # (keys: step_username / step_password — NOT username/password).
+            # Must be stored on the scenario dict under the same names so that
+            # process_batch_job can read them with scenario.get('step_username').
             # Fall back to empty string — benchmark_runner defaults to admin/admin.
-            step_username = test.get('username', '')
-            step_password = test.get('password', '')
+            step_username = test.get('step_username', '')
+            step_password = test.get('step_password', '')
+            if step_username:
+                logger.info(
+                    f"[ACL] trigger_batch_benchmark: test '{scenario_label}' "
+                    f"has step_username={step_username!r} — will use per-step credentials"
+                )
+            else:
+                logger.info(
+                    f"[ACL] trigger_batch_benchmark: test '{scenario_label}' "
+                    f"has no step_username — will fall back to job-level or admin credentials"
+                )
 
             scenarios.append({
                 'dataset': dataset,
@@ -1092,8 +1112,8 @@ def trigger_batch_benchmark():
                 'procedure_name': procedure_name,
                 'params': scenario_params,
                 'profile': test.get('profile'),  # per-step profiling
-                'username': step_username,
-                'password': step_password,
+                'step_username': step_username,   # stored as step_username (not username)
+                'step_password': step_password,   # stored as step_password (not password)
             })
             
             logger.info(f"Test: dataset='{dataset}', scenario='{scenario_label}' -> procedure '{procedure_name}'")
