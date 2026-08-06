@@ -555,6 +555,21 @@ pipeline {
 
                                             exit \$PIPE_RC
                                         """
+
+                                        // ── b2) Post-ingest ACL verification ───────────────
+                                        // Only for ACL pipelines. Runs after the full job
+                                        // completes (all 7 steps done) to confirm:
+                                        //   [A] index default_pipeline = acl_guard
+                                        //   [B] 10 random docs have ACL fields populated
+                                        //   [C] DLS is restrictive (ACL user < admin count)
+                                        script {
+                                            if (pipeline.contains('-acl')) {
+                                                sh """
+                                                    echo "=== [${engine}] Post-ingest ACL verification ==="
+                                                    gke-manifest/acl-setup.sh ${ns} verify
+                                                """
+                                            }
+                                        }
                                     } finally {
                                         // ── c) Fetch & save results ────────────────────────
                                         // Scenario subdirs are already copied incrementally by

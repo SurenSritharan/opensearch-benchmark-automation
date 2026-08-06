@@ -67,8 +67,8 @@ spec:
             echo "Setting up directories..."
             mkdir -p /app/web
 
-            echo "Cloning benchmark automation project..."
-            git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
+            echo "Cloning benchmark automation project (branch: acl-benchmarking)..."
+            git clone --depth 1 --branch acl-benchmarking https://github.com/kush992/opensearch-benchmark-automation.git /workspace-tmp
             cp /workspace-tmp/cloud-service/*.py /app/
             cp -r /workspace-tmp/cloud-service/web /app/
             cp /workspace-tmp/cloud-service/requirements.txt /app/ 2>/dev/null || true
