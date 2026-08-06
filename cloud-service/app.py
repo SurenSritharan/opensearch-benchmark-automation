@@ -704,15 +704,17 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             workload_params = {**global_params, **scenario_params}
 
             # Inject per-step credentials into workload_params so benchmark_runner
-            # can pop them in _get_run_contexts().  Only inject when non-empty so
-            # the runner's admin/admin default is used for steps with no credentials.
-            step_username = scenario.get('username', '')
-            step_password = scenario.get('password', '')
+            # can pop them in _get_run_contexts().
+            # step_username/step_password come from the step's own params block and
+            # override the global job-level username/password for this step only.
+            # When absent the runner falls back to the job-level creds (or admin/admin).
+            step_username = scenario.get('step_username', '')
+            step_password = scenario.get('step_password', '')
             if step_username:
-                workload_params['username'] = step_username
-                logger.info(f"Batch job {job_id}, test {label}: using per-step username={step_username!r}")
+                workload_params['step_username'] = step_username
+                logger.info(f"Batch job {job_id}, test {label}: using step_username={step_username!r}")
             if step_password:
-                workload_params['password'] = step_password
+                workload_params['step_password'] = step_password
 
             logger.info(f"Batch job {job_id}, test {label}: merged params = {workload_params}")
             

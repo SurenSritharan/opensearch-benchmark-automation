@@ -4,11 +4,11 @@
   "params": { "corpus_size": "1m" },
   "log_level": "info",
   "steps": [
-    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 100, "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 64,  "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 10,  "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 100, "hnsw_ef_search": 256, "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 64,  "hnsw_ef_search": 256, "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 10,  "hnsw_ef_search": 256, "username": "benchmark-acl-user", "password": "BenchmarkACL-2024!" } }
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 100, "step_username": "benchmark-acl-user", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 64,  "step_username": "benchmark-acl-user", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search", "params": { "query_k": 10,  "step_username": "benchmark-acl-user", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 100, "hnsw_ef_search": 256, "step_username": "benchmark-acl-user", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 64,  "hnsw_ef_search": 256, "step_username": "benchmark-acl-user", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "benchmark-acl-user", "step_password": "BenchmarkACL-2024!" } }
   ]
 }
