@@ -14,6 +14,25 @@ pipeline {
         choice(
             name: 'PIPELINE',
             choices: [
+                // ── DLS benchmark sweep (run all variants in one job) ──────
+                'dls-sweep-1m',
+                'dls-sweep-5m',
+                // ── DLS individual variant pipelines ──────────────────────
+                'dls-e1-baseline',
+                'dls-e2-tenant-only',
+                'dls-e3-static-groups',
+                'dls-m1-tenant-group',
+                'dls-m2-full-identity',
+                'dls-m3-identity-classification',
+                'dls-c1-dual-validation',
+                'dls-c3-large-users-list',
+                'dls-c5-multi-tenant',
+                'dls-c8-no-classification',
+                // ── ACL complete / search pipelines ───────────────────────
+                'complete-1m-acl-wiki-only',
+                'complete-1m-acl',
+                'search-1m-acl',
+                // ── Standard non-ACL pipelines ────────────────────────────
                 'search-compare',
                 'search-all',
                 'search-all-overquery',
@@ -23,9 +42,6 @@ pipeline {
                 'complete-1m',
                 'complete-5m',
                 'complete',
-                'complete-1m-acl',
-                'complete-1m-acl-wiki-only',
-                'search-1m-acl',
                 'complete-1m-profile-ingest',
                 'complete-5m-profile-ingest',
                 'msmarco-jvector-hq-build',
@@ -126,10 +142,6 @@ pipeline {
                 }
                 sh '''
                     chmod +x gke-manifest/*.sh cloud-service/scripts/*.sh
-                '''
-                sh '''
-                    # Make the ACL setup script executable (no-op if already set by the line above)
-                    chmod +x gke-manifest/acl-setup.sh
                 '''
                 // Sync TLS certs to all namespaces so workers and clusters share the same CA.
                 sh './gke-manifest/sync-certs.sh'
@@ -509,7 +521,7 @@ pipeline {
                                         // on the worker pod — if the pod is still starting its git pull
                                         // the TCP connection to the OpenSearch service is refused (exit 7).
                                         script {
-                                            if (pipeline.contains('-acl')) {
+                                            if (pipeline.contains('-acl') || pipeline.startsWith('dls-')) {
                                                 sh """
                                                     echo "=== [${engine}] Waiting for worker pod to be Ready before ACL setup ==="
                                                     kubectl wait --for=condition=ready pod \
@@ -563,7 +575,7 @@ pipeline {
                                         //   [B] 10 random docs have ACL fields populated
                                         //   [C] DLS is restrictive (ACL user < admin count)
                                         script {
-                                            if (pipeline.contains('-acl')) {
+                                            if (pipeline.contains('-acl') || pipeline.startsWith('dls-')) {
                                                 sh """
                                                     echo "=== [${engine}] Post-ingest ACL verification ==="
                                                     gke-manifest/acl-setup.sh ${ns} verify
