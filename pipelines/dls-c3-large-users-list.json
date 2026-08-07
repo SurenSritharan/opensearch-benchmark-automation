@@ -1,0 +1,18 @@
+{
+  "description": "DLS C3 — Large static terms list: 50-entry access_users. user-c3 is mapped ONLY to test_large_users_list (user-c3 appears in the 50-entry list at position 26). Measures the cost of scanning a large static terms filter at query time.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-c3-large-users-list-k10",
+      "params": {
+        "query_k": 10,
+        "step_username": "user-c3",
+        "step_password": "BenchmarkACL-2024!"
+      }
+    }
+  ]
+}

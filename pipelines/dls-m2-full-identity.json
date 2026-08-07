@@ -1,0 +1,18 @@
+{
+  "description": "DLS M2 — Full identity filter: groups + roles + user (dynamic ${user.roles}/${user.name}). user-m2 is mapped ONLY to test_full_identity (backend_role: grp-finance-readers). Dynamic substitution means the filter is user-specific — tests the per-user cache miss rate and dynamic expansion cost.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-m2-full-identity-k10",
+      "params": {
+        "query_k": 10,
+        "step_username": "user-m2",
+        "step_password": "BenchmarkACL-2024!"
+      }
+    }
+  ]
+}
