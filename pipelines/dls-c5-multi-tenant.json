@@ -1,0 +1,18 @@
+{
+  "description": "DLS C5 — Multi-tenant: two tenant IDs in a should clause. user-c5 is mapped ONLY to test_multi_tenant (backend_role: grp-finance-readers). Most complex filter overall — 2-tenant should + identity + classification. Tests maximum DLS filter depth.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-c5-multi-tenant-k10",
+      "params": {
+        "query_k": 10,
+        "step_username": "user-c5",
+        "step_password": "BenchmarkACL-2024!"
+      }
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "description": "DLS M1 — Tenant + single group. user-m1 is mapped ONLY to test_tenant_group. Two static cacheable clauses combined with bool.filter. Measures two-predicate DLS overhead.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-m1-tenant-group-k10",
+      "params": {
+        "query_k": 10,
+        "step_username": "user-m1",
+        "step_password": "BenchmarkACL-2024!"
+      }
+    }
+  ]
+}
