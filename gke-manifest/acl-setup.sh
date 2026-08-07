@@ -56,11 +56,17 @@ os_security() {
 }
 
 echo "============================================================"
-echo "ACL Setup — namespace: ${NS}  (engine: ${ENGINE})"
+echo "ACL Setup — namespace: ${NS}  (engine: ${ENGINE})  mode: ${MODE}"
 echo "Worker pod: ${WORKER_NS}/${WORKER_POD}"
 echo "OpenSearch host: ${OS_HOST}"
 echo "============================================================"
 echo ""
+
+# In verify mode skip all setup steps — go straight to post-ingest checks.
+if [ "$MODE" = "verify" ]; then
+    echo "(verify mode — skipping setup steps 1–4)"
+    echo ""
+else
 
 # ── 0. Wait for OpenSearch to be reachable via the Service ───────────────────
 # The worker pod can be Ready while OpenSearch's Service endpoint is still
@@ -157,11 +163,11 @@ echo "[3/4] Creating DLS role test_full_identity..."
 os_security -X PUT "https://${OS_HOST}/_plugins/_security/api/roles/test_full_identity" \
   -H "Content-Type: application/json" \
   -d '{
-    "cluster_permissions": ["cluster_composite_ops_ro", "cluster:monitor/health"],
+    "cluster_permissions": ["cluster_composite_ops_ro", "cluster:monitor/health", "cluster:monitor/main", "cluster:monitor/state"],
     "index_permissions": [
       {
         "index_patterns": ["cohere-wiki-en-768-*", "cohere-msmarco-1024-*"],
-        "dls": "{\"bool\": {\"should\": [{\"terms\": {\"access_groups\": ${user.roles}}}, {\"terms\": {\"access_roles\": ${user.roles}}}, {\"term\": {\"access_users\": \"${user.name}\"}}], \"minimum_should_match\": 1}}",
+        "dls": "{\"bool\": {\"should\": [{\"terms\": {\"access_groups\": ${toJson(user.roles)}}}, {\"terms\": {\"access_roles\": ${toJson(user.roles)}}}, {\"term\": {\"access_users\": \"${toJson(user.name)}\"}}], \"minimum_should_match\": 1}}",
         "allowed_actions": ["read", "search"]
       }
     ]
@@ -193,10 +199,9 @@ os_security -X PUT "https://${OS_HOST}/_plugins/_security/api/internalusers/benc
 echo "  ✅ User benchmark-acl-user created"
 echo ""
 
-# ── Verification ──────────────────────────────────────────────────────────────
-# Dumps raw JSON responses — no filter_path, no deep jq traversal that can hit
-# null and abort the script.  set -e is still active so we use || true on every
-# call so a non-200 or empty response never kills the script here.
+# ── Config verification (setup mode only) ─────────────────────────────────────
+# Confirms the four resources were created correctly.  Does NOT check doc counts
+# — the index does not exist yet at this point in the pipeline.
 echo "============================================================"
 echo "Verifying setup..."
 echo "============================================================"
@@ -227,47 +232,22 @@ os_security "https://${OS_HOST}/_plugins/_security/api/internalusers/benchmark-a
   | jq '.' 2>/dev/null || echo "    (user not found)"
 
 echo ""
-echo "  [6] Live index default_pipeline (cohere-wiki-en-768-1m — if exists):"
-os_api "https://${OS_HOST}/cohere-wiki-en-768-1m/_settings" 2>/dev/null \
-  | jq '.' 2>/dev/null || echo "    (index not yet created)"
-
-echo ""
-echo "  [7] DLS verification — doc count admin vs benchmark-acl-user:"
-ADMIN_COUNT=$(os_api "https://${OS_HOST}/cohere-wiki-en-768-1m/_count" \
-  2>/dev/null | jq -r '.count // "N/A"' 2>/dev/null || echo "N/A")
-ACL_COUNT=$(kubectl exec -n "$WORKER_NS" "$WORKER_POD" -c worker -- \
-  curl -sk -u "benchmark-acl-user:BenchmarkACL-2024!" \
-  "https://${OS_HOST}/cohere-wiki-en-768-1m/_count" \
-  2>/dev/null | jq -r '.count // "N/A"' 2>/dev/null || echo "N/A")
-echo "    admin count:              ${ADMIN_COUNT}"
-echo "    benchmark-acl-user count: ${ACL_COUNT}"
-if [ "$ADMIN_COUNT" != "N/A" ] && [ "$ACL_COUNT" != "N/A" ] && \
-   [ "$ADMIN_COUNT" != "0" ]; then
-  if [ "$ADMIN_COUNT" -gt "$ACL_COUNT" ] 2>/dev/null; then
-    echo "    ✅ DLS IS restrictive — ACL user sees fewer docs than admin"
-  elif [ "$ADMIN_COUNT" -eq "$ACL_COUNT" ] 2>/dev/null; then
-    echo "    ❌ DLS NOT restrictive — same count for both users"
-  fi
-else
-  echo "    (index not yet created — verify DLS after ingest)"
-fi
-
-echo ""
 echo "============================================================"
 echo "✅ ACL setup complete for ${NS}"
 echo "   Next: run the benchmark with pipeline complete-1m-acl"
 echo "============================================================"
 
-# Early exit for setup mode — verify mode continues below.
-if [ "$MODE" != "verify" ]; then
-    exit 0
-fi
+fi  # end of setup-only block
 
 # ── Post-ingest verification (acl-setup.sh <ns> verify) ─────────────────────
 # Run this after bulk-ingest-data completes to confirm:
 #   1. The index was created with default_pipeline: acl_guard
 #   2. ACL fields are populated in the actual indexed documents
 #   3. DLS is restrictive — ACL user sees fewer docs than admin
+if [ "$MODE" != "verify" ]; then
+    exit 0
+fi
+
 INDEX="cohere-wiki-en-768-1m"
 
 echo ""
