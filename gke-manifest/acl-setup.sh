@@ -167,7 +167,7 @@ os_security -X PUT "https://${OS_HOST}/_plugins/_security/api/roles/test_full_id
     "index_permissions": [
       {
         "index_patterns": ["cohere-wiki-en-768-*", "cohere-msmarco-1024-*"],
-        "dls": "{\"bool\": {\"should\": [{\"terms\": {\"access_groups\": ${toJson(user.roles)}}}, {\"terms\": {\"access_roles\": ${toJson(user.roles)}}}, {\"term\": {\"access_users\": \"${toJson(user.name)}\"}}], \"minimum_should_match\": 1}}",
+        "dls": "{\"bool\": {\"should\": [{\"terms\": {\"access_groups\": [${user.roles}]}}, {\"terms\": {\"access_roles\": [${user.roles}]}}, {\"term\": {\"access_users\": \"${user.name}\"}}], \"minimum_should_match\": 1}}",
         "allowed_actions": ["read", "search"]
       }
     ]
