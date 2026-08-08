@@ -60,7 +60,7 @@ put_role test_baseline "{
   \"cluster_permissions\": ${CLUSTER_PERMS},
   \"index_permissions\": [{
     \"index_patterns\": ${INDEX_PATTERNS},
-    \"allowed_actions\": [\"read\",\"search\"]
+    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
   }]
 }"
 put_mapping test_baseline '{"backend_roles":[],"users":["user-e1"]}'
@@ -72,7 +72,7 @@ put_role test_tenant_only "{
   \"index_permissions\": [{
     \"index_patterns\": ${INDEX_PATTERNS},
     \"dls\": \"{\\\"term\\\": {\\\"tenant_id\\\": \\\"tenant_001\\\"}}\",
-    \"allowed_actions\": [\"read\",\"search\"]
+    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
   }]
 }"
 put_mapping test_tenant_only '{"backend_roles":[],"users":["user-e2"]}'
@@ -84,7 +84,7 @@ put_role test_static_groups "{
   \"index_permissions\": [{
     \"index_patterns\": ${INDEX_PATTERNS},
     \"dls\": \"{\\\"terms\\\": {\\\"access_groups\\\": [\\\"grp-finance\\\",\\\"grp-controllers\\\"]}}\",
-    \"allowed_actions\": [\"read\",\"search\"]
+    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
   }]
 }"
 put_mapping test_static_groups '{"backend_roles":[],"users":["user-e3"]}'
@@ -96,7 +96,7 @@ put_role test_tenant_group "{
   \"index_permissions\": [{
     \"index_patterns\": ${INDEX_PATTERNS},
     \"dls\": \"{\\\"bool\\\": {\\\"filter\\\": [{\\\"term\\\": {\\\"tenant_id\\\": \\\"tenant_001\\\"}},{\\\"terms\\\": {\\\"access_groups\\\": [\\\"grp-finance\\\"]}}]}}\",
-    \"allowed_actions\": [\"read\",\"search\"]
+    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
   }]
 }"
 put_mapping test_tenant_group '{"backend_roles":[],"users":["user-m1"]}'
@@ -109,7 +109,7 @@ put_role test_full_identity '{
   "index_permissions": [{
     "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
     "dls": "{\"bool\": {\"filter\": [{\"term\": {\"tenant_id\": \"tenant_001\"}}, {\"bool\": {\"should\": [{\"terms\": {\"access_groups\": ${user.roles}}}, {\"terms\": {\"access_roles\": ${user.roles}}}, {\"term\": {\"access_users\": \"${user.name}\"}}], \"minimum_should_match\": 1}}]}}",
-    "allowed_actions": ["read","search"]
+    "allowed_actions": ["read","search","indices:monitor/stats"]
   }]
 }'
 put_mapping test_full_identity '{"backend_roles":["grp-finance"],"users":["user-m2"]}'
@@ -121,7 +121,7 @@ put_role test_identity_classification '{
   "index_permissions": [{
     "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
     "dls": "{\"bool\": {\"filter\": [{\"term\": {\"tenant_id\": \"tenant_001\"}}, {\"bool\": {\"should\": [{\"terms\": {\"access_groups\": ${user.roles}}}, {\"terms\": {\"access_roles\": ${user.roles}}}, {\"term\": {\"access_users\": \"${user.name}\"}}], \"minimum_should_match\": 1}}, {\"bool\": {\"should\": [{\"term\": {\"security_classification\": \"internal\"}}, {\"bool\": {\"must_not\": {\"exists\": {\"field\": \"security_classification\"}}}}], \"minimum_should_match\": 1}}]}}",
-    "allowed_actions": ["read","search"]
+    "allowed_actions": ["read","search","indices:monitor/stats"]
   }]
 }'
 put_mapping test_identity_classification '{"backend_roles":["grp-finance"],"users":["user-m3"]}'
@@ -133,7 +133,7 @@ put_role test_dual_validation '{
   "index_permissions": [{
     "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
     "dls": "{\"bool\": {\"filter\": [{\"term\": {\"tenant_id\": \"tenant_001\"}}, {\"term\": {\"access_users\": \"${user.name}\"}}, {\"terms\": {\"access_groups\": ${user.roles}}}]}}",
-    "allowed_actions": ["read","search"]
+    "allowed_actions": ["read","search","indices:monitor/stats"]
   }]
 }'
 put_mapping test_dual_validation '{"backend_roles":["grp-finance"],"users":["user-c1"]}'
@@ -145,7 +145,7 @@ put_role test_large_users_list "{
   \"index_permissions\": [{
     \"index_patterns\": ${INDEX_PATTERNS},
     \"dls\": \"{\\\"bool\\\": {\\\"filter\\\": [{\\\"term\\\": {\\\"tenant_id\\\": \\\"tenant_001\\\"}},{\\\"terms\\\": {\\\"access_users\\\": [\\\"user001@example.com\\\",\\\"user002@example.com\\\",\\\"user003@example.com\\\",\\\"user004@example.com\\\",\\\"user005@example.com\\\",\\\"user006@example.com\\\",\\\"user007@example.com\\\",\\\"user008@example.com\\\",\\\"user009@example.com\\\",\\\"user010@example.com\\\",\\\"user011@example.com\\\",\\\"user012@example.com\\\",\\\"user013@example.com\\\",\\\"user014@example.com\\\",\\\"user015@example.com\\\",\\\"user016@example.com\\\",\\\"user017@example.com\\\",\\\"user018@example.com\\\",\\\"user019@example.com\\\",\\\"user020@example.com\\\",\\\"user021@example.com\\\",\\\"user022@example.com\\\",\\\"user023@example.com\\\",\\\"user024@example.com\\\",\\\"user025@example.com\\\",\\\"user-c3\\\",\\\"user027@example.com\\\",\\\"user028@example.com\\\",\\\"user029@example.com\\\",\\\"user030@example.com\\\",\\\"user031@example.com\\\",\\\"user032@example.com\\\",\\\"user033@example.com\\\",\\\"user034@example.com\\\",\\\"user035@example.com\\\",\\\"user036@example.com\\\",\\\"user037@example.com\\\",\\\"user038@example.com\\\",\\\"user039@example.com\\\",\\\"user040@example.com\\\",\\\"user041@example.com\\\",\\\"user042@example.com\\\",\\\"user043@example.com\\\",\\\"user044@example.com\\\",\\\"user045@example.com\\\",\\\"user046@example.com\\\",\\\"user047@example.com\\\",\\\"user048@example.com\\\",\\\"user049@example.com\\\",\\\"user050@example.com\\\"]}}]}}\",
-    \"allowed_actions\": [\"read\",\"search\"]
+    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
   }]
 }"
 put_mapping test_large_users_list '{"backend_roles":[],"users":["user-c3"]}'
@@ -157,7 +157,7 @@ put_role test_multi_tenant '{
   "index_permissions": [{
     "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
     "dls": "{\"bool\": {\"filter\": [{\"bool\": {\"should\": [{\"term\": {\"tenant_id\": \"tenant_001\"}}, {\"term\": {\"tenant_id\": \"tenant_002\"}}], \"minimum_should_match\": 1}}, {\"bool\": {\"should\": [{\"terms\": {\"access_groups\": ${user.roles}}}, {\"terms\": {\"access_roles\": ${user.roles}}}, {\"term\": {\"access_users\": \"${user.name}\"}}], \"minimum_should_match\": 1}}, {\"bool\": {\"should\": [{\"term\": {\"security_classification\": \"internal\"}}, {\"bool\": {\"must_not\": {\"exists\": {\"field\": \"security_classification\"}}}}], \"minimum_should_match\": 1}}]}}",
-    "allowed_actions": ["read","search"]
+    "allowed_actions": ["read","search","indices:monitor/stats"]
   }]
 }'
 put_mapping test_multi_tenant '{"backend_roles":["grp-finance"],"users":["user-c5"]}'
@@ -169,7 +169,7 @@ put_role test_no_classification '{
   "index_permissions": [{
     "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
     "dls": "{\"bool\": {\"filter\": [{\"term\": {\"tenant_id\": \"tenant_001\"}}, {\"term\": {\"access_users\": \"${user.name}\"}}, {\"bool\": {\"must_not\": {\"exists\": {\"field\": \"security_classification\"}}}}]}}",
-    "allowed_actions": ["read","search"]
+    "allowed_actions": ["read","search","indices:monitor/stats"]
   }]
 }'
 put_mapping test_no_classification '{"backend_roles":[],"users":["dave-contractor"]}'
