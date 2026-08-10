@@ -4,15 +4,8 @@
   "params": { "corpus_size": "1m" },
   "log_level": "info",
   "steps": [
-    {
-      "dataset": "cohere-wiki-en-768",
-      "scenario": "vector-search",
-      "label": "dls-e1-baseline-k10",
-      "params": {
-        "query_k": 10,
-        "step_username": "user-e1",
-        "step_password": "BenchmarkACL-2024!"
-      }
-    }
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e1-baseline-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-e1", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e1-baseline-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-e1", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e1-baseline-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-e1", "step_password": "BenchmarkACL-2024!" } }
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "description": "DLS full sweep — 5M wiki-en-768. Identical structure to dls-sweep-1m but at 5× corpus scale to measure how DLS overhead scales with index size. Each step uses its own isolated user so only that role's DLS filter is active. Requires cohere-5m.hdf5 pre-seeded on worker PVC. Self-contained: builds index from scratch.",
+  "description": "DLS full sweep — 5M wiki-en-768. Identical structure to dls-sweep-1m but at 5× corpus scale to measure how DLS overhead scales with index size. 10 DLS role variants × 3 k/ef combos = 30 search steps. Each step uses its own isolated user so only that role's DLS filter is active. Requires cohere-5m.hdf5 pre-seeded on worker PVC. Self-contained: builds index from scratch.",
   "engine": "__ENGINE__",
   "params": { "corpus_size": "5m" },
   "log_level": "info",

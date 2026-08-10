@@ -1,5 +1,5 @@
 {
-  "description": "DLS full sweep — 1M wiki-en-768. Builds the index from scratch (delete → create → ingest → force-merge → refresh), then runs all 9 DLS role variants × 3 k/ef combos = 27 search steps. Each step uses its own isolated user so only that role's DLS filter is active. Self-contained: no prior index needed.",
+  "description": "DLS full sweep — 1M wiki-en-768. Builds the index from scratch (delete → create → ingest → force-merge → refresh), then runs all 10 DLS role variants × 3 k/ef combos = 30 search steps. Each step uses its own isolated user so only that role's DLS filter is active. Self-contained: no prior index needed.",
   "engine": "__ENGINE__",
   "params": { "corpus_size": "1m" },
   "log_level": "info",
