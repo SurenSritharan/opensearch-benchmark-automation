@@ -1,18 +1,11 @@
 {
-  "description": "DLS E3 — Small static terms on access_groups (2 values). user-e3 is mapped ONLY to test_static_groups. Measures cost of a static terms filter on a populated keyword field.",
+  "description": "DLS E3 — Small static terms on access_groups (2 values). user-e3 is mapped ONLY to test_static_groups. Measures cost of a static terms filter on a populated keyword field. Index must exist from a prior build run.",
   "engine": "__ENGINE__",
   "params": { "corpus_size": "1m" },
   "log_level": "info",
   "steps": [
-    {
-      "dataset": "cohere-wiki-en-768",
-      "scenario": "vector-search",
-      "label": "dls-e3-static-groups-k10",
-      "params": {
-        "query_k": 10,
-        "step_username": "user-e3",
-        "step_password": "BenchmarkACL-2024!"
-      }
-    }
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e3-static-groups-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-e3", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e3-static-groups-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-e3", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e3-static-groups-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-e3", "step_password": "BenchmarkACL-2024!" } }
   ]
 }

@@ -1,18 +1,11 @@
 {
-  "description": "DLS C8 — No classification in token: must_not exists only. dave-contractor is mapped ONLY to test_no_classification (named user, no backend_roles). Simulates a contractor who can see only docs with no security_classification field. Tests must_not exists DLS overhead.",
+  "description": "DLS C8 — No classification in token: must_not exists only. dave-contractor is mapped ONLY to test_no_classification (named user, no backend_roles). Simulates a contractor who can see only docs with no security_classification field. Tests must_not exists DLS overhead. Index must exist from a prior build run.",
   "engine": "__ENGINE__",
   "params": { "corpus_size": "1m" },
   "log_level": "info",
   "steps": [
-    {
-      "dataset": "cohere-wiki-en-768",
-      "scenario": "vector-search",
-      "label": "dls-c8-no-classification-k10",
-      "params": {
-        "query_k": 10,
-        "step_username": "dave-contractor",
-        "step_password": "BenchmarkACL-2024!"
-      }
-    }
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c8-no-cls-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "dave-contractor", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c8-no-cls-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "dave-contractor", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c8-no-cls-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "dave-contractor", "step_password": "BenchmarkACL-2024!" } }
   ]
 }

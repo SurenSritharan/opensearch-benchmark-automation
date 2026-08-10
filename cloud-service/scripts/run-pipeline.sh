@@ -147,6 +147,8 @@ while IFS= read -r raw_step; do
   dataset=$(echo  "$raw_step" | jq -r '.dataset')
   procedure=$(echo "$raw_step" | jq -r '.scenario')
   step_params=$(echo "$raw_step" | jq '.params // {}')
+  # Per-step label — explicit label on the step overrides auto-generation
+  step_label=$(echo "$raw_step" | jq -r '.label // ""')
   # Per-step profile flag — null means "inherit job-level enable_profiling"
   step_profile=$(echo "$raw_step" | jq '.profile // null')
 
@@ -173,12 +175,20 @@ while IFS= read -r raw_step; do
     fi
   fi
 
-  # Build label from dataset (strip "cohere-"), corpus_size, and procedure
+  # Build label: dataset (strip "cohere-") + corpus_size + procedure [+ step_label | + kN].
+  # step_label takes priority — query_k is only appended when no explicit label is set,
+  # avoiding duplication when the label already encodes k and ef (e.g. dls-e1-baseline-k10-ef128).
   dataset_short="${dataset#cohere-}"
-  label="${dataset_short}-${corpus_size}-${procedure}"
-  # Append query_k to search labels so k=10 and k=100 are distinct
   query_k=$(echo "$merged_params" | jq -r '.query_k // ""')
-  [ -n "$query_k" ] && label="${label}-k${query_k}"
+  label="${dataset_short}-${corpus_size}-${procedure}"
+  # If step_label is provided, then query_k is already part of the step_label.
+  # Hence, we can eliminate it from the label. If step_label is not present,
+  # then, we include the query_k.
+  if [ -n "$step_label" ]; then
+    label="${label}-${step_label}"
+  else
+    [ -n "$query_k" ] && label="${label}-k${query_k}"
+  fi
 
   # Deduplicate: if this label has appeared before, append an occurrence counter.
   # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.

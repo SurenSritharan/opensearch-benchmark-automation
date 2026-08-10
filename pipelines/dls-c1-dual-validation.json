@@ -1,18 +1,11 @@
 {
-  "description": "DLS C1 — Dual-validation: access_users AND access_groups must BOTH match (filter context). user-c1 is mapped ONLY to test_dual_validation (backend_role: grp-finance-readers). Tests AND-combination DLS overhead — every doc must satisfy both user.name and user.roles predicates simultaneously.",
+  "description": "DLS C1 — Dual-validation: access_users AND access_groups must BOTH match (filter context). user-c1 is mapped ONLY to test_dual_validation (backend_role: grp-finance). Tests AND-combination DLS overhead — every doc must satisfy both user.name and user.roles predicates simultaneously. Index must exist from a prior build run.",
   "engine": "__ENGINE__",
   "params": { "corpus_size": "1m" },
   "log_level": "info",
   "steps": [
-    {
-      "dataset": "cohere-wiki-en-768",
-      "scenario": "vector-search",
-      "label": "dls-c1-dual-validation-k10",
-      "params": {
-        "query_k": 10,
-        "step_username": "user-c1",
-        "step_password": "BenchmarkACL-2024!"
-      }
-    }
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c1-dual-valid-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-c1", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c1-dual-valid-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-c1", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c1-dual-valid-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-c1", "step_password": "BenchmarkACL-2024!" } }
   ]
 }
