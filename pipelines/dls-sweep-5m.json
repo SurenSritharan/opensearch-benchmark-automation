@@ -4,53 +4,169 @@
   "params": { "corpus_size": "5m" },
   "log_level": "info",
   "steps": [
-
     { "dataset": "cohere-wiki-en-768", "scenario": "delete-index" },
     { "dataset": "cohere-wiki-en-768", "scenario": "create-index" },
-    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-data", "params": { "num_vectors": 5000000 } },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "bulk-ingest-data",
+      "params": { "num_vectors": 5000000 }
+    },
     { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index" },
-    { "dataset": "cohere-wiki-en-768", "scenario": "force-merge", "params": { "target_index_max_num_segments": 5 } },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "force-merge",
+      "params": { "target_index_max_num_segments": 5 }
+    },
     { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index" },
 
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e1-baseline-k10-ef128",   "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-e1", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e1-baseline-k10-ef256",   "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-e1", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e1-baseline-k100-ef128",  "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-e1", "step_password": "BenchmarkACL-2024!" } },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-e1-baseline",
+      "params": {
+        "step_username": "user-e1",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
 
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e2-tenant-only-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-e2", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e2-tenant-only-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-e2", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e2-tenant-only-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-e2", "step_password": "BenchmarkACL-2024!" } },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-e2-tenant-only",
+      "params": {
+        "step_username": "user-e2",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
 
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e3-static-groups-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-e3", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e3-static-groups-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-e3", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-e3-static-groups-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-e3", "step_password": "BenchmarkACL-2024!" } },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-e3-static-groups",
+      "params": {
+        "step_username": "user-e3",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
 
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-m1-tenant-group-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-m1", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-m1-tenant-group-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-m1", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-m1-tenant-group-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-m1", "step_password": "BenchmarkACL-2024!" } },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-m1-tenant-group",
+      "params": {
+        "step_username": "user-m1",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
 
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-m2-full-identity-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-m2", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-m2-full-identity-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-m2", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-m2-full-identity-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-m2", "step_password": "BenchmarkACL-2024!" } },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-m2-full-identity",
+      "params": {
+        "step_username": "user-m2",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
 
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-m3-identity-cls-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-m3", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-m3-identity-cls-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-m3", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-m3-identity-cls-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-m3", "step_password": "BenchmarkACL-2024!" } },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-m3-identity-cls",
+      "params": {
+        "step_username": "user-m3",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
 
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c1-dual-valid-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-c1", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c1-dual-valid-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-c1", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c1-dual-valid-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-c1", "step_password": "BenchmarkACL-2024!" } },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-c1-dual-valid",
+      "params": {
+        "step_username": "user-c1",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
 
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c3-large-list-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-c3", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c3-large-list-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-c3", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c3-large-list-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-c3", "step_password": "BenchmarkACL-2024!" } },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-c3-large-list",
+      "params": {
+        "step_username": "user-c3",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
 
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c5-multi-tenant-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-c5", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c5-multi-tenant-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-c5", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c5-multi-tenant-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-c5", "step_password": "BenchmarkACL-2024!" } },
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-c5-multi-tenant",
+      "params": {
+        "step_username": "user-c5",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
 
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c8-no-cls-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "dave-contractor", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c8-no-cls-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "dave-contractor", "step_password": "BenchmarkACL-2024!" } },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-c8-no-cls-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "dave-contractor", "step_password": "BenchmarkACL-2024!" } }
-
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-c8-no-cls",
+      "params": {
+        "step_username": "dave-contractor",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    }
   ]
 }
