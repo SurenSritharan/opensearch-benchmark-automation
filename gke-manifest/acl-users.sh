@@ -29,18 +29,20 @@ create_user() {
 
 echo "[acl-users] Creating users..."
 
-# Static-filter roles — DLS does not reference ${user.roles}, no backend_roles needed
-create_user user-e1  '[]'
-create_user user-e2  '[]'
-create_user user-e3  '[]'
-create_user user-m1  '[]'
-create_user user-c3  '[]'
+# Static-filter roles — DLS does not reference ${user.roles}
+# backend_roles must still match the role mapping so the user inherits the role
+create_user user-e1  '["grp-finance-readers"]'
+create_user user-e2  '["grp-finance-readers"]'
+create_user user-e3  '["grp-finance-readers"]'
+create_user user-m1  '["grp-finance-readers"]'
+create_user user-c3  '["grp-finance-readers"]'
 
-# Dynamic-filter roles — DLS expands ${user.roles}, must match corpus access_groups
-create_user user-m2  '["grp-finance"]'
-create_user user-m3  '["grp-finance"]'
-create_user user-c1  '["grp-finance"]'
-create_user user-c5  '["grp-finance"]'
+# Dynamic-filter roles — DLS expands ${user.roles}; backend_roles must match
+# role mapping backend_roles exactly so ${user.roles} expands to the right values
+create_user user-m2  '["grp-finance-readers","grp-all-employees","role-employee"]'
+create_user user-m3  '["grp-finance-readers","grp-all-employees","role-employee"]'
+create_user user-c1  '["grp-finance-readers","grp-all-employees"]'
+create_user user-c5  '["grp-finance-readers","grp-all-employees","role-employee"]'
 
 # C8 contractor — matched by ${user.name} = "dave-contractor" in corpus access_users
 create_user dave-contractor '[]'
