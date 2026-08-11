@@ -365,6 +365,8 @@ PREV_COMPLETED="-1"
 PREV_STATUS=""
 PREV_LABEL=""
 PREV_FAILURES=""
+# Tracks scenario keys already processed so we never re-collect on subsequent deltas.
+declare -A _COLLECTED
 
 # ── Incremental result copy helper ────────────────────────────────────────────
 # Called whenever a scenario transitions to a terminal state.
@@ -402,54 +404,47 @@ _collect_scenario_server_logs() {
   local log_dir="${RESULTS_DEST}/${scenario_key}/server-logs"
   mkdir -p "$log_dir"
 
-  echo "  [server-logs] Collecting logs for scenario: ${scenario_key}"
-
   # ── Pod container logs ────────────────────────────────────────────────────
-  local pods
+  local pods pod_count=0 gc_count=0 hprof_count=0
   pods=$(kubectl get pods -n "$ns" \
     -l 'app in (opensearch-data,opensearch-cluster-manager)' \
     --no-headers \
     -o custom-columns=':metadata.name' 2>/dev/null || true)
 
-  if [ -z "$pods" ]; then
-    echo "  [server-logs] No opensearch pods found in $ns — skipping pod logs"
-  else
-    for pod in $pods; do
-      local containers
-      containers=$(kubectl get pod "$pod" -n "$ns" \
-        -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
-      for container in $containers; do
-        local logfile="${log_dir}/${pod}-${container}.log"
-        kubectl logs "$pod" -c "$container" -n "$ns" --tail=5000 \
-          > "$logfile" 2>&1 || true
-        echo "  [server-logs] ${pod}/${container}: $(wc -l < "$logfile") lines"
-      done
-
-      # GC log
-      local gc_file="${log_dir}/${pod}-gc.log"
-      kubectl exec "$pod" -c opensearch -n "$ns" -- \
-        cat /usr/share/opensearch/logs/gc.log > "$gc_file" 2>/dev/null || true
-      if [ -s "$gc_file" ]; then
-        echo "  [server-logs] ${pod} gc.log: $(wc -l < "$gc_file") lines"
-      else
-        rm -f "$gc_file"
-      fi
-
-      # Heap dumps
-      local hprof_files
-      hprof_files=$(kubectl exec "$pod" -c opensearch -n "$ns" -- \
-        sh -c 'ls /usr/share/opensearch/data/*.hprof 2>/dev/null || true' || true)
-      for hprof in $hprof_files; do
-        local hprof_name
-        hprof_name=$(basename "$hprof")
-        local local_hprof="${log_dir}/${pod}-${hprof_name}"
-        kubectl cp "${ns}/${pod}:${hprof}" "$local_hprof" \
-          -c opensearch 2>/dev/null || true
-        [ -s "$local_hprof" ] && \
-          echo "  [server-logs] heap dump: ${hprof_name} ($(du -sh "$local_hprof" | cut -f1))"
-      done
+  for pod in $pods; do
+    local containers
+    containers=$(kubectl get pod "$pod" -n "$ns" \
+      -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
+    for container in $containers; do
+      local logfile="${log_dir}/${pod}-${container}.log"
+      kubectl logs "$pod" -c "$container" -n "$ns" --tail=5000 \
+        > "$logfile" 2>&1 || true
+      pod_count=$((pod_count + 1))
     done
-  fi
+
+    # GC log
+    local gc_file="${log_dir}/${pod}-gc.log"
+    kubectl exec "$pod" -c opensearch -n "$ns" -- \
+      cat /usr/share/opensearch/logs/gc.log > "$gc_file" 2>/dev/null || true
+    if [ -s "$gc_file" ]; then
+      gc_count=$((gc_count + 1))
+    else
+      rm -f "$gc_file"
+    fi
+
+    # Heap dumps
+    local hprof_files
+    hprof_files=$(kubectl exec "$pod" -c opensearch -n "$ns" -- \
+      sh -c 'ls /usr/share/opensearch/data/*.hprof 2>/dev/null || true' || true)
+    for hprof in $hprof_files; do
+      local hprof_name
+      hprof_name=$(basename "$hprof")
+      local local_hprof="${log_dir}/${pod}-${hprof_name}"
+      kubectl cp "${ns}/${pod}:${hprof}" "$local_hprof" \
+        -c opensearch 2>/dev/null || true
+      [ -s "$local_hprof" ] && hprof_count=$((hprof_count + 1))
+    done
+  done
 
   # ── REST telemetry ────────────────────────────────────────────────────────
   local tel_dir="${log_dir}/telemetry"
@@ -464,7 +459,6 @@ _collect_scenario_server_logs() {
       "opensearch-benchmark-worker-${ENGINE}-0" -c worker -- \
       curl -sk -u admin:admin "https://${os_host}${endpoint}" \
       > "${tel_dir}/${filename}" 2>/dev/null || true
-    echo "  [server-logs] telemetry: ${filename}"
   done << 'ENDPOINTS'
 /_cluster/health?pretty cluster-health.json
 /_cluster/stats?pretty cluster-stats.json
@@ -476,7 +470,9 @@ _collect_scenario_server_logs() {
 /_cat/segments?v segments.txt
 ENDPOINTS
 
-  echo "  [server-logs] Done — ${log_dir}"
+  local hprof_note=""
+  [ "$hprof_count" -gt 0 ] && hprof_note=" | ${hprof_count} heap dump(s)"
+  echo "  [server-logs] ${scenario_key}: ${pod_count} pod log(s), ${gc_count} gc.log(s)${hprof_note}"
 }
 
 _start_stats_sampler
@@ -544,14 +540,18 @@ while true; do
   # Copy results and collect server logs for each newly-completed scenario.
   # We compare against PREV_COMPLETED so we only act on the delta.
   if [ "${completed:-0}" -gt "$PREV_COMPLETED" ] && [ -n "${RESULTS_DEST:-}" ]; then
-    echo "$resp" | jq -r '
+    while IFS= read -r skey; do
+      [ -z "$skey" ] && continue
+      # Skip scenarios already processed in a previous iteration.
+      [ "${_COLLECTED[$skey]+set}" = "set" ] && continue
+      _COLLECTED[$skey]=1
+      _copy_scenario_results "$skey"
+      _collect_scenario_server_logs "$skey"
+    done < <(echo "$resp" | jq -r '
       .scenario_status // {} | to_entries[] |
       select(.value | test("completed|failed|partial_failure|error|cancelled")) |
       .key
-    ' | while IFS= read -r skey; do
-      _copy_scenario_results "$skey"
-      _collect_scenario_server_logs "$skey"
-    done
+    ')
   fi
   PREV_COMPLETED="${completed:-0}"
 
