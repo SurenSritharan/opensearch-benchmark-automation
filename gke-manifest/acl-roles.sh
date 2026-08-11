@@ -63,7 +63,7 @@ put_role test_baseline "{
     \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
   }]
 }"
-put_mapping test_baseline '{"backend_roles":[],"users":["user-e1"]}'
+put_mapping test_baseline '{"backend_roles":["grp-finance-readers"],"users":["user-e1"]}'
 echo "  E1 test_baseline -> user-e1"
 
 # E2 — single static term on tenant_id
@@ -75,7 +75,7 @@ put_role test_tenant_only "{
     \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
   }]
 }"
-put_mapping test_tenant_only '{"backend_roles":[],"users":["user-e2"]}'
+put_mapping test_tenant_only '{"backend_roles":["grp-finance-readers"],"users":["user-e2"]}'
 echo "  E2 test_tenant_only -> user-e2"
 
 # E3 — small static terms on access_groups
@@ -87,7 +87,7 @@ put_role test_static_groups "{
     \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
   }]
 }"
-put_mapping test_static_groups '{"backend_roles":[],"users":["user-e3"]}'
+put_mapping test_static_groups '{"backend_roles":["grp-finance-readers"],"users":["user-e3"]}'
 echo "  E3 test_static_groups -> user-e3"
 
 # M1 — tenant_id + single group
@@ -99,7 +99,7 @@ put_role test_tenant_group "{
     \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
   }]
 }"
-put_mapping test_tenant_group '{"backend_roles":[],"users":["user-m1"]}'
+put_mapping test_tenant_group '{"backend_roles":["grp-finance-readers"],"users":["user-m1"]}'
 echo "  M1 test_tenant_group -> user-m1"
 
 # M2 — tenant_id + dynamic identity (groups + roles + user.name)
@@ -112,7 +112,7 @@ put_role test_full_identity '{
     "allowed_actions": ["read","search","indices:monitor/stats"]
   }]
 }'
-put_mapping test_full_identity '{"backend_roles":["grp-finance"],"users":["user-m2"]}'
+put_mapping test_full_identity '{"backend_roles":["grp-finance-readers","grp-all-employees","role-employee"],"users":["user-m2"]}'
 echo "  M2 test_full_identity -> user-m2"
 
 # M3 — tenant_id + dynamic identity + security_classification
@@ -124,7 +124,7 @@ put_role test_identity_classification '{
     "allowed_actions": ["read","search","indices:monitor/stats"]
   }]
 }'
-put_mapping test_identity_classification '{"backend_roles":["grp-finance"],"users":["user-m3"]}'
+put_mapping test_identity_classification '{"backend_roles":["grp-finance-readers","grp-all-employees","role-employee"],"users":["user-m3"]}'
 echo "  M3 test_identity_classification -> user-m3"
 
 # C1 — tenant_id + access_users AND access_groups must both match
@@ -136,7 +136,7 @@ put_role test_dual_validation '{
     "allowed_actions": ["read","search","indices:monitor/stats"]
   }]
 }'
-put_mapping test_dual_validation '{"backend_roles":["grp-finance"],"users":["user-c1"]}'
+put_mapping test_dual_validation '{"backend_roles":["grp-finance-readers","grp-all-employees"],"users":["user-c1"]}'
 echo "  C1 test_dual_validation -> user-c1"
 
 # C3 — tenant_id + large static 50-entry access_users list
@@ -144,11 +144,11 @@ put_role test_large_users_list "{
   \"cluster_permissions\": ${CLUSTER_PERMS},
   \"index_permissions\": [{
     \"index_patterns\": ${INDEX_PATTERNS},
-    \"dls\": \"{\\\"bool\\\": {\\\"filter\\\": [{\\\"term\\\": {\\\"tenant_id\\\": \\\"tenant_001\\\"}},{\\\"terms\\\": {\\\"access_users\\\": [\\\"user001@example.com\\\",\\\"user002@example.com\\\",\\\"user003@example.com\\\",\\\"user004@example.com\\\",\\\"user005@example.com\\\",\\\"user006@example.com\\\",\\\"user007@example.com\\\",\\\"user008@example.com\\\",\\\"user009@example.com\\\",\\\"user010@example.com\\\",\\\"user011@example.com\\\",\\\"user012@example.com\\\",\\\"user013@example.com\\\",\\\"user014@example.com\\\",\\\"user015@example.com\\\",\\\"user016@example.com\\\",\\\"user017@example.com\\\",\\\"user018@example.com\\\",\\\"user019@example.com\\\",\\\"user020@example.com\\\",\\\"user021@example.com\\\",\\\"user022@example.com\\\",\\\"user023@example.com\\\",\\\"user024@example.com\\\",\\\"user025@example.com\\\",\\\"user-c3\\\",\\\"user027@example.com\\\",\\\"user028@example.com\\\",\\\"user029@example.com\\\",\\\"user030@example.com\\\",\\\"user031@example.com\\\",\\\"user032@example.com\\\",\\\"user033@example.com\\\",\\\"user034@example.com\\\",\\\"user035@example.com\\\",\\\"user036@example.com\\\",\\\"user037@example.com\\\",\\\"user038@example.com\\\",\\\"user039@example.com\\\",\\\"user040@example.com\\\",\\\"user041@example.com\\\",\\\"user042@example.com\\\",\\\"user043@example.com\\\",\\\"user044@example.com\\\",\\\"user045@example.com\\\",\\\"user046@example.com\\\",\\\"user047@example.com\\\",\\\"user048@example.com\\\",\\\"user049@example.com\\\",\\\"user050@example.com\\\"]}}]}}\",
+    \"dls\": \"{\\\"bool\\\": {\\\"filter\\\": [{\\\"term\\\": {\\\"tenant_id\\\": \\\"tenant_001\\\"}},{\\\"terms\\\": {\\\"access_users\\\": [\\\"user001@example.com\\\",\\\"user002@example.com\\\",\\\"user003@example.com\\\",\\\"user004@example.com\\\",\\\"user005@example.com\\\",\\\"user006@example.com\\\",\\\"user007@example.com\\\",\\\"user008@example.com\\\",\\\"user009@example.com\\\",\\\"user010@example.com\\\",\\\"user011@example.com\\\",\\\"user012@example.com\\\",\\\"user013@example.com\\\",\\\"user014@example.com\\\",\\\"user015@example.com\\\",\\\"user016@example.com\\\",\\\"user017@example.com\\\",\\\"user018@example.com\\\",\\\"user019@example.com\\\",\\\"user020@example.com\\\",\\\"user021@example.com\\\",\\\"user022@example.com\\\",\\\"user023@example.com\\\",\\\"user024@example.com\\\",\\\"user025@example.com\\\",\\\"user026@example.com\\\",\\\"user027@example.com\\\",\\\"user028@example.com\\\",\\\"user029@example.com\\\",\\\"user030@example.com\\\",\\\"user031@example.com\\\",\\\"user032@example.com\\\",\\\"user033@example.com\\\",\\\"user034@example.com\\\",\\\"user035@example.com\\\",\\\"user036@example.com\\\",\\\"user037@example.com\\\",\\\"user038@example.com\\\",\\\"user039@example.com\\\",\\\"user040@example.com\\\",\\\"user041@example.com\\\",\\\"user042@example.com\\\",\\\"user043@example.com\\\",\\\"user044@example.com\\\",\\\"user045@example.com\\\",\\\"user046@example.com\\\",\\\"user047@example.com\\\",\\\"user048@example.com\\\",\\\"user049@example.com\\\",\\\"user050@example.com\\\"]}}]}}\",
     \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
   }]
 }"
-put_mapping test_large_users_list '{"backend_roles":[],"users":["user-c3"]}'
+put_mapping test_large_users_list '{"backend_roles":["grp-finance-readers"],"users":["user-c3"]}'
 echo "  C3 test_large_users_list -> user-c3"
 
 # C5 — two tenant IDs (should) + dynamic identity + classification
@@ -160,7 +160,7 @@ put_role test_multi_tenant '{
     "allowed_actions": ["read","search","indices:monitor/stats"]
   }]
 }'
-put_mapping test_multi_tenant '{"backend_roles":["grp-finance"],"users":["user-c5"]}'
+put_mapping test_multi_tenant '{"backend_roles":["grp-finance-readers","grp-all-employees","role-employee"],"users":["user-c5"]}'
 echo "  C5 test_multi_tenant -> user-c5"
 
 # C8 — tenant_id + named user match + must_not exists classification
