@@ -40,6 +40,7 @@ CLI_LOG_LEVEL=""
 FIRST_RUN=false
 ENABLE_PROFILING=false
 PROFILING_DURATION=60
+STATS_INTERVAL=0   # 0 = disabled; >0 = poll _nodes/stats every N seconds
 while true; do
   case "${1:-}" in
     --pipeline)
@@ -60,6 +61,10 @@ while true; do
       ;;
     --profiling-duration)
       PROFILING_DURATION="${2:?--profiling-duration requires a value in seconds}"
+      shift 2
+      ;;
+    --stats-interval)
+      STATS_INTERVAL="${2:?--stats-interval requires a value in seconds}"
       shift 2
       ;;
     *)
@@ -235,6 +240,7 @@ echo "Pipeline:    $(basename "$PIPELINE_FILE" .json)"
 echo "Engine:      $ENGINE"
 echo "Scenarios:   $STEP_COUNT step(s)"
 echo "API URL:     $API_URL"
+[ "$STATS_INTERVAL" -gt 0 ] 2>/dev/null && echo "Stats:       every ${STATS_INTERVAL}s → server-stats-timeseries.ndjson"
 echo ""
 echo "Steps (in order):"
 echo "$EFFECTIVE_STEPS" | jq -r '.[] | .dataset + " / " + .scenario + (if .params then " (params: \(.params | keys | join(", ")))" else "" end)' \
@@ -267,6 +273,94 @@ echo ""
 echo "Monitoring job status..."
 echo ""
 
+# ── Background server-stats sampler ───────────────────────────────────────────
+# When --stats-interval N is set, polls _nodes/stats from the OpenSearch cluster
+# at N-second intervals for the duration of the job and appends one NDJSON record
+# per sample to <RESULTS_DEST>/server-stats-timeseries.ndjson.
+#
+# Each record is a flat JSON object:
+#   { "ts": "<ISO-8601>", "node": "<name>", "heap_used_pct": N,
+#     "cpu_pct": N, "load_1m": N, "gc_young_count": N, "gc_young_ms": N,
+#     "gc_old_count": N, "gc_old_ms": N, "search_query_total": N,
+#     "indexing_total": N, "fs_total_bytes": N, "fs_free_bytes": N }
+#
+# The file is ready for charting with any tool that understands NDJSON:
+#   jq -s '.' server-stats-timeseries.ndjson        # → JSON array
+#   jq -r '[.ts,.node,.heap_used_pct] | @csv' ...   # → CSV
+#
+# Uses the worker pod as a kubectl exec proxy (same pattern as telemetry
+# collection) so no direct network path to the cluster is required.
+_STATS_SAMPLER_PID=""
+
+_start_stats_sampler() {
+  [ "${STATS_INTERVAL:-0}" -gt 0 ] 2>/dev/null || return 0
+  [ -z "${RESULTS_DEST:-}" ] && return 0
+
+  local ns="os-develop-${ENGINE}"
+  local os_host="opensearch-cluster.${ns}.svc.cluster.local:9200"
+  local worker_pod="opensearch-benchmark-worker-${ENGINE}-0"
+  local outfile="${RESULTS_DEST}/server-stats-timeseries.ndjson"
+
+  echo "  [stats] Sampler started — interval=${STATS_INTERVAL}s → $(basename "$outfile")"
+
+  (
+    while true; do
+      local ts
+      ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+      # Fetch _nodes/stats via the worker pod; suppress errors so a transient
+      # cluster hiccup does not kill the sampler subprocess.
+      local raw
+      raw=$(kubectl exec -n benchmark-api-develop "$worker_pod" -c worker -- \
+        curl -sk -u admin:admin \
+        "https://${os_host}/_nodes/stats/jvm,os,indices,thread_pool,fs" \
+        2>/dev/null || true)
+
+      # Skip this sample if the response is not valid JSON
+      echo "$raw" | jq -e '.nodes' > /dev/null 2>&1 || { sleep "$STATS_INTERVAL"; continue; }
+
+      # Emit one NDJSON record per node
+      echo "$raw" | jq -c --arg ts "$ts" '
+        .nodes | to_entries[] | .value as $n |
+        {
+          ts:                 $ts,
+          node:               $n.name,
+          heap_used_pct:      ($n.jvm.mem.heap_used_percent // null),
+          heap_used_mb:       (($n.jvm.mem.heap_used_in_bytes // 0) / 1048576 | round),
+          heap_max_mb:        (($n.jvm.mem.heap_max_in_bytes  // 0) / 1048576 | round),
+          gc_young_count:     ($n.jvm.gc.collectors.young.collection_count       // null),
+          gc_young_ms:        ($n.jvm.gc.collectors.young.collection_time_in_millis // null),
+          gc_old_count:       ($n.jvm.gc.collectors.old.collection_count         // null),
+          gc_old_ms:          ($n.jvm.gc.collectors.old.collection_time_in_millis  // null),
+          cpu_pct:            ($n.os.cpu.percent // null),
+          load_1m:            ($n.os.cpu.load_average."1m" // null),
+          mem_used_pct:       ($n.os.mem.used_percent // null),
+          search_query_total: ($n.indices.search.query_total // null),
+          search_query_ms:    ($n.indices.search.query_time_in_millis // null),
+          indexing_total:     ($n.indices.indexing.index_total // null),
+          indexing_ms:        ($n.indices.indexing.index_time_in_millis // null),
+          search_rejected:    ($n.thread_pool.search.rejected // null),
+          write_rejected:     ($n.thread_pool.write.rejected  // null),
+          fs_total_bytes:     ($n.fs.total.total_in_bytes // null),
+          fs_free_bytes:      ($n.fs.total.free_in_bytes  // null)
+        }
+      ' >> "$outfile" 2>/dev/null || true
+
+      sleep "$STATS_INTERVAL"
+    done
+  ) &
+  _STATS_SAMPLER_PID=$!
+}
+
+_stop_stats_sampler() {
+  [ -z "${_STATS_SAMPLER_PID:-}" ] && return 0
+  kill "$_STATS_SAMPLER_PID" 2>/dev/null || true
+  wait "$_STATS_SAMPLER_PID" 2>/dev/null || true
+  _STATS_SAMPLER_PID=""
+  [ -n "${RESULTS_DEST:-}" ] && \
+    echo "  [stats] Sampler stopped — $(wc -l < "${RESULTS_DEST}/server-stats-timeseries.ndjson" 2>/dev/null || echo 0) samples written"
+}
+
 PREV_COMPLETED="-1"
 PREV_STATUS=""
 PREV_LABEL=""
@@ -291,6 +385,101 @@ _copy_scenario_results() {
   kubectl cp -c worker "benchmark-api-develop/${WORKER_POD}:${src_path}/." "$dest/" >/dev/null 2>&1 || \
     echo "  WARNING: kubectl cp failed for ${scenario_key} (pod may not be reachable)"
 }
+
+# ── Per-scenario server log collector ─────────────────────────────────────────
+# Called immediately after a scenario reaches a terminal state.
+# Collects pod container logs, GC logs, heap dumps, and REST telemetry from the
+# OpenSearch namespace and writes them into the scenario's local results dir.
+#
+# Uses the same env vars as _copy_scenario_results:
+#   RESULTS_DEST   local destination directory
+#   OS_NAMESPACE   OpenSearch namespace (derived from ENGINE when not set)
+_collect_scenario_server_logs() {
+  local scenario_key="$1"
+  [ -z "${RESULTS_DEST:-}" ] && return 0
+
+  local ns="${OS_NAMESPACE:-os-develop-${ENGINE}}"
+  local log_dir="${RESULTS_DEST}/${scenario_key}/server-logs"
+  mkdir -p "$log_dir"
+
+  echo "  [server-logs] Collecting logs for scenario: ${scenario_key}"
+
+  # ── Pod container logs ────────────────────────────────────────────────────
+  local pods
+  pods=$(kubectl get pods -n "$ns" \
+    -l 'app in (opensearch-data,opensearch-cluster-manager)' \
+    --no-headers \
+    -o custom-columns=':metadata.name' 2>/dev/null || true)
+
+  if [ -z "$pods" ]; then
+    echo "  [server-logs] No opensearch pods found in $ns — skipping pod logs"
+  else
+    for pod in $pods; do
+      local containers
+      containers=$(kubectl get pod "$pod" -n "$ns" \
+        -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
+      for container in $containers; do
+        local logfile="${log_dir}/${pod}-${container}.log"
+        kubectl logs "$pod" -c "$container" -n "$ns" --tail=5000 \
+          > "$logfile" 2>&1 || true
+        echo "  [server-logs] ${pod}/${container}: $(wc -l < "$logfile") lines"
+      done
+
+      # GC log
+      local gc_file="${log_dir}/${pod}-gc.log"
+      kubectl exec "$pod" -c opensearch -n "$ns" -- \
+        cat /usr/share/opensearch/logs/gc.log > "$gc_file" 2>/dev/null || true
+      if [ -s "$gc_file" ]; then
+        echo "  [server-logs] ${pod} gc.log: $(wc -l < "$gc_file") lines"
+      else
+        rm -f "$gc_file"
+      fi
+
+      # Heap dumps
+      local hprof_files
+      hprof_files=$(kubectl exec "$pod" -c opensearch -n "$ns" -- \
+        sh -c 'ls /usr/share/opensearch/data/*.hprof 2>/dev/null || true' || true)
+      for hprof in $hprof_files; do
+        local hprof_name
+        hprof_name=$(basename "$hprof")
+        local local_hprof="${log_dir}/${pod}-${hprof_name}"
+        kubectl cp "${ns}/${pod}:${hprof}" "$local_hprof" \
+          -c opensearch 2>/dev/null || true
+        [ -s "$local_hprof" ] && \
+          echo "  [server-logs] heap dump: ${hprof_name} ($(du -sh "$local_hprof" | cut -f1))"
+      done
+    done
+  fi
+
+  # ── REST telemetry ────────────────────────────────────────────────────────
+  local tel_dir="${log_dir}/telemetry"
+  mkdir -p "$tel_dir"
+  local os_host="opensearch-cluster.${ns}.svc.cluster.local:9200"
+
+  while IFS= read -r entry; do
+    local endpoint filename
+    endpoint=$(echo "$entry" | awk '{print $1}')
+    filename=$(echo "$entry" | awk '{print $2}')
+    kubectl exec -n benchmark-api-develop \
+      "opensearch-benchmark-worker-${ENGINE}-0" -c worker -- \
+      curl -sk -u admin:admin "https://${os_host}${endpoint}" \
+      > "${tel_dir}/${filename}" 2>/dev/null || true
+    echo "  [server-logs] telemetry: ${filename}"
+  done << 'ENDPOINTS'
+/_cluster/health?pretty cluster-health.json
+/_cluster/stats?pretty cluster-stats.json
+/_cluster/settings?include_defaults=true&flat_settings=true&pretty cluster-settings.json
+/_nodes/stats?pretty nodes-stats.json
+/_cat/nodes?v&h=name,heap.percent,heap.current,heap.max,ram.percent,cpu,load_1m,load_5m nodes.txt
+/_cat/thread_pool?v&h=node_name,name,active,queue,rejected,largest,completed thread-pools.txt
+/_cat/tasks?v&detailed tasks.txt
+/_cat/segments?v segments.txt
+ENDPOINTS
+
+  echo "  [server-logs] Done — ${log_dir}"
+}
+
+_start_stats_sampler
 
 while true; do
   now="[$(date '+%Y-%m-%d %H:%M:%S')]"
@@ -352,7 +541,7 @@ while true; do
     PREV_LABEL="$label"
   fi
 
-  # Copy each newly-completed scenario as soon as it lands.
+  # Copy results and collect server logs for each newly-completed scenario.
   # We compare against PREV_COMPLETED so we only act on the delta.
   if [ "${completed:-0}" -gt "$PREV_COMPLETED" ] && [ -n "${RESULTS_DEST:-}" ]; then
     echo "$resp" | jq -r '
@@ -361,6 +550,7 @@ while true; do
       .key
     ' | while IFS= read -r skey; do
       _copy_scenario_results "$skey"
+      _collect_scenario_server_logs "$skey"
     done
   fi
   PREV_COMPLETED="${completed:-0}"
@@ -397,6 +587,8 @@ while true; do
 
   sleep 2
 done
+
+_stop_stats_sampler
 
 echo ""
 echo "=========================================="

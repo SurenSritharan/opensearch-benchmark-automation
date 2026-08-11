@@ -73,6 +73,11 @@ pipeline {
             defaultValue: '60',
             description: 'Default profiling duration is 60, can be modified'
         )
+        string(
+            name: 'STATS_INTERVAL',
+            defaultValue: '',
+            description: 'Interval in seconds to poll OpenSearch _nodes/stats during the run. Set to 0 or blank to disable. Each sample is appended as an NDJSON record to server-stats-timeseries.ndjson — one record per node per interval.'
+        )
     }
 
     environment {
@@ -422,6 +427,7 @@ print(json.dumps(s))
                                                 ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
+                                                ${params.STATS_INTERVAL?.trim() ? "--stats-interval ${params.STATS_INTERVAL.trim()}" : ""} \
                                                 ${params.ENGINE} \
                                                 2>&1 | tee benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
@@ -463,94 +469,10 @@ print(json.dumps(s))
                                         echo "WARNING: no job_id for ${versionLabel}/${runSize} — benchmark may not have submitted"
                                     fi
 
-                                    # ── Server logs ────────────────────────────────
-                                    NS="os-develop-${params.ENGINE}"
-                                    LOG_DIR="${RESULTS_DIR}/${runKey}/server-logs/\$NS"
-                                    mkdir -p "\$LOG_DIR"
-
-                                    echo "Collecting logs from namespace: \$NS"
-
-                                    PODS=\$(kubectl get pods -n \$NS \
-                                        -l 'app in (opensearch-data,opensearch-cluster-manager)' \
-                                        --no-headers \
-                                        -o custom-columns=':metadata.name' 2>/dev/null || true)
-
-                                    if [ -z "\$PODS" ]; then
-                                        echo "  No opensearch pods found in \$NS — skipping"
-                                    else
-                                        for POD in \$PODS; do
-                                            CONTAINERS=\$(kubectl get pod "\$POD" -n \$NS \
-                                                -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
-                                            for CONTAINER in \$CONTAINERS; do
-                                                LOGFILE="\$LOG_DIR/\${POD}-\${CONTAINER}.log"
-                                                kubectl logs "\$POD" -c "\$CONTAINER" -n \$NS \
-                                                    --tail=5000 2>&1 > "\$LOGFILE" || true
-                                                SIZE=\$(wc -l < "\$LOGFILE" 2>/dev/null || echo 0)
-                                                echo "  \$POD / \$CONTAINER: \${SIZE} lines -> \$LOGFILE"
-                                            done
-
-                                            GC_LOGFILE="\$LOG_DIR/\${POD}-gc.log"
-                                            kubectl exec "\$POD" -c opensearch -n \$NS -- \
-                                                cat /usr/share/opensearch/logs/gc.log \
-                                                > "\$GC_LOGFILE" 2>/dev/null || true
-                                            if [ -s "\$GC_LOGFILE" ]; then
-                                                echo "  \$POD gc.log: \$(wc -l < \$GC_LOGFILE) lines"
-                                            else
-                                                rm -f "\$GC_LOGFILE"
-                                                echo "  \$POD gc.log: not found (skipping)"
-                                            fi
-
-                                            HPROF_FILES=\$(kubectl exec "\$POD" -c opensearch -n \$NS -- \
-                                                sh -c 'ls /usr/share/opensearch/data/*.hprof 2>/dev/null || true')
-                                            for HPROF in \$HPROF_FILES; do
-                                                HPROF_NAME=\$(basename "\$HPROF")
-                                                LOCAL_HPROF="\$LOG_DIR/\${POD}-\${HPROF_NAME}"
-                                                echo "  Found heap dump: \$HPROF — copying..."
-                                                kubectl cp "\$NS/\${POD}:\${HPROF}" "\$LOCAL_HPROF" \
-                                                    -c opensearch 2>/dev/null || true
-                                                if [ -s "\$LOCAL_HPROF" ]; then
-                                                    echo "  Saved: \$LOCAL_HPROF (\$(du -sh \$LOCAL_HPROF | cut -f1))"
-                                                fi
-                                            done
-                                        done
-
-                                        {
-                                            echo "Server Log Collection Summary"
-                                            echo "============================================================"
-                                            echo "Collection Time: \$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-                                            echo "Namespace:       \$NS"
-                                            echo "Build ID:        ${BUILD_ID}"
-                                            echo ""
-                                            echo "Collected Logs:"
-                                            echo "------------------------------------------------------------"
-                                            ls -lh "\$LOG_DIR" 2>/dev/null | awk 'NR>1 {print "  " \$NF "  " \$5}' || true
-                                        } > "\$LOG_DIR/SUMMARY.txt"
-
-                                        echo "  Summary written: \$LOG_DIR/SUMMARY.txt"
-                                    fi
-
-                                    # ── Telemetry ──────────────────────────────────
-                                    TEL_DIR="${RESULTS_DIR}/${runKey}/server-logs/\$NS/telemetry"
-                                    mkdir -p "\$TEL_DIR"
-                                    OS_HOST="opensearch-cluster.\$NS.svc.cluster.local:9200"
-
-                                    for ENDPOINT_FILE in \
-                                        "/_cluster/health?pretty          cluster-health.json" \
-                                        "/_cluster/stats?pretty           cluster-stats.json" \
-                                        "/_cluster/settings?include_defaults=true&flat_settings=true&pretty  cluster-settings.json" \
-                                        "/_nodes/stats?pretty             nodes-stats.json" \
-                                        "/_cat/nodes?v&h=name,heap.percent,heap.current,heap.max,ram.percent,cpu,load_1m,load_5m  nodes.txt" \
-                                        "/_cat/thread_pool?v&h=node_name,name,active,queue,rejected,largest,completed  thread-pools.txt" \
-                                        "/_cat/tasks?v&detailed           tasks.txt" \
-                                        "/_cat/segments?v                 segments.txt"
-                                    do
-                                        ENDPOINT=\$(echo "\$ENDPOINT_FILE" | awk '{print \$1}')
-                                        FILENAME=\$(echo "\$ENDPOINT_FILE" | awk '{print \$2}')
-                                        kubectl exec -n benchmark-api-develop opensearch-benchmark-worker-${params.ENGINE}-0 -c worker -- \
-                                            curl -sk -u admin:admin "https://\$OS_HOST\$ENDPOINT" \
-                                            > "\$TEL_DIR/\$FILENAME" 2>/dev/null || true
-                                        echo "  telemetry: \$FILENAME"
-                                    done
+                                    # Server logs and telemetry are collected per scenario by
+                                    # _collect_scenario_server_logs() in run-pipeline.sh as each
+                                    # scenario completes. They land in:
+                                    #   <RESULTS_DEST>/<scenario_key>/server-logs/
 
                                     # ── Worker log ─────────────────────────────────
                                     WORKER_LOG="${RESULTS_DIR}/${runKey}/server-logs/worker-${params.ENGINE}.log"
