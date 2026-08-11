@@ -1,0 +1,442 @@
+{
+  "description": "Task 1: Indexing parameter sweep — 16 ef_construction × m combinations to find fastest indexing speed",
+  "engine": "__ENGINE__",
+  "no_profiling": true,
+  "params": {
+    "corpus_size": "1m"
+  },
+  "steps": [
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef64-m8" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef64-m8",
+        "hnsw_ef_construction": 64,
+        "hnsw_m": 8
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef64-m8",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef64-m8" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef64-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef64-m16",
+        "hnsw_ef_construction": 64,
+        "hnsw_m": 16
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef64-m16",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef64-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef64-m32" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef64-m32",
+        "hnsw_ef_construction": 64,
+        "hnsw_m": 32
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef64-m32",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef64-m32" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef64-m64" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef64-m64",
+        "hnsw_ef_construction": 64,
+        "hnsw_m": 64
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef64-m64",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef64-m64" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m8" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef128-m8",
+        "hnsw_ef_construction": 128,
+        "hnsw_m": 8
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef128-m8",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m8" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef128-m16",
+        "hnsw_ef_construction": 128,
+        "hnsw_m": 16
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef128-m16",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m32" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef128-m32",
+        "hnsw_ef_construction": 128,
+        "hnsw_m": 32
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef128-m32",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m32" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m64" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef128-m64",
+        "hnsw_ef_construction": 128,
+        "hnsw_m": 64
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef128-m64",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m64" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef256-m8" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef256-m8",
+        "hnsw_ef_construction": 256,
+        "hnsw_m": 8
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef256-m8",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef256-m8" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef256-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef256-m16",
+        "hnsw_ef_construction": 256,
+        "hnsw_m": 16
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef256-m16",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef256-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef256-m32" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef256-m32",
+        "hnsw_ef_construction": 256,
+        "hnsw_m": 32
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef256-m32",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef256-m32" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef256-m64" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef256-m64",
+        "hnsw_ef_construction": 256,
+        "hnsw_m": 64
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef256-m64",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef256-m64" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef512-m8" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef512-m8",
+        "hnsw_ef_construction": 512,
+        "hnsw_m": 8
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef512-m8",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef512-m8" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef512-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef512-m16",
+        "hnsw_ef_construction": 512,
+        "hnsw_m": 16
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef512-m16",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef512-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef512-m32" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef512-m32",
+        "hnsw_ef_construction": 512,
+        "hnsw_m": 32
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef512-m32",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef512-m32" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef512-m64" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef512-m64",
+        "hnsw_ef_construction": 512,
+        "hnsw_m": 64
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef512-m64",
+        "target_index_bulk_size": 5000
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef512-m64" }
+    }
+  ]
+}
