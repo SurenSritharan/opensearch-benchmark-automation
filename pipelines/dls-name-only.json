@@ -1,0 +1,11 @@
+{
+  "description": "DLS name-only persona — user-name-only has no backend_roles; matched only by username via access_users field (~10% of corpus, buckets 68–77). Simulates a named individual with no role or group membership. Index must exist from a prior build run.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-name-only-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-name-only", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-name-only-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-name-only", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-name-only-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-name-only", "step_password": "BenchmarkACL-2024!" } }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "description": "DLS group+name persona — user-group-name has backend_roles:[grp-finance] and is also named in access_users on some docs. Matches via group OR named-user branches (~40% of corpus, buckets 35–64 and 78–87). Same doc count as group-only but access is via two different filter branches. Index must exist from a prior build run.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-group-name-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-group-name", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-group-name-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-group-name", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-group-name-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-group-name", "step_password": "BenchmarkACL-2024!" } }
+  ]
+}

@@ -1,24 +1,24 @@
 # ACL Pipeline Architecture
 
-This document describes how Query Time ACL benchmarking system works end-to-end — from cluster setup through ingest, DLS role assignment, pipeline execution, and result collection.
+This document describes how the Query Time ACL benchmarking system works end-to-end — from cluster setup through ingest, DLS role assignment, pipeline execution, and result collection.
 
 ## Overview
 
-The ACL benchmark measures the latency overhead introduced by DLS queries. DLS injects a per-user filter into every search query at the security plugin layer before the query reaches the engine.
+The ACL benchmark measures the latency overhead introduced by Document Level Security (DLS) queries. DLS injects a per-user filter into every search query at the security plugin layer before the query reaches the engine.
 
 The system is designed so that:
 
-- Every document in the corpus has realistic ACL fields (`tenant_id`, `access_groups`, `access_users`, `access_roles`, `security_classification`) injected at ingest time by an OpenSearch ingest pipeline.
-- Ten isolated OpenSearch users are pre-created, each mapped to exactly one DLS role so that role combinations never bleed into each other.
-- Each benchmark pipeline step authenticates as a specific user, so only that user's DLS filter is active during measurement.
-- The E1 baseline (no DLS, `user-e1`) provides the raw vector-search cost against which every other role's overhead is delta-compared.
+- Every document in the corpus has ACL fields injected at ingest time by an OpenSearch ingest pipeline, simulating realistic production document metadata.
+- **One dynamic DLS filter** (`dls-standard`) is shared by all non-baseline users. Each user's `backend_roles` and username simulate their production JWT claims, causing the filter to expand differently per user.
+- Eight benchmark users represent realistic production personas — role-only, group-only, name-only, role+group, group+name, classified, and ultrastrict — spanning a visibility gradient from ~1% to 100%.
+- The E1 baseline (`user-unrestricted`, no DLS) provides raw vector search cost. Every other user's overhead is delta-compared against this baseline.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  Jenkins build                                                  │
 │                                                                 │
-│  1. acl-setup.sh       -> installs ingest pipeline + index      |
-│                          template + 10 DLS roles + 10 users     │
+│  1. acl-setup.sh       -> installs ingest pipeline + index      │
+│                          template + 3 DLS roles + 8 users       │
 │                                                                 │
 │  2. run-pipeline.sh    -> submits pipeline steps as a batch     │
 │                          job to the benchmark API               │
@@ -28,86 +28,156 @@ The system is designed so that:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## ACL data model
+## JWT Simulation
 
-Based on our PRD, following `keyword` fields are added to every document by the `acl_guard` ingest pipeline and mapped by the `acl-benchmark-template` index template:
-
-| Field                     | Type              | Purpose                                                                                |
-| ------------------------- | ----------------- | -------------------------------------------------------------------------------------- |
-| `tenant_id`               | `keyword`         | Tenant boundary — a DLS `term` filter on this field is the cheapest possible predicate |
-| `access_groups`           | `keyword` (array) | Groups that can read the document                                                      |
-| `access_roles`            | `keyword` (array) | Roles that can read the document                                                       |
-| `access_users`            | `keyword` (array) | Named users that can read the document                                                 |
-| `security_classification` | `keyword`         | Classification label (`internal`, `restricted`); absent means unclassified             |
-
-## Corpus bucket layout
-
-The `acl_guard` ingest pipeline assigns ACL fields deterministically using `_id % 8` so the distribution is uniform and reproducible across any corpus size. At 1M documents each bucket contains ~125 k docs.
-
-| Bucket (`_id % 8`) | `tenant_id`  | `access_groups`                  | `access_users`    | `security_classification` |
-| ------------------ | ------------ | -------------------------------- | ----------------- | ------------------------- |
-| 0                  | `tenant_001` | `grp-finance`, `grp-controllers` | —                 | `internal`                |
-| 1                  | `tenant_001` | `grp-finance`                    | —                 | `internal`                |
-| 2                  | `tenant_001` | `grp-controllers`                | —                 | `internal`                |
-| 3                  | `tenant_001` | `grp-finance`                    | `dave-contractor` | _(absent)_                |
-| 4                  | `tenant_002` | `grp-finance`                    | —                 | `internal`                |
-| 5                  | `tenant_002` | `grp-controllers`                | —                 | `internal`                |
-| 6                  | `tenant_001` | `grp-finance`                    | —                 | `restricted`              |
-| 7                  | `tenant_002` | `grp-finance`                    | —                 | _(absent)_                |
-
-_For benchmarking only: The ingest pipeline only assigns fields when the document arrives without any ACL fields already set. If any of `access_roles`, `access_groups`, or `access_users` is non-empty the document is passed through unchanged — this lets future corpus files carry their own ACL metadata. This is because, workload contains only the vectors and we need other fields for Query Time ACL._
-
-## _For production: The ingest pipeline will be our validation at ingestion time(opposite to benchmarking use case)._
-
-## Setup scripts
-
-All setup is orchestrated by [`gke-manifest/acl-setup.sh`](../gke-manifest/acl-setup.sh). It is called automatically by the Jenkins pipeline for any pipeline whose name contains `-acl` or starts with `dls-`.
+In production, DLS filters expand dynamically from the user's JWT:
 
 ```
-acl-setup.sh <namespace>          # full setup
-acl-setup.sh <namespace> verify   # post-ingest verification only
+${user.roles}  →  the user's group/role claims from the JWT
+${user.name}   →  the user's identity from the JWT
 ```
 
-Internally it calls three sub-scripts in order:
+In OpenSearch benchmarking there is no JWT. The equivalent is:
 
-| Script                                                             | What it does                                                                                                                                                                                                                                                                                                             |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`acl-ingest-pipeline.sh`](../gke-manifest/acl-ingest-pipeline.sh) | `PUT`s the `acl_guard` ingest pipeline and the `acl-benchmark-template` index template. The template sets `default_pipeline: acl_guard` on all `cohere-wiki-en-768-*` and `cohere-msmarco-1024-*` indices so ACL fields are stamped on every document at bulk-ingest time without requiring changes to the OSB workload. |
-| [`acl-roles.sh`](../gke-manifest/acl-roles.sh)                     | Creates 10 DLS roles via `PUT /_plugins/_security/api/roles/<name>` and maps each role to exactly one user.                                                                                                                                                                                                              |
-| [`acl-users.sh`](../gke-manifest/acl-users.sh)                     | Creates 10 internal users via `PUT /_plugins/_security/api/internalusers/<name>`. All users share the password `BenchmarkACL-2024!`. Users whose DLS role uses `${user.roles}` receive a `backend_role` of `grp-finance` so OpenSearch can expand the template variable.                                                 |
+```
+${user.roles}  →  the user's backend_roles array (set at user creation time)
+${user.name}   →  the username string
+```
 
-All three scripts are **idempotent** — every call is a `PUT`, so re-running
-setup on an existing cluster is safe.
+These are **functionally identical**. One DLS role definition with `${user.roles}` and `${user.name}` template variables serves all benchmark users. Each user sees a different document set based on their own `backend_roles` and username — exactly as different JWT payloads would behave in production.
 
-## DLS roles and users
+Classification clearance is also encoded in `backend_roles`. A user with `"restricted"` in `backend_roles` has restricted clearance because `terms: security_classification: ${user.roles}` will expand to match docs where `security_classification = "restricted"`.
 
-Each user is mapped to exactly **one** role. OpenSearch merges DLS filters across roles with `OR`, so holding multiple roles would make the most-permissive filter win and corrupt the measurement.
+## ACL Data Model
 
-| Tier     | Role name                      | User              | DLS filter summary                                            | `backend_roles` needed |
-| -------- | ------------------------------ | ----------------- | ------------------------------------------------------------- | ---------------------- |
-| Easy     | `test_baseline`                | `user-e1`         | No DLS — raw baseline                                         | No                     |
-| Easy     | `test_tenant_only`             | `user-e2`         | `term tenant_id:tenant_001`                                   | No                     |
-| Easy     | `test_static_groups`           | `user-e3`         | `terms access_groups:[grp-finance, grp-controllers]`          | No                     |
-| Moderate | `test_tenant_group`            | `user-m1`         | `tenant_001 AND grp-finance`                                  | No                     |
-| Moderate | `test_full_identity`           | `user-m2`         | `tenant_001 AND (groups OR roles OR user.name)`               | `grp-finance`          |
-| Moderate | `test_identity_classification` | `user-m3`         | M2 filter + `classification=internal OR absent`               | `grp-finance`          |
-| Complex  | `test_dual_validation`         | `user-c1`         | `tenant_001 AND user.name AND user.roles` (AND, not OR)       | `grp-finance`          |
-| Complex  | `test_large_users_list`        | `user-c3`         | `tenant_001 AND terms access_users:[50-entry list]`           | No                     |
-| Complex  | `test_multi_tenant`            | `user-c5`         | `(tenant_001 OR tenant_002) AND identity AND classification`  | `grp-finance`          |
-| Complex  | `test_no_classification`       | `dave-contractor` | `tenant_001 AND user.name AND must_not exists classification` | No                     |
+Based on our production design, the following `keyword` fields are injected at ingest time by the `acl_guard` ingest pipeline:
 
-## Pipeline catalogue
+| Field                     | Type              | Description                                                                                         |
+| ------------------------- | ----------------- | --------------------------------------------------------------------------------------------------- |
+| `access_roles`            | `keyword` (array) | Role names that grant read access; absent when the doc is not role-controlled                       |
+| `access_groups`           | `keyword` (array) | Group names that grant read access; absent when the doc is not group-controlled                     |
+| `access_users`            | `keyword` (array) | Named users that may read this doc; absent when the doc has no named-user ACL                       |
+| `security_classification` | `keyword`         | `internal`, `external`, or `restricted`; absent on ~87% of docs (~13% carry a classification value) |
 
-### Sweep pipelines (self-contained)
+Not every document has all three `access_*` fields. A document carries only the access field(s) relevant to how it was shared — exactly as in production.
 
-These pipelines build the index from scratch and then run all DLS role variants. No prior state is required.
+### Classification Semantics
 
-| Pipeline                                         | Corpus         | Steps                                                      |
-| ------------------------------------------------ | -------------- | ---------------------------------------------------------- |
-| [`dls-sweep-1m`](../pipelines/dls-sweep-1m.json) | 1M wiki-en-768 | 6 build steps + 30 search steps (10 roles × 3 k/ef combos) |
-| [`dls-sweep-5m`](../pipelines/dls-sweep-5m.json) | 5M wiki-en-768 | 6 build steps + 30 search steps (10 roles × 3 k/ef combos) |
+- `security_classification` **absent**: any user whose access fields match can see the doc
+- `security_classification` **present**: user must have that exact classification value in their `backend_roles` AND their access field must also match
+- Non-hierarchical: `restricted` clearance does NOT grant access to `internal` docs
 
-Each search step authenticates as a different user so only that role's DLS filter is active. The three `k` & `ef` combos per role are:
+## Corpus Bucket Layout
+
+The `acl_guard` ingest pipeline assigns ACL fields deterministically using `_id % 100`. Each bucket = 1% of corpus (~10k docs at 1M, ~50k docs at 5M). Documents receive only the access field(s) for their bucket segment.
+
+### Access Value Vocabulary
+
+| Corpus segment        | `access_roles` | `access_groups`  | `access_users`     | What it simulates                             |
+| --------------------- | -------------- | ---------------- | ------------------ | --------------------------------------------- |
+| Role-tagged docs      | `role-svc`     | —                | —                  | Docs accessible only via role                 |
+| Finance-group docs    | —              | `grp-finance`    | —                  | Docs accessible only via group                |
+| Named-user docs       | —              | —                | `user-name-only`   | Docs accessible only to a named individual    |
+| Role+group docs       | `role-svc`     | `grp-finance`    | —                  | Docs accessible by role OR group              |
+| Group+name docs       | —              | `grp-finance`    | `user-group-name`  | Docs accessible by group OR named user        |
+| Restricted-group docs | —              | `grp-restricted` | —                  | Docs accessible via a narrow restricted group |
+| Ultrastrict docs      | —              | —                | `user-ultrastrict` | Docs accessible only to a single named user   |
+
+### Bucket Table
+
+| Bucket Range | `access_roles` | `access_groups`  | `access_users`     | `security_classification` | Visible to                                                         | Buckets |
+| ------------ | -------------- | ---------------- | ------------------ | ------------------------- | ------------------------------------------------------------------ | ------- |
+| 0–26         | `role-svc`     | —                | —                  | —                         | role-only, role-group                                              | 27      |
+| 27–29        | `role-svc`     | —                | —                  | `external`                | _(no user has external clearance)_                                 | 3       |
+| 30–34        | `role-svc`     | —                | —                  | `internal`                | _(no user has internal clearance)_                                 | 5       |
+| 35–64        | —              | `grp-finance`    | —                  | —                         | group-only, role-group, group-name                                 | 30      |
+| 65–67        | —              | `grp-finance`    | —                  | `internal`                | _(no user has internal clearance)_                                 | 3       |
+| 68–77        | —              | —                | `user-name-only`   | —                         | name-only                                                          | 10      |
+| 78–82        | `role-svc`     | `grp-finance`    | —                  | —                         | role-only, group-only, role-group, group-name                      | 5       |
+| 83–87        | —              | `grp-finance`    | `user-group-name`  | —                         | group-only, role-group, group-name                                 | 5       |
+| 88–92        | —              | `grp-restricted` | —                  | —                         | classified                                                         | 5       |
+| 93           | —              | `grp-restricted` | —                  | `restricted`              | classified (has restricted clearance)                              | 1       |
+| 94–98        | —              | —                | `user-ultrastrict` | —                         | _(ultrastrict role requires classification — these are invisible)_ | 5       |
+| 99           | —              | —                | `user-ultrastrict` | `restricted`              | ultrastrict                                                        | 1       |
+| **Total**    |                |                  |                    |                           |                                                                    | **100** |
+
+**Classification breakdown** (~13% of corpus):
+
+- `external`: buckets 27–29 = 3 buckets _(no user has external clearance — tests that DLS blocks external docs correctly)_
+- `internal`: buckets 30–34 + 65–67 = 8 buckets _(no user has internal clearance)_
+- `restricted`: buckets 93 + 99 = 2 buckets _(user-classified has restricted clearance; user-ultrastrict requires it)_
+
+## DLS Roles and Users
+
+### 3 DLS Roles
+
+| Role              | Users               | DLS filter                                                                 |
+| ----------------- | ------------------- | -------------------------------------------------------------------------- |
+| `dls-baseline`    | `user-unrestricted` | No filter — raw baseline                                                   |
+| `dls-standard`    | 6 standard users    | Full dynamic filter with `${user.roles}` + `${user.name}`                  |
+| `dls-ultrastrict` | `user-ultrastrict`  | Hard `access_users` + hard `classification=restricted`, no absent fallback |
+
+**`dls-standard` filter:**
+
+```json
+{
+  "bool": {
+    "filter": [
+      {
+        "bool": {
+          "should": [
+            { "terms": { "access_roles": "${user.roles}" } },
+            { "terms": { "access_groups": "${user.roles}" } },
+            { "term": { "access_users": "${user.name}" } }
+          ],
+          "minimum_should_match": 1
+        }
+      },
+      {
+        "bool": {
+          "should": [
+            { "terms": { "security_classification": "${user.roles}" } },
+            {
+              "bool": {
+                "must_not": { "exists": { "field": "security_classification" } }
+              }
+            }
+          ],
+          "minimum_should_match": 1
+        }
+      }
+    ]
+  }
+}
+```
+
+### 8 User Personas
+
+| User                | Persona                    | `backend_roles`                   | JWT equivalent              | ~Visible @ 1M |
+| ------------------- | -------------------------- | --------------------------------- | --------------------------- | ------------- |
+| `user-unrestricted` | Admin / no DLS             | `["grp-broad"]`                   | Superuser, bypasses DLS     | **~1M**       |
+| `user-role-group`   | Power user                 | `["role-svc","grp-finance"]`      | Role + group memberships    | **~640k**     |
+| `user-group-only`   | Team member                | `["grp-finance"]`                 | Has group, no roles         | **~400k**     |
+| `user-group-name`   | Team member + named access | `["grp-finance"]`                 | Group + named on some docs  | **~400k**     |
+| `user-role-only`    | Service account            | `["role-svc"]`                    | Has role, no groups         | **~320k**     |
+| `user-name-only`    | Named individual           | `[]`                              | Identity match only         | **~100k**     |
+| `user-classified`   | Cleared user               | `["grp-restricted","restricted"]` | Restricted team + clearance | **~60k**      |
+| `user-ultrastrict`  | Hyper-restricted           | `[]`                              | Named user, classified only | **~10k**      |
+
+All users share password `BenchmarkACL-2024!`.
+
+## Pipeline Catalogue
+
+### Sweep Pipelines (self-contained)
+
+Build the index from scratch and run all 8 user personas × 3 k/ef = 24 search steps.
+
+| Pipeline                                         | Corpus         | Steps                                                  |
+| ------------------------------------------------ | -------------- | ------------------------------------------------------ |
+| [`dls-sweep-1m`](../pipelines/dls-sweep-1m.json) | 1M wiki-en-768 | 6 build + 24 search (ordered least → most restrictive) |
+| [`dls-sweep-5m`](../pipelines/dls-sweep-5m.json) | 5M wiki-en-768 | 6 build + 24 search (ordered least → most restrictive) |
+
+Each search step uses 3 k/ef combinations:
 
 | Label suffix | `query_k` | `hnsw_ef_search` |
 | ------------ | --------- | ---------------- |
@@ -115,34 +185,22 @@ Each search step authenticates as a different user so only that role's DLS filte
 | `k10-ef256`  | 10        | 256              |
 | `k100-ef128` | 100       | 128              |
 
-### Individual role pipelines (search-only)
+### Individual Persona Pipelines (search-only)
 
-These pipelines run a single DLS role across all three combinations. They require the index to already exist from a prior sweep or ACL complete run.
+Run a single persona across all three k/ef combinations. Requires the index to already exist.
 
-| Pipeline                                                                             | User              | DLS tier                             |
-| ------------------------------------------------------------------------------------ | ----------------- | ------------------------------------ |
-| [`dls-e1-baseline`](../pipelines/dls-e1-baseline.json)                               | `user-e1`         | Easy — no DLS                        |
-| [`dls-e2-tenant-only`](../pipelines/dls-e2-tenant-only.json)                         | `user-e2`         | Easy — single term                   |
-| [`dls-e3-static-groups`](../pipelines/dls-e3-static-groups.json)                     | `user-e3`         | Easy — static terms                  |
-| [`dls-m1-tenant-group`](../pipelines/dls-m1-tenant-group.json)                       | `user-m1`         | Moderate — 2-clause bool             |
-| [`dls-m2-full-identity`](../pipelines/dls-m2-full-identity.json)                     | `user-m2`         | Moderate — dynamic identity          |
-| [`dls-m3-identity-classification`](../pipelines/dls-m3-identity-classification.json) | `user-m3`         | Moderate — identity + classification |
-| [`dls-c1-dual-validation`](../pipelines/dls-c1-dual-validation.json)                 | `user-c1`         | Complex — AND validation             |
-| [`dls-c3-large-users-list`](../pipelines/dls-c3-large-users-list.json)               | `user-c3`         | Complex — 50-entry terms list        |
-| [`dls-c5-multi-tenant`](../pipelines/dls-c5-multi-tenant.json)                       | `user-c5`         | Complex — multi-tenant               |
-| [`dls-c8-no-classification`](../pipelines/dls-c8-no-classification.json)             | `dave-contractor` | Complex — must_not exists            |
+| Pipeline                                                 | User                | Persona                      | ~Visible |
+| -------------------------------------------------------- | ------------------- | ---------------------------- | -------- |
+| [`dls-unrestricted`](../pipelines/dls-unrestricted.json) | `user-unrestricted` | No DLS baseline              | ~100%    |
+| [`dls-role-group`](../pipelines/dls-role-group.json)     | `user-role-group`   | Role + group                 | ~64%     |
+| [`dls-group-only`](../pipelines/dls-group-only.json)     | `user-group-only`   | Group match only             | ~40%     |
+| [`dls-group-name`](../pipelines/dls-group-name.json)     | `user-group-name`   | Group + username             | ~40%     |
+| [`dls-role-only`](../pipelines/dls-role-only.json)       | `user-role-only`    | Role match only              | ~32%     |
+| [`dls-name-only`](../pipelines/dls-name-only.json)       | `user-name-only`    | Username match only          | ~10%     |
+| [`dls-classified`](../pipelines/dls-classified.json)     | `user-classified`   | Group + restricted clearance | ~6%      |
+| [`dls-ultrastrict`](../pipelines/dls-ultrastrict.json)   | `user-ultrastrict`  | Username + hard restricted   | ~1%      |
 
-### ACL complete / smoke pipelines
-
-These pipelines build the index and run search as `user-e1` (no DLS filter) to measure the raw cost of operating under the ACL index template.
-
-| Pipeline                                                                   | Corpus            | Description                            |
-| -------------------------------------------------------------------------- | ----------------- | -------------------------------------- |
-| [`complete-1m-acl`](../pipelines/complete-1m-acl.json)                     | 1M wiki + msmarco | Full build + search on both datasets   |
-| [`complete-1m-acl-wiki-only`](../pipelines/complete-1m-acl-wiki-only.json) | 1M wiki only      | Smoke test — quick single-dataset run  |
-| [`search-1m-acl`](../pipelines/search-1m-acl.json)                         | 1M wiki + msmarco | Search-only (index must already exist) |
-
-## How a pipeline run works
+## How a Pipeline Run Works
 
 ```
 run-pipeline.sh --pipeline dls-sweep-1m jvector
@@ -150,63 +208,54 @@ run-pipeline.sh --pipeline dls-sweep-1m jvector
        ▼
 1. Read pipelines/dls-sweep-1m.json
    Replace __ENGINE__ → jvector
-   Read top-level "params" (corpus_size, etc.)
 
-2. For each step in "steps":
+2. For each step:
    a. Merge pipeline params + step params
    b. Auto-derive target_index_name from corpus_size
-   c. Auto-derive num_vectors for ingest/search steps
-   d. Build label:  wiki-en-768-1m-vector-search-k10   (unique per step)
-   e. Hoist step_username / step_password to top-level
+   c. Hoist step_username / step_password to top-level
       (never forwarded to OSB as workload variables)
 
 3. POST /api/v1/benchmark/batch  {engine, tests:[...]}
        │
        ▼
-4. app.py  (worker pod)
+4. app.py (worker pod)
    For each test:
    a. Validate scenario exists in config/datasets.yaml
-   b. Merge params from datasets.yaml defaults
-   c. Call benchmark_runner.run_benchmark(scenario=procedure_name,
-                                          workload_params=merged_params)
+   b. Call benchmark_runner.run_benchmark(...)
 
 5. benchmark_runner.py
    a. Pop step_username/step_password from workload_params
       → authenticate OSB as that user for this step only
    b. Write workload-params.json (credential-free)
    c. Run:  opensearch-benchmark run
-              --workload-path ...
-              --test-procedure vector-search
               --client-options basic_auth_user:<user>,...
               --workload-params workload-params.json
 
 6. Results land in /results/<job_id>/<engine>/<scenario_key>/
-   Copied incrementally to Jenkins workspace by run-pipeline.sh
-   as each scenario completes.
 ```
 
-### Per-step authentication
+### Per-Step Authentication
 
-The key mechanism that enables per-step DLS isolation:
+The key mechanism for per-step DLS isolation:
 
 ```jsonc
 // pipeline step
 {
   "dataset": "cohere-wiki-en-768",
   "scenario": "vector-search",
-  "label": "dls-m3-identity-cls-k10-ef128",
+  "label": "dls-role-group",
   "params": {
     "query_k": 10,
     "hnsw_ef_search": 128,
-    "step_username": "user-m3",
+    "step_username": "user-role-group",
     "step_password": "BenchmarkACL-2024!",
   },
 }
 ```
 
-`run-pipeline.sh` hoists `step_username` / `step_password` out of `params` before forwarding to the API, so they are stored on the scenario entry but **never sent to OSB as workload variables**. `benchmark_runner.py` pops them from `workload_params` before writing `workload-params.json` and injects them into `--client-options` instead. Steps without `step_username` fall back to the job-level credentials (default `admin/admin`).
+`run-pipeline.sh` hoists `step_username`/`step_password` out of `params` before forwarding to the API. `benchmark_runner.py` injects them into `--client-options` only. Steps without `step_username` fall back to job-level credentials (`admin/admin`).
 
-## Jenkins integration
+## Jenkins Integration
 
 ACL setup is triggered automatically for any pipeline whose name contains `-acl` or starts with `dls-`:
 
@@ -216,9 +265,7 @@ if (pipeline.contains('-acl') || pipeline.startsWith('dls-')) {
 }
 ```
 
-The setup runs **after** the OpenSearch cluster is confirmed green and the benchmark worker pod is confirmed `Ready` — both are prerequisites because `acl-setup.sh` routes all `curl` calls through `kubectl exec` on the worker pod.
-
-**Full stage sequence for an ACL pipeline run:**
+**Full stage sequence for a DLS pipeline run:**
 
 ```
 Prepare
@@ -242,34 +289,31 @@ Run Benchmarks  (per engine, in parallel)
   └─ d)  collect server logs + telemetry
 ```
 
-## Post-ingest verification (Temporary verification. To be removed once stable as to reduce the time)
+## Post-Ingest Verification
 
 [`gke-manifest/acl-verify.sh`](../gke-manifest/acl-verify.sh) runs three checks after the benchmark completes:
 
-| Check                     | What it confirms                                                          |
-| ------------------------- | ------------------------------------------------------------------------- |
-| **A** — index settings    | `default_pipeline: acl_guard` is set on the index and `knn: true`         |
-| **B** — random doc sample | 10 random documents have all four ACL fields populated                    |
-| **C** — DLS restriction   | `user-m2` sees fewer documents than `admin` (DLS is active and selective) |
+| Check             | What it confirms                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| index settings    | `default_pipeline: acl_guard` is set on the index and `knn: true`                                                                           |
+| random doc sample | 10 random docs show heterogeneous ACL field population — some have only `access_roles`, some only `access_groups`, some only `access_users` |
+| DLS restriction   | `user-role-group` sees ~67% of docs and `user-ultrastrict` sees ~1%; pass requires `admin > role-group > ultrastrict > 0`                   |
 
-Check C is the key correctness gate: if admin and `user-m2` return the same
-count, DLS is not being applied and the benchmark results are invalid.
+Check C is the key correctness gate: if the counts do not satisfy the expected ordering, DLS is either not active or the ingest pipeline did not assign the correct access fields.
 
-## Expected visible document counts
+## Expected Visible Document Counts
 
-At 1M corpus (8 buckets × ~125 k docs each):
+At 1M corpus (100 buckets × ~10k docs each), ordered from least to most restrictive:
 
-| Role                                                      | User              | Visible buckets                 | Expected count |
-| --------------------------------------------------------- | ----------------- | ------------------------------- | -------------- |
-| E1 no DLS                                                 | `user-e1`         | all                             | ~1 M           |
-| E2 tenant_001                                             | `user-e2`         | 0, 1, 2, 3, 6                   | ~625 k         |
-| E3 grp-finance or grp-controllers                         | `user-e3`         | all                             | ~1 M           |
-| M1 tenant_001 + grp-finance                               | `user-m1`         | 0, 1, 3, 6                      | ~500 k         |
-| M2 tenant_001 + identity                                  | `user-m2`         | 0, 1, 3, 6                      | ~500 k         |
-| M3 M2 + classification=internal                           | `user-m3`         | 0, 1, 3                         | ~375 k         |
-| C1 tenant_001 + user AND group                            | `user-c1`         | none (user-c1 not in corpus)    | ~0             |
-| C3 tenant_001 + 50-user static list                       | `user-c3`         | none (list has no corpus users) | ~0             |
-| C5 (tenant_001 OR tenant_002) + identity + classification | `user-c5`         | 0, 1, 3, 4, 7                   | ~625 k         |
-| C8 tenant_001 + dave-contractor + no classification       | `dave-contractor` | 3                               | ~125 k         |
+| User                         | Visible buckets    | Expected count |
+| ---------------------------- | ------------------ | -------------- |
+| `user-unrestricted` (no DLS) | 0–99 (all)         | ~1,000,000     |
+| `user-role-group`            | 0–26, 35–64, 78–87 | ~640,000       |
+| `user-group-only`            | 35–64, 78–87       | ~400,000       |
+| `user-group-name`            | 35–64, 78–87       | ~400,000       |
+| `user-role-only`             | 0–26, 78–82        | ~320,000       |
+| `user-name-only`             | 68–77              | ~100,000       |
+| `user-classified`            | 88–93              | ~60,000        |
+| `user-ultrastrict`           | 99                 | ~10,000        |
 
-C1 and C3 returning zero documents is intentional — it measures the DLS filter evaluation cost when the filter is maximally selective (no matches), which represents the worst-case overhead scenario.
+> **Why role-group dropped from ~670k to ~640k**: Buckets 27–29 now carry `security_classification: external`. Since no user has `"external"` in their `backend_roles`, the classification clause blocks these 3 buckets (~30k docs) from all DLS users — verifying that the `external` classification gate works correctly.

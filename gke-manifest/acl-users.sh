@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
-# Creates one internal user per DLS role.
+# Creates one internal user per DLS scenario.
 #
-# Each user is mapped to exactly one role in acl-roles.sh.
-# Users whose DLS role uses ${user.roles} need a backend_role that matches
-# the corpus access_groups values (grp-finance).
-# Users whose DLS role uses only static values need no backend_roles.
+# Each user's backend_roles simulates their JWT claims in production:
+#   - backend_roles values that match corpus access_roles/access_groups fields
+#     are matched via ${user.roles} expansion in the dls-standard filter
+#   - The username itself matches corpus access_users fields via ${user.name}
+#   - Classification clearance is encoded as the classification level string
+#     inside backend_roles (e.g. "restricted") — the DLS filter expands
+#     terms: security_classification: ${user.roles} which then matches docs
+#     whose security_classification field equals that value
+#
+# User -> backend_roles -> what they can see:
+#   user-unrestricted  ["grp-broad"]                      no DLS (dls-baseline role)
+#   user-role-only     ["role-svc"]                       access_roles:role-svc docs (~35%)
+#   user-group-only    ["grp-finance"]                    access_groups:grp-finance docs (~40%)
+#   user-name-only     []                                 access_users:user-name-only docs (~10%)
+#   user-role-group    ["role-svc","grp-finance"]          role-svc OR grp-finance docs (~67%)
+#   user-group-name    ["grp-finance"]                    grp-finance docs + user-group-name docs (~40%)
+#   user-classified    ["grp-restricted","restricted"]    grp-restricted docs, restricted clearance (~6%)
+#   user-ultrastrict   []                                 access_users:user-ultrastrict + restricted only (~1%)
 
 set -euo pipefail
 
@@ -29,22 +43,18 @@ create_user() {
 
 echo "[acl-users] Creating users..."
 
-# Static-filter roles — DLS does not reference ${user.roles}
-# backend_roles must still match the role mapping so the user inherits the role
-create_user user-e1  '["grp-finance-readers"]'
-create_user user-e2  '["grp-finance-readers"]'
-create_user user-e3  '["grp-finance-readers"]'
-create_user user-m1  '["grp-finance-readers"]'
-create_user user-c3  '["grp-finance-readers"]'
+# dls-baseline role — no DLS, backend_roles just satisfies role mapping
+create_user user-unrestricted '["grp-broad"]'
 
-# Dynamic-filter roles — DLS expands ${user.roles}; backend_roles must match
-# role mapping backend_roles exactly so ${user.roles} expands to the right values
-create_user user-m2  '["grp-finance-readers","grp-all-employees","role-employee"]'
-create_user user-m3  '["grp-finance-readers","grp-all-employees","role-employee"]'
-create_user user-c1  '["grp-finance-readers","grp-all-employees"]'
-create_user user-c5  '["grp-finance-readers","grp-all-employees","role-employee"]'
+# dls-standard role — backend_roles = simulated JWT claims
+create_user user-role-only   '["role-svc"]'
+create_user user-group-only  '["grp-finance"]'
+create_user user-name-only   '[]'
+create_user user-role-group  '["role-svc","grp-finance"]'
+create_user user-group-name  '["grp-finance"]'
+create_user user-classified  '["grp-restricted","restricted"]'
 
-# C8 contractor — matched by ${user.name} = "dave-contractor" in corpus access_users
-create_user dave-contractor '[]'
+# dls-ultrastrict role — identity-only match, hard restricted classification required
+create_user user-ultrastrict '[]'
 
 echo "[acl-users] Done."
