@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
-# Creates 3 DLS roles and their role mappings.
+# Creates 8 user-specific DLS roles and their role mappings.
 #
-# Design: one production-equivalent dynamic DLS filter (dls-standard) is shared
-# by all non-baseline users. Each user's backend_roles simulates their JWT claims.
-# ${user.roles} expands to the individual user's own backend_roles at query time —
-# not the combined list in the role mapping. The role mapping backend_roles is only
-# the inheritance gate (which users may assume this role).
+# Design: Each user gets a dedicated role (not shared) so OpenSearch does not
+# create a union of backend_roles. This matches production where each user/service
+# account would have a specific role with their own DLS filter.
 #
-# Role -> User mapping:
-#   dls-baseline     -> user-unrestricted  (no DLS filter — raw baseline)
-#   dls-standard     -> user-role-only     (backend_roles: [role-svc])
-#                    -> user-group-only    (backend_roles: [grp-finance])
-#                    -> user-name-only     (backend_roles: [], matched by username)
-#                    -> user-role-group    (backend_roles: [role-svc, grp-finance])
-#                    -> user-group-name    (backend_roles: [grp-finance], also matched by username)
-#                    -> user-classified    (backend_roles: [grp-restricted, restricted])
-#   dls-ultrastrict  -> user-ultrastrict   (no backend_roles; hard classification requirement)
+# Each role defines a DLS filter that expands ${user.roles} and ${user.name}
+# at query time to the user's specific backend_roles and username.
+#
+# Role -> User mapping (one-to-one):
+#   dls-baseline        -> user-unrestricted  (no DLS filter — raw baseline)
+#   dls-role-only       -> user-role-only     (backend_roles: [role-svc])
+#   dls-group-only      -> user-group-only    (backend_roles: [grp-finance])
+#   dls-name-only       -> user-name-only     (backend_roles: [] — identity-only, no classification in buckets 68–77)
+#   dls-role-group      -> user-role-group    (backend_roles: [role-svc, grp-finance])
+#   dls-group-name      -> user-group-name    (backend_roles: [grp-finance])
+#   dls-classified      -> user-classified    (backend_roles: [grp-restricted, restricted])
+#   dls-ultrastrict     -> user-ultrastrict   (backend_roles: [restricted] — identity-only BUT must have restricted clearance for bucket 99)
 #
 # Expected visible doc counts at 1M (each _id%100 bucket ~10k docs) — least → most restrictive:
 #   user-unrestricted  -> ~1M   (no DLS)
@@ -75,29 +76,80 @@ put_role dls-baseline "{
 put_mapping dls-baseline '{"backend_roles":["grp-broad"],"users":["user-unrestricted"]}'
 echo "  dls-baseline -> user-unrestricted"
 
-# ── dls-standard: production-equivalent dynamic filter ────────────────────────
-# Shared by 6 users. Each user's own backend_roles drives which docs they see.
-# Access clause:       (access_roles OR access_groups matches ${user.roles})
-#                   OR (access_users = ${user.name})
-# Classification:      (security_classification in ${user.roles})
-#                   OR (security_classification absent)
-# Single-quoted outer string prevents shell expanding ${user.roles}/${user.name}.
-put_role dls-standard '{
+# ── dls-role-only: user-role-only (backend_roles: [role-svc]) ─────────────────
+put_role dls-role-only '{
   "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
   "index_permissions": [{
     "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
-    "dls": "{\"bool\":{\"filter\":[{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":${user.roles}}},{\"terms\":{\"access_groups\":${user.roles}}},{\"term\":{\"access_users\":\"${user.name}\"}}],\"minimum_should_match\":1}},{\"bool\":{\"should\":[{\"terms\":{\"security_classification\":${user.roles}}},{\"bool\":{\"must_not\":{\"exists\":{\"field\":\"security_classification\"}}}}],\"minimum_should_match\":1}}]}}",
+    "dls": "{\"bool\":{\"filter\":[{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"term\":{\"access_users\":\"${user.name}\"}}],\"minimum_should_match\":1}},{\"bool\":{\"should\":[{\"terms\":{\"security_classification\":[${user.roles}]}},{\"bool\":{\"must_not\":{\"exists\":{\"field\":\"security_classification\"}}}}],\"minimum_should_match\":1}}]}}",
     "allowed_actions": ["read","search","indices:monitor/stats"]
   }]
 }'
-# backend_roles in mapping = union of all 6 users' backend_roles values
-# (inheritance gate only — DLS expansion uses each user's own backend_roles at query time)
-# "external" included so any future user with external clearance can inherit this role.
-put_mapping dls-standard '{"backend_roles":["role-svc","grp-finance","grp-restricted","restricted","external"],"users":["user-role-only","user-group-only","user-name-only","user-role-group","user-group-name","user-classified"]}'
-echo "  dls-standard -> user-role-only, user-group-only, user-name-only, user-role-group, user-group-name, user-classified"
+put_mapping dls-role-only '{"backend_roles":["role-svc"],"users":["user-role-only"]}'
+echo "  dls-role-only -> user-role-only"
 
-# ── dls-ultrastrict: hard classification requirement, no absent fallback ───────
-# access_users must match ${user.name} AND security_classification must = restricted.
+# ── dls-group-only: user-group-only (backend_roles: [grp-finance]) ────────────
+put_role dls-group-only '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"term\":{\"access_users\":\"${user.name}\"}}],\"minimum_should_match\":1}},{\"bool\":{\"should\":[{\"terms\":{\"security_classification\":[${user.roles}]}},{\"bool\":{\"must_not\":{\"exists\":{\"field\":\"security_classification\"}}}}],\"minimum_should_match\":1}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats"]
+  }]
+}'
+put_mapping dls-group-only '{"backend_roles":["grp-finance"],"users":["user-group-only"]}'
+echo "  dls-group-only -> user-group-only"
+
+# ── dls-name-only: user-name-only (backend_roles: [] — identity-only) ─────────
+put_role dls-name-only '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"term\":{\"access_users\":\"${user.name}\"}}],\"minimum_should_match\":1}},{\"bool\":{\"should\":[{\"terms\":{\"security_classification\":[${user.roles}]}},{\"bool\":{\"must_not\":{\"exists\":{\"field\":\"security_classification\"}}}}],\"minimum_should_match\":1}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats"]
+  }]
+}'
+put_mapping dls-name-only '{"backend_roles":[],"users":["user-name-only"]}'
+echo "  dls-name-only -> user-name-only"
+
+# ── dls-role-group: user-role-group (backend_roles: [role-svc, grp-finance]) ──
+put_role dls-role-group '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"term\":{\"access_users\":\"${user.name}\"}}],\"minimum_should_match\":1}},{\"bool\":{\"should\":[{\"terms\":{\"security_classification\":[${user.roles}]}},{\"bool\":{\"must_not\":{\"exists\":{\"field\":\"security_classification\"}}}}],\"minimum_should_match\":1}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats"]
+  }]
+}'
+put_mapping dls-role-group '{"backend_roles":["role-svc","grp-finance"],"users":["user-role-group"]}'
+echo "  dls-role-group -> user-role-group"
+
+# ── dls-group-name: user-group-name (backend_roles: [grp-finance]) ───────────
+put_role dls-group-name '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"term\":{\"access_users\":\"${user.name}\"}}],\"minimum_should_match\":1}},{\"bool\":{\"should\":[{\"terms\":{\"security_classification\":[${user.roles}]}},{\"bool\":{\"must_not\":{\"exists\":{\"field\":\"security_classification\"}}}}],\"minimum_should_match\":1}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats"]
+  }]
+}'
+put_mapping dls-group-name '{"backend_roles":["grp-finance"],"users":["user-group-name"]}'
+echo "  dls-group-name -> user-group-name"
+
+# ── dls-classified: user-classified (backend_roles: [grp-restricted, restricted]) ─
+put_role dls-classified '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"term\":{\"access_users\":\"${user.name}\"}}],\"minimum_should_match\":1}},{\"bool\":{\"should\":[{\"terms\":{\"security_classification\":[${user.roles}]}},{\"bool\":{\"must_not\":{\"exists\":{\"field\":\"security_classification\"}}}}],\"minimum_should_match\":1}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats"]
+  }]
+}'
+put_mapping dls-classified '{"backend_roles":["grp-restricted","restricted"],"users":["user-classified"]}'
+echo "  dls-classified -> user-classified"
+
+# ── dls-ultrastrict: user-ultrastrict (backend_roles: [] — hard classification) ──
+# Hard filter: access_users MUST match AND security_classification MUST = restricted.
 # No must_not exists fallback — user sees ONLY restricted-classified docs (~1%).
 put_role dls-ultrastrict '{
   "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
@@ -107,7 +159,7 @@ put_role dls-ultrastrict '{
     "allowed_actions": ["read","search","indices:monitor/stats"]
   }]
 }'
-put_mapping dls-ultrastrict '{"backend_roles":[],"users":["user-ultrastrict"]}'
+put_mapping dls-ultrastrict '{"backend_roles":["restricted"],"users":["user-ultrastrict"]}'
 echo "  dls-ultrastrict -> user-ultrastrict"
 
 echo "[acl-roles] Done."
