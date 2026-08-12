@@ -1,0 +1,11 @@
+{
+  "description": "DLS group-only persona — user-group-only has backend_roles:[grp-finance], no role claims. Matches docs with access_groups:grp-finance (~40% of corpus, buckets 35–64 and 78–87). Simulates a team member accessed purely via group membership. Index must exist from a prior build run.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-group-only-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-group-only", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-group-only-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-group-only", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-group-only-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-group-only", "step_password": "BenchmarkACL-2024!" } }
+  ]
+}

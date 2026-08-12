@@ -1,30 +1,51 @@
 #!/usr/bin/env bash
 # Installs the acl_guard ingest pipeline and the index template that attaches it.
 #
-# The pipeline assigns four ACL fields to every document using _id % 8 buckets:
-#   tenant_id, access_groups, access_users, security_classification
+# The pipeline assigns ACL fields to every document using _id % 100 buckets.
+# Each bucket = 1% of corpus (~10k docs at 1M, ~50k docs at 5M).
 #
-# Bucket layout (~125k docs each at 1M corpus):
-#   0: tenant_001  grp-finance + grp-finance-readers + grp-controllers  internal
-#   1: tenant_001  grp-finance + grp-finance-readers                    internal
-#   2: tenant_001  grp-controllers                                       internal
-#   3: tenant_001  grp-finance + grp-finance-readers  dave-contractor   (no classification)
-#   4: tenant_002  grp-finance + grp-finance-readers                    internal
-#   5: tenant_002  grp-controllers                                       internal
-#   6: tenant_001  grp-finance + grp-finance-readers                    restricted
-#   7: tenant_002  grp-finance + grp-finance-readers                    (no classification)
+# Documents receive ONLY the access field(s) relevant to their bucket — not all
+# three fields on every doc. This mirrors production where documents carry only
+# the access metadata set at write time.
 #
-# Expected visible counts per DLS role at 1M:
-#   E1 no DLS                        -> 1M
-#   E2 tenant_001                    -> ~625k  (buckets 0-3, 6)
-#   E3 grp-finance/grp-controllers   -> ~1M    (all buckets: grp-finance in 0,1,3,4,6,7; grp-controllers in 0,2,5)
-#   M1 tenant_001+grp-finance        -> ~500k  (buckets 0,1,3,6)
-#   M2 tenant_001+identity           -> ~500k  (buckets 0,1,3,6 via grp-finance-readers)
-#   M3 tenant_001+identity+class     -> ~375k  (buckets 0,1,3)
-#   C1 tenant_001+user+group         -> 0      (user-c1 not in corpus access_users)
-#   C3 tenant_001+50-user list       -> 0      (no corpus user in static list)
-#   C5 tenant_001/002+identity+class -> ~625k  (buckets 0,1,3,4,7 via grp-finance-readers)
-#   C8 tenant_001+dave-contractor+no-classification -> ~125k (bucket 3)
+# Access value vocabulary:
+#   access_roles:  role-svc
+#   access_groups: grp-finance, grp-restricted
+#   access_users:  user-name-only, user-group-name, user-ultrastrict
+#   security_classification: internal, external, restricted
+#
+# Bucket layout (bucket = _id % 100):
+#   0–26  : access_roles=[role-svc]                                          (no classification)
+#   27–29 : access_roles=[role-svc]                                          classification=external
+#   30–34 : access_roles=[role-svc]                                          classification=internal
+#   35–64 : access_groups=[grp-finance]                                      (no classification)
+#   65–67 : access_groups=[grp-finance]                                      classification=internal
+#   68–77 : access_users=[user-name-only]                                    (no classification)
+#   78–82 : access_roles=[role-svc], access_groups=[grp-finance]             (no classification)
+#   83–87 : access_groups=[grp-finance], access_users=[user-group-name]      (no classification)
+#   88–92 : access_groups=[grp-restricted]                                   (no classification)
+#   93    : access_groups=[grp-restricted]                                   classification=restricted
+#   94–98 : access_users=[user-ultrastrict]                                  (no classification)
+#   99    : access_users=[user-ultrastrict]                                  classification=restricted
+#
+# Classification breakdown (~11% of corpus):
+#   external:   buckets 27–29                                                = 3 buckets
+#   internal:   buckets 30–34 + 65–67                                        = 8 buckets
+#   restricted: buckets 93, 99                                               = 2 buckets
+#   Total classified: 13 buckets (~13%).  No benchmark user holds external
+#   or internal clearance — these docs are visible only to user-unrestricted
+#   (admin/no-DLS). They verify the DLS filter correctly blocks classified
+#   docs when the user lacks the matching clearance value in backend_roles.
+#
+# Expected visible doc counts per DLS user at 1M (each bucket ~10k docs):
+#   user-unrestricted (no DLS)                         -> ~1M   (all buckets)
+#   user-role-group   (role-svc + grp-finance)         -> ~640k (buckets 0–26, 35–64, 78–87; external+internal blocked)
+#   user-group-only   (grp-finance)                    -> ~400k (buckets 35–64, 78–87; internal blocked)
+#   user-group-name   (grp-finance + username match)   -> ~400k (buckets 35–64, 78–87)
+#   user-role-only    (role-svc)                       -> ~320k (buckets 0–26, 78–82; external+internal blocked)
+#   user-name-only    (username match)                 -> ~100k (buckets 68–77)
+#   user-classified   (grp-restricted + restricted)    -> ~60k  (buckets 88–93)
+#   user-ultrastrict  (username + restricted, no fall) -> ~10k  (bucket 99 only)
 
 set -euo pipefail
 
@@ -40,18 +61,12 @@ echo "[acl-ingest-pipeline] Installing acl_guard pipeline..."
 os_api -X PUT "https://${OS_HOST}/_ingest/pipeline/acl_guard" \
   -H "Content-Type: application/json" \
   -d '{
-    "description": "Assigns tenant_id, access_groups, access_users, security_classification from _id mod 8.",
+    "description": "Assigns heterogeneous ACL fields from _id mod 100. Each bucket sets only the access field(s) relevant to that segment, simulating realistic production document metadata.",
     "processors": [
-      { "lowercase": { "field": "access_roles",  "ignore_missing": true } },
-      { "trim":      { "field": "access_roles",  "ignore_missing": true } },
-      { "lowercase": { "field": "access_groups", "ignore_missing": true } },
-      { "trim":      { "field": "access_groups", "ignore_missing": true } },
-      { "lowercase": { "field": "access_users",  "ignore_missing": true } },
-      { "trim":      { "field": "access_users",  "ignore_missing": true } },
       {
         "script": {
           "lang": "painless",
-          "source": "for (def f : [\"access_roles\",\"access_groups\",\"access_users\"]) { if (ctx.containsKey(f) && ctx[f] != null) { ctx[f].removeIf(v -> v == null || v == \"\"); } } boolean missing = (ctx.access_roles == null || ctx.access_roles.isEmpty()) && (ctx.access_groups == null || ctx.access_groups.isEmpty()) && (ctx.access_users == null || ctx.access_users.isEmpty()); if (missing) { long id = Long.parseLong(ctx._id); int b = (int)(id % 8); if (b == 0) { ctx.tenant_id = \"tenant_001\"; ctx.access_groups = [\"grp-finance\",\"grp-finance-readers\",\"grp-controllers\"]; ctx.security_classification = \"internal\"; } else if (b == 1) { ctx.tenant_id = \"tenant_001\"; ctx.access_groups = [\"grp-finance\",\"grp-finance-readers\"]; ctx.security_classification = \"internal\"; } else if (b == 2) { ctx.tenant_id = \"tenant_001\"; ctx.access_groups = [\"grp-controllers\"]; ctx.security_classification = \"internal\"; } else if (b == 3) { ctx.tenant_id = \"tenant_001\"; ctx.access_groups = [\"grp-finance\",\"grp-finance-readers\"]; ctx.access_users = [\"dave-contractor\"]; } else if (b == 4) { ctx.tenant_id = \"tenant_002\"; ctx.access_groups = [\"grp-finance\",\"grp-finance-readers\"]; ctx.security_classification = \"internal\"; } else if (b == 5) { ctx.tenant_id = \"tenant_002\"; ctx.access_groups = [\"grp-controllers\"]; ctx.security_classification = \"internal\"; } else if (b == 6) { ctx.tenant_id = \"tenant_001\"; ctx.access_groups = [\"grp-finance\",\"grp-finance-readers\"]; ctx.security_classification = \"restricted\"; } else { ctx.tenant_id = \"tenant_002\"; ctx.access_groups = [\"grp-finance\",\"grp-finance-readers\"]; } }"
+          "source": "long id = Long.parseLong(ctx._id); int b = (int)(id % 100); if (b >= 0 && b <= 26) { ctx.access_roles = [\"role-svc\"]; } else if (b >= 27 && b <= 29) { ctx.access_roles = [\"role-svc\"]; ctx.security_classification = \"external\"; } else if (b >= 30 && b <= 34) { ctx.access_roles = [\"role-svc\"]; ctx.security_classification = \"internal\"; } else if (b >= 35 && b <= 64) { ctx.access_groups = [\"grp-finance\"]; } else if (b >= 65 && b <= 67) { ctx.access_groups = [\"grp-finance\"]; ctx.security_classification = \"internal\"; } else if (b >= 68 && b <= 77) { ctx.access_users = [\"user-name-only\"]; } else if (b >= 78 && b <= 82) { ctx.access_roles = [\"role-svc\"]; ctx.access_groups = [\"grp-finance\"]; } else if (b >= 83 && b <= 87) { ctx.access_groups = [\"grp-finance\"]; ctx.access_users = [\"user-group-name\"]; } else if (b >= 88 && b <= 92) { ctx.access_groups = [\"grp-restricted\"]; } else if (b == 93) { ctx.access_groups = [\"grp-restricted\"]; ctx.security_classification = \"restricted\"; } else if (b >= 94 && b <= 98) { ctx.access_users = [\"user-ultrastrict\"]; } else { ctx.access_users = [\"user-ultrastrict\"]; ctx.security_classification = \"restricted\"; }"
         }
       }
     ]
@@ -70,9 +85,8 @@ os_api -X PUT "https://${OS_HOST}/_index_template/acl-benchmark-template" \
       },
       "mappings": {
         "properties": {
-          "tenant_id":               { "type": "keyword" },
-          "access_groups":           { "type": "keyword" },
           "access_roles":            { "type": "keyword" },
+          "access_groups":           { "type": "keyword" },
           "access_users":            { "type": "keyword" },
           "security_classification": { "type": "keyword" }
         }

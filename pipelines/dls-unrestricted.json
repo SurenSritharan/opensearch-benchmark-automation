@@ -1,0 +1,11 @@
+{
+  "description": "DLS baseline — no DLS filter. user-unrestricted has no access restriction; sees 100% of docs. Measures raw vector search latency with zero DLS overhead. Index must exist from a prior build run.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-unrestricted-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-unrestricted", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-unrestricted-k10-ef256",  "params": { "query_k": 10,  "hnsw_ef_search": 256, "step_username": "user-unrestricted", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-unrestricted-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-unrestricted", "step_password": "BenchmarkACL-2024!" } }
+  ]
+}

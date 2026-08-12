@@ -3,8 +3,12 @@
 #
 # Confirms:
 #   A - index was created with default_pipeline: acl_guard
-#   B - 10 random docs have ACL fields populated
-#   C - DLS is restrictive: user-m2 sees fewer docs than admin
+#   B - 10 random docs show heterogeneous ACL field population
+#       (some docs have only access_roles, some only access_groups, some only access_users)
+#   C - DLS is active and the full restrictiveness gradient is correct:
+#       admin (no DLS)        > role-group (~64%) > name-only (~10%)
+#                             > classified (~6%)  > ultrastrict (~1%)
+#       Pass condition: admin > role-group > name-only > classified > ultrastrict > 0
 
 set -euo pipefail
 
@@ -25,36 +29,54 @@ os_api "https://${OS_HOST}/${INDEX}/_settings" 2>/dev/null \
   2>/dev/null || echo "(index not found)"
 
 echo ""
-echo "--- B: 10 random docs — ACL field presence ---"
+echo "--- B: 10 random docs — ACL field presence (heterogeneous expected) ---"
 os_api -X POST "https://${OS_HOST}/${INDEX}/_search" \
   -H "Content-Type: application/json" \
   -d '{
     "size": 10,
-    "_source": ["tenant_id","access_groups","access_users","security_classification"],
+    "_source": ["access_roles","access_groups","access_users","security_classification"],
     "query": { "function_score": { "query": { "match_all": {} }, "random_score": {} } }
   }' 2>/dev/null \
   | jq -r '
     "total docs: \(.hits.total.value)",
-    (.hits.hits[] | "  _id=\(._id)  tenant=\(._source.tenant_id // "-")  groups=\(._source.access_groups // [])  users=\(._source.access_users // [])  class=\(._source.security_classification // "-")")
+    (.hits.hits[] | "  _id=\(._id)  roles=\(._source.access_roles // [])  groups=\(._source.access_groups // [])  users=\(._source.access_users // [])  class=\(._source.security_classification // "-")")
   ' 2>/dev/null || echo "(index empty or not found)"
 
 echo ""
-echo "--- C: doc count — admin vs user-m2 (M2 DLS: tenant_001 + grp-finance) ---"
+echo "--- C: doc count — full restrictiveness gradient ---"
+count_as() {
+    local user="$1"
+    kubectl exec -n "$WORKER_NS" "$WORKER_POD" -c worker -- \
+        curl -sk -u "${user}:BenchmarkACL-2024!" \
+        "https://${OS_HOST}/${INDEX}/_count" \
+        2>/dev/null | jq -r '.count // "N/A"' 2>/dev/null || echo "N/A"
+}
+
 ADMIN_COUNT=$(os_api "https://${OS_HOST}/${INDEX}/_count" \
   2>/dev/null | jq -r '.count // "N/A"' 2>/dev/null || echo "N/A")
-M2_COUNT=$(kubectl exec -n "$WORKER_NS" "$WORKER_POD" -c worker -- \
-  curl -sk -u "user-m2:BenchmarkACL-2024!" \
-  "https://${OS_HOST}/${INDEX}/_count" \
-  2>/dev/null | jq -r '.count // "N/A"' 2>/dev/null || echo "N/A")
+ROLEGROUP_COUNT=$(count_as "user-role-group")
+NAMEONLY_COUNT=$(count_as "user-name-only")
+CLASSIFIED_COUNT=$(count_as "user-classified")
+ULTRASTRICT_COUNT=$(count_as "user-ultrastrict")
 
-echo "  admin:  ${ADMIN_COUNT}"
-echo "  user-m2: ${M2_COUNT}  (expected ~500k)"
+echo "  admin (no DLS):   ${ADMIN_COUNT}"
+echo "  user-role-group:  ${ROLEGROUP_COUNT}  (expected ~640k at 1M — role-svc+grp-finance, no ext/int clearance)"
+echo "  user-name-only:   ${NAMEONLY_COUNT}  (expected ~100k at 1M — username match only)"
+echo "  user-classified:  ${CLASSIFIED_COUNT}  (expected ~60k  at 1M — grp-restricted + restricted clearance)"
+echo "  user-ultrastrict: ${ULTRASTRICT_COUNT}  (expected ~10k  at 1M — hard restricted, no absent fallback)"
 
-if [ "$ADMIN_COUNT" != "N/A" ] && [ "$M2_COUNT" != "N/A" ] && [ "$ADMIN_COUNT" != "0" ]; then
-    if [ "$ADMIN_COUNT" -gt "$M2_COUNT" ] 2>/dev/null; then
-        echo "  PASS — DLS is restrictive"
+if [ "$ADMIN_COUNT" != "N/A" ] && [ "$ROLEGROUP_COUNT" != "N/A" ] && \
+   [ "$NAMEONLY_COUNT" != "N/A" ] && [ "$CLASSIFIED_COUNT" != "N/A" ] && \
+   [ "$ULTRASTRICT_COUNT" != "N/A" ] && [ "$ADMIN_COUNT" != "0" ]; then
+    if [ "$ADMIN_COUNT" -gt "$ROLEGROUP_COUNT" ] 2>/dev/null && \
+       [ "$ROLEGROUP_COUNT" -gt "$NAMEONLY_COUNT" ] 2>/dev/null && \
+       [ "$NAMEONLY_COUNT" -gt "$CLASSIFIED_COUNT" ] 2>/dev/null && \
+       [ "$CLASSIFIED_COUNT" -gt "$ULTRASTRICT_COUNT" ] 2>/dev/null && \
+       [ "$ULTRASTRICT_COUNT" -gt 0 ] 2>/dev/null; then
+        echo "  PASS — full gradient confirmed (admin > role-group > name-only > classified > ultrastrict > 0)"
     else
-        echo "  FAIL — DLS not restrictive (same count for both users)"
+        echo "  FAIL — DLS counts do not satisfy expected gradient ordering"
+        echo "         Expected: admin > role-group > name-only > classified > ultrastrict > 0"
     fi
 else
     echo "  SKIP — could not compare counts (index may be empty)"
