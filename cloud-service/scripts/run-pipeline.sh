@@ -156,10 +156,18 @@ while IFS= read -r raw_step; do
   step_profile=$(echo "$raw_step" | jq '.profile // null')
 
   # Merge: pipeline-level params first, then step-level params override
-  merged_params=$(jq -n \
+  base_params=$(jq -n \
     --argjson pipeline "$PIPELINE_PARAMS" \
     --argjson step     "$step_params" \
     '$pipeline + $step')
+
+  # Iterate over parameter_sweeps; fall back to a single pass with base params.
+  while IFS= read -r sweep_entry; do
+    sweep_overrides=$(echo "$sweep_entry" | jq '.params // {}')
+    merged_params=$(jq -n \
+      --argjson base  "$base_params" \
+      --argjson sweep "$sweep_overrides" \
+      '$base + $sweep')
 
   corpus_size=$(echo "$merged_params" | jq -r '.corpus_size // ""')
 
@@ -202,6 +210,8 @@ while IFS= read -r raw_step; do
      | if $step_profile != null then .profile = $step_profile else . end')
 
   TESTS_JSON=$(echo "$TESTS_JSON" | jq --argjson t "$test_entry" '. + [$t]')
+
+  done < <(echo "$raw_step" | jq -c 'if .parameter_sweeps | length > 0 then .parameter_sweeps[] else {} end')
 
 done < <(echo "$EFFECTIVE_STEPS" | jq -c '.[]')
 

@@ -9,10 +9,6 @@
     {
       "dataset": "cohere-msmarco-1024",
       "scenario": "delete-index",
-      "params": {
-        "hnsw_ef_construction": 64,
-        "hnsw_m": 8
-      },
       "parameter_sweeps": [
         { "params": { "hnsw_ef_construction": 32, "hnsw_m": 8 } },
         { "params": { "hnsw_ef_construction": 32, "hnsw_m": 16 } },
@@ -35,10 +31,6 @@
     {
       "dataset": "cohere-msmarco-1024",
       "scenario": "create-index",
-      "params": {
-        "hnsw_ef_construction": 64,
-        "hnsw_m": 8
-      },
       "parameter_sweeps": [
         { "params": { "hnsw_ef_construction": 32, "hnsw_m": 8 } },
         { "params": { "hnsw_ef_construction": 32, "hnsw_m": 16 } },
@@ -63,9 +55,7 @@
       "dataset": "cohere-msmarco-1024",
       "scenario": "bulk-ingest-data",
       "params": {
-        "target_index_bulk_size": 5000,
-        "hnsw_ef_construction": 64,
-        "hnsw_m": 8
+        "target_index_bulk_size": 5000
       },
       "parameter_sweeps": [
         { "params": { "hnsw_ef_construction": 32, "hnsw_m": 8 } },
@@ -89,10 +79,6 @@
     {
       "dataset": "cohere-msmarco-1024",
       "scenario": "force-merge",
-      "params": {
-        "hnsw_ef_construction": 64,
-        "hnsw_m": 8
-      },
       "parameter_sweeps": [
         { "params": { "hnsw_ef_construction": 32, "hnsw_m": 8 } },
         { "params": { "hnsw_ef_construction": 32, "hnsw_m": 16 } },
