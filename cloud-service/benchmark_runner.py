@@ -548,7 +548,7 @@ class BenchmarkRunner:
 
         Returns a CompletedProcess with the exit code, stdout, and stderr.
         """
-        TIMEOUT_SECONDS    = 21600   # 6-hour hard limit
+        TIMEOUT_SECONDS    = 28800   # 8-hour hard limit
         POLL_INTERVAL      = 1.0     # seconds between loop iterations
         HEALTH_INTERVAL    = 60.0    # seconds between cluster health checks
         RED_TOLERANCE      = 5       # consecutive connection failures → kill
