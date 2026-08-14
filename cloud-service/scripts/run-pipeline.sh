@@ -106,6 +106,11 @@ LOG_LEVEL="${CLI_LOG_LEVEL:-$(echo "$PIPELINE_JSON" | jq -r '.log_level // ""')}
 # Top-level pipeline params merged into every step (later keys win)
 PIPELINE_PARAMS=$(echo "$PIPELINE_JSON" | jq '.params // {}')
 
+# Top-level parameter_sweeps: if present, the entire steps[] is run once per
+# sweep entry with that sweep's params merged on top of PIPELINE_PARAMS.
+# Falls back to a single pass (empty sweep) when not defined — fully backward compatible.
+PIPELINE_SWEEPS=$(echo "$PIPELINE_JSON" | jq 'if (.parameter_sweeps | length) > 0 then .parameter_sweeps else [{}] end')
+
 # Cluster credentials — read from pipeline params (fall back to empty string = server default)
 USERNAME=$(echo "$PIPELINE_PARAMS" | jq -r '.username // ""')
 PASSWORD=$(echo "$PIPELINE_PARAMS" | jq -r '.password // ""')
@@ -136,7 +141,7 @@ num_vectors_for() {
 
 # ── Assemble tests[] from pipeline steps ──────────────────────────────────────
 # Each step: { "dataset", "scenario", "params" (optional) }
-# Merge order (later wins): pipeline params → step params
+# Merge order (later wins): pipeline params → top-level sweep params → step params → step-level sweep params
 # Auto-injected from corpus_size (unless already set):
 #   target_index_name, num_vectors (ingest/search only), label
 
@@ -148,6 +153,16 @@ TESTS_JSON="[]"
 # in the scenario_status dict on the server and cause results to be overwritten.
 declare -A _LABEL_SEEN
 
+# Outer loop: iterate top-level parameter_sweeps (single empty pass when none defined)
+while IFS= read -r pipeline_sweep_entry; do
+  pipeline_sweep_params=$(echo "$pipeline_sweep_entry" | jq '.params // {}')
+  # Merge pipeline-level params with this sweep's overrides — becomes the effective
+  # pipeline base for every step in this pass.
+  EFFECTIVE_PIPELINE_PARAMS=$(jq -n \
+    --argjson pipeline "$PIPELINE_PARAMS" \
+    --argjson sweep    "$pipeline_sweep_params" \
+    '$pipeline + $sweep')
+
 while IFS= read -r raw_step; do
   dataset=$(echo  "$raw_step" | jq -r '.dataset')
   procedure=$(echo "$raw_step" | jq -r '.scenario')
@@ -155,13 +170,13 @@ while IFS= read -r raw_step; do
   # Per-step profile flag — null means "inherit job-level enable_profiling"
   step_profile=$(echo "$raw_step" | jq '.profile // null')
 
-  # Merge: pipeline-level params first, then step-level params override
+  # Merge: effective pipeline params (already includes top-level sweep) → step params
   base_params=$(jq -n \
-    --argjson pipeline "$PIPELINE_PARAMS" \
+    --argjson pipeline "$EFFECTIVE_PIPELINE_PARAMS" \
     --argjson step     "$step_params" \
     '$pipeline + $step')
 
-  # Iterate over parameter_sweeps; fall back to a single pass with base params.
+  # Iterate over step-level parameter_sweeps; fall back to a single pass with base params.
   while IFS= read -r sweep_entry; do
     sweep_overrides=$(echo "$sweep_entry" | jq '.params // {}')
     merged_params=$(jq -n \
@@ -214,6 +229,8 @@ while IFS= read -r raw_step; do
   done < <(echo "$raw_step" | jq -c 'if .parameter_sweeps | length > 0 then .parameter_sweeps[] else {} end')
 
 done < <(echo "$EFFECTIVE_STEPS" | jq -c '.[]')
+
+done < <(echo "$PIPELINE_SWEEPS" | jq -c '.[]')
 
 unset _LABEL_SEEN
 
