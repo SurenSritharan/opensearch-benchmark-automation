@@ -106,6 +106,10 @@ LOG_LEVEL="${CLI_LOG_LEVEL:-$(echo "$PIPELINE_JSON" | jq -r '.log_level // ""')}
 # Top-level pipeline params merged into every step (later keys win)
 PIPELINE_PARAMS=$(echo "$PIPELINE_JSON" | jq '.params // {}')
 
+# Pipeline-level parameter_sweeps: each entry runs ALL steps once with its params
+# merged on top of PIPELINE_PARAMS. Falls back to a single pass when absent.
+PIPELINE_SWEEPS=$(echo "$PIPELINE_JSON" | jq '.parameter_sweeps // [{}]')
+
 # Cluster credentials — read from pipeline params (fall back to empty string = server default)
 USERNAME=$(echo "$PIPELINE_PARAMS" | jq -r '.username // ""')
 PASSWORD=$(echo "$PIPELINE_PARAMS" | jq -r '.password // ""')
@@ -148,72 +152,84 @@ TESTS_JSON="[]"
 # in the scenario_status dict on the server and cause results to be overwritten.
 declare -A _LABEL_SEEN
 
-while IFS= read -r raw_step; do
-  dataset=$(echo  "$raw_step" | jq -r '.dataset')
-  procedure=$(echo "$raw_step" | jq -r '.scenario')
-  step_params=$(echo "$raw_step" | jq '.params // {}')
-  # Per-step profile flag — null means "inherit job-level enable_profiling"
-  step_profile=$(echo "$raw_step" | jq '.profile // null')
+# Outer loop: one full pass through all steps per pipeline-level sweep entry.
+# When parameter_sweeps is absent, PIPELINE_SWEEPS is [{}] so this runs once.
+while IFS= read -r pipeline_sweep; do
+  pipeline_sweep_params=$(echo "$pipeline_sweep" | jq '.params // {}')
+  # Merge pipeline-level sweep params on top of base PIPELINE_PARAMS for this pass
+  effective_pipeline_params=$(jq -n \
+    --argjson base  "$PIPELINE_PARAMS" \
+    --argjson sweep "$pipeline_sweep_params" \
+    '$base + $sweep')
 
-  # Merge: pipeline-level params first, then step-level params override
-  base_params=$(jq -n \
-    --argjson pipeline "$PIPELINE_PARAMS" \
-    --argjson step     "$step_params" \
-    '$pipeline + $step')
+  while IFS= read -r raw_step; do
+    dataset=$(echo  "$raw_step" | jq -r '.dataset')
+    procedure=$(echo "$raw_step" | jq -r '.scenario')
+    step_params=$(echo "$raw_step" | jq '.params // {}')
+    # Per-step profile flag — null means "inherit job-level enable_profiling"
+    step_profile=$(echo "$raw_step" | jq '.profile // null')
 
-  # Iterate over parameter_sweeps; fall back to a single pass with base params.
-  while IFS= read -r sweep_entry; do
-    sweep_overrides=$(echo "$sweep_entry" | jq '.params // {}')
-    merged_params=$(jq -n \
-      --argjson base  "$base_params" \
-      --argjson sweep "$sweep_overrides" \
-      '$base + $sweep')
+    # Merge: effective pipeline params first, then step-level params override
+    base_params=$(jq -n \
+      --argjson pipeline "$effective_pipeline_params" \
+      --argjson step     "$step_params" \
+      '$pipeline + $step')
 
-  corpus_size=$(echo "$merged_params" | jq -r '.corpus_size // ""')
+    # Iterate over step-level parameter_sweeps; fall back to a single pass with base params.
+    while IFS= read -r sweep_entry; do
+      sweep_overrides=$(echo "$sweep_entry" | jq '.params // {}')
+      merged_params=$(jq -n \
+        --argjson base  "$base_params" \
+        --argjson sweep "$sweep_overrides" \
+        '$base + $sweep')
 
-  if [ -n "$corpus_size" ]; then
-    # Auto-inject target_index_name if not set
-    if [ "$(echo "$merged_params" | jq 'has("target_index_name")')" = "false" ]; then
-      merged_params=$(echo "$merged_params" | jq --arg v "${dataset}-${corpus_size}" '.target_index_name = $v')
-    fi
-    # Auto-inject num_vectors for ingest and search steps
-    if [ "$(echo "$merged_params" | jq 'has("num_vectors")')" = "false" ]; then
-      case "$procedure" in
-        bulk-ingest-data|vector-search)
-          merged_params=$(echo "$merged_params" | jq --argjson v "$(num_vectors_for "$corpus_size")" '.num_vectors = $v')
-          ;;
-      esac
-    fi
-  fi
+      corpus_size=$(echo "$merged_params" | jq -r '.corpus_size // ""')
 
-  # Build label from dataset (strip "cohere-"), corpus_size, and procedure
-  dataset_short="${dataset#cohere-}"
-  label="${dataset_short}-${corpus_size}-${procedure}"
-  # Append query_k to search labels so k=10 and k=100 are distinct
-  query_k=$(echo "$merged_params" | jq -r '.query_k // ""')
-  [ -n "$query_k" ] && label="${label}-k${query_k}"
+      if [ -n "$corpus_size" ]; then
+        # Auto-inject target_index_name if not set
+        if [ "$(echo "$merged_params" | jq 'has("target_index_name")')" = "false" ]; then
+          merged_params=$(echo "$merged_params" | jq --arg v "${dataset}-${corpus_size}" '.target_index_name = $v')
+        fi
+        # Auto-inject num_vectors for ingest and search steps
+        if [ "$(echo "$merged_params" | jq 'has("num_vectors")')" = "false" ]; then
+          case "$procedure" in
+            bulk-ingest-data|vector-search)
+              merged_params=$(echo "$merged_params" | jq --argjson v "$(num_vectors_for "$corpus_size")" '.num_vectors = $v')
+              ;;
+          esac
+        fi
+      fi
 
-  # Deduplicate: if this label has appeared before, append an occurrence counter.
-  # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.
-  _LABEL_SEEN["$label"]=$(( ${_LABEL_SEEN["$label"]:-0} + 1 ))
-  if [ "${_LABEL_SEEN["$label"]}" -gt 1 ]; then
-    label="${label}-${_LABEL_SEEN["$label"]}"
-  fi
+      # Build label from dataset (strip "cohere-"), corpus_size, and procedure
+      dataset_short="${dataset#cohere-}"
+      label="${dataset_short}-${corpus_size}-${procedure}"
+      # Append query_k to search labels so k=10 and k=100 are distinct
+      query_k=$(echo "$merged_params" | jq -r '.query_k // ""')
+      [ -n "$query_k" ] && label="${label}-k${query_k}"
 
-  test_entry=$(jq -n \
-    --arg     dataset      "$dataset" \
-    --arg     scenario     "$procedure" \
-    --arg     label        "$label" \
-    --argjson params       "$merged_params" \
-    --argjson step_profile "$step_profile" \
-    '{ dataset: $dataset, scenario: $scenario, label: $label, params: $params }
-     | if $step_profile != null then .profile = $step_profile else . end')
+      # Deduplicate: if this label has appeared before, append an occurrence counter.
+      # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.
+      _LABEL_SEEN["$label"]=$(( ${_LABEL_SEEN["$label"]:-0} + 1 ))
+      if [ "${_LABEL_SEEN["$label"]}" -gt 1 ]; then
+        label="${label}-${_LABEL_SEEN["$label"]}"
+      fi
 
-  TESTS_JSON=$(echo "$TESTS_JSON" | jq --argjson t "$test_entry" '. + [$t]')
+      test_entry=$(jq -n \
+        --arg     dataset      "$dataset" \
+        --arg     scenario     "$procedure" \
+        --arg     label        "$label" \
+        --argjson params       "$merged_params" \
+        --argjson step_profile "$step_profile" \
+        '{ dataset: $dataset, scenario: $scenario, label: $label, params: $params }
+         | if $step_profile != null then .profile = $step_profile else . end')
 
-  done < <(echo "$raw_step" | jq -c 'if .parameter_sweeps | length > 0 then .parameter_sweeps[] else {} end')
+      TESTS_JSON=$(echo "$TESTS_JSON" | jq --argjson t "$test_entry" '. + [$t]')
 
-done < <(echo "$EFFECTIVE_STEPS" | jq -c '.[]')
+    done < <(echo "$raw_step" | jq -c 'if .parameter_sweeps | length > 0 then .parameter_sweeps[] else {} end')
+
+  done < <(echo "$EFFECTIVE_STEPS" | jq -c '.[]')
+
+done < <(echo "$PIPELINE_SWEEPS" | jq -c '.[]')
 
 unset _LABEL_SEEN
 
@@ -607,5 +623,3 @@ echo "=========================================="
 echo "Job ID: $JOB_ID"
 echo "View results at: ${API_URL}/results/${JOB_ID}?job_id=${JOB_ID}&engine=${ENGINE}"
 echo ""
-
-# Made with Bob

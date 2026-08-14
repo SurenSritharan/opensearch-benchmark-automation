@@ -1,102 +1,33 @@
 {
-  "description": "Task 1: Automated indexing parameter sweep using parameter_sweeps (MUCH CLEANER!)",
+  "description": "Indexing parameter sweep — 16 ef_construction × m combinations. Pipeline-level sweeps run all 4 steps per combo in the correct order.",
   "engine": "__ENGINE__",
   "no_profiling": true,
   "params": {
-    "corpus_size": "1m"
+    "corpus_size": "1m",
+    "target_index_bulk_size": 5000
   },
+  "parameter_sweeps": [
+    { "params": { "hnsw_ef_construction": 32,  "hnsw_m": 8  } },
+    { "params": { "hnsw_ef_construction": 32,  "hnsw_m": 16 } },
+    { "params": { "hnsw_ef_construction": 32,  "hnsw_m": 32 } },
+    { "params": { "hnsw_ef_construction": 32,  "hnsw_m": 64 } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8  } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 16 } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 32 } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 64 } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 8  } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16 } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 32 } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 64 } },
+    { "params": { "hnsw_ef_construction": 256, "hnsw_m": 8  } },
+    { "params": { "hnsw_ef_construction": 256, "hnsw_m": 16 } },
+    { "params": { "hnsw_ef_construction": 256, "hnsw_m": 32 } },
+    { "params": { "hnsw_ef_construction": 256, "hnsw_m": 64 } }
+  ],
   "steps": [
-    {
-      "dataset": "cohere-msmarco-1024",
-      "scenario": "delete-index",
-      "parameter_sweeps": [
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 64 } }
-      ]
-    },
-    {
-      "dataset": "cohere-msmarco-1024",
-      "scenario": "create-index",
-      "parameter_sweeps": [
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 64 } }
-
-      ]
-    },
-    {
-      "dataset": "cohere-msmarco-1024",
-      "scenario": "bulk-ingest-data",
-      "params": {
-        "target_index_bulk_size": 5000
-      },
-      "parameter_sweeps": [
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 64 } }
-      ]
-    },
-    {
-      "dataset": "cohere-msmarco-1024",
-      "scenario": "force-merge",
-      "parameter_sweeps": [
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 32, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 64, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 128, "hnsw_m": 64 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 8 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 16 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 32 } },
-        { "params": { "hnsw_ef_construction": 256, "hnsw_m": 64 } }
-      ]
-    }
+    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index"    },
+    { "dataset": "cohere-msmarco-1024", "scenario": "create-index"    },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge"     }
   ]
 }
