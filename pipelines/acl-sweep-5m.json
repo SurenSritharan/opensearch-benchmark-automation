@@ -1,5 +1,5 @@
 {
-  "description": "DLS full sweep — 5M wiki-en-768. Builds the index from scratch (delete → create → ingest → force-merge → refresh), then runs all 8 DLS user personas × 3 k/ef combos = 24 search steps. Search steps are ordered from least restrictive (most visible docs) to most restrictive (fewest visible docs): unrestricted(~100%) → role-group(~64%) → group-only(~40%) → group-name(~40%) → role-only(~32%) → name-only(~10%) → classified(~6%) → ultrastrict(~1%). One dynamic DLS filter (dls-standard) serves 6 of the 8 users; each user's backend_roles simulates different JWT claims. Self-contained: no prior index needed.",
+  "description": "DLS full sweep — 5M wiki-en-768. Builds the index from scratch (delete → create → ingest → force-merge → refresh), then runs all 11 DLS user personas × 2 sweeps. Ordered least → most restrictive: unrestricted(~100%) → role-group(~64%) → group-only(~40%) → group-name(~40%) → role-only(~32%) → name-only(~10%) → classified(~6%) → ultrastrict(~1%) → ultrastrict-narrow(~1%) → ultrastrict-micro(~0.6%) → ultrastrict-fixed(5k fixed). Self-contained: no prior index needed.",
   "engine": "__ENGINE__",
   "params": { "corpus_size": "5m" },
   "log_level": "info",
@@ -125,7 +125,49 @@
         "step_username": "user-ultrastrict",
         "step_password": "BenchmarkACL-2024!",
         "parameter_sweeps": [
-          { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 10,  "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
+
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-ultrastrict-narrow",
+      "params": {
+        "step_username": "user-ultrastrict-narrow",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10,  "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
+
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-ultrastrict-micro",
+      "params": {
+        "step_username": "user-ultrastrict-micro",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10,  "hnsw_ef_search": 128 } },
+          { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
+        ]
+      }
+    },
+
+    {
+      "dataset": "cohere-wiki-en-768",
+      "scenario": "vector-search",
+      "label": "dls-ultrastrict-fixed",
+      "params": {
+        "step_username": "user-ultrastrict-fixed",
+        "step_password": "BenchmarkACL-2024!",
+        "parameter_sweeps": [
+          { "params": { "query_k": 10,  "hnsw_ef_search": 128 } },
           { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
         ]
       }

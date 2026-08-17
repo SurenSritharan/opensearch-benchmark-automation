@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Creates 8 user-specific DLS roles and their role mappings.
+# Creates 11 user-specific DLS roles and their role mappings.
 #
 # Design: Each user gets a dedicated role (not shared) so OpenSearch does not
 # create a union of backend_roles. This matches production where each user/service
@@ -9,24 +9,30 @@
 # at query time to the user's specific backend_roles and username.
 #
 # Role -> User mapping (one-to-one):
-#   dls-baseline        -> user-unrestricted  (no DLS filter — raw baseline)
-#   dls-role-only       -> user-role-only     (backend_roles: [role-svc])
-#   dls-group-only      -> user-group-only    (backend_roles: [grp-finance])
-#   dls-name-only       -> user-name-only     (backend_roles: [] — identity-only, no classification in buckets 68–77)
-#   dls-role-group      -> user-role-group    (backend_roles: [role-svc, grp-finance])
-#   dls-group-name      -> user-group-name    (backend_roles: [grp-finance])
-#   dls-classified      -> user-classified    (backend_roles: [grp-restricted, restricted])
-#   dls-ultrastrict     -> user-ultrastrict   (backend_roles: [restricted] — identity-only BUT must have restricted clearance for bucket 99)
+#   dls-baseline              -> user-unrestricted       (no DLS filter — raw baseline)
+#   dls-role-only             -> user-role-only          (backend_roles: [role-svc])
+#   dls-group-only            -> user-group-only         (backend_roles: [grp-finance])
+#   dls-name-only             -> user-name-only          (backend_roles: [] — identity-only)
+#   dls-role-group            -> user-role-group         (backend_roles: [role-svc, grp-finance])
+#   dls-group-name            -> user-group-name         (backend_roles: [grp-finance])
+#   dls-classified            -> user-classified         (backend_roles: [grp-restricted, restricted])
+#   dls-ultrastrict           -> user-ultrastrict        (backend_roles: [restricted] — bucket 99 only, ~1%)
+#   dls-ultrastrict-narrow      -> user-ultrastrict-narrow   (backend_roles: [restricted] — bucket 94 only, ~1%)
+#   dls-ultrastrict-micro     -> user-ultrastrict-micro  (backend_roles: [restricted] — id%1000<6, ~0.6%)
+#   dls-ultrastrict-fixed        -> user-ultrastrict-fixed     (backend_roles: [restricted] — id<5000, fixed 5k docs)
 #
-# Expected visible doc counts at 1M (each _id%100 bucket ~10k docs) — least → most restrictive:
-#   user-unrestricted  -> ~1M   (no DLS)
-#   user-role-group    -> ~640k (buckets 0–26, 35–64, 78–87; external+internal blocked)
-#   user-group-only    -> ~400k (buckets 35–64, 78–87; internal blocked)
-#   user-group-name    -> ~400k (buckets 35–64, 78–87)
-#   user-role-only     -> ~320k (buckets 0–26, 78–82; external+internal blocked)
-#   user-name-only     -> ~100k (buckets 68–77)
-#   user-classified    -> ~60k  (buckets 88–93)
-#   user-ultrastrict   -> ~10k  (bucket 99 only — hard restricted, no absent fallback)
+# Expected visible doc counts at 1M — least → most restrictive:
+#   user-unrestricted        -> ~1M    (no DLS)
+#   user-role-group          -> ~640k  (buckets 0–26, 35–64, 78–87; classified blocked)
+#   user-group-only          -> ~400k  (buckets 35–64, 78–87; internal blocked)
+#   user-group-name          -> ~400k  (buckets 35–64, 78–87)
+#   user-role-only           -> ~320k  (buckets 0–26, 78–82; classified blocked)
+#   user-name-only           -> ~100k  (buckets 68–77)
+#   user-classified          -> ~60k   (buckets 88–93)
+#   user-ultrastrict         -> ~10k   (bucket 99 — hard restricted, no absent fallback)
+#   user-ultrastrict-narrow    -> ~10k   (bucket 94 — hard restricted, ~1%)
+#   user-ultrastrict-micro   -> ~6k    (id%1000<6 outside first 5k — hard restricted, ~0.6%)
+#   user-ultrastrict-fixed      -> 5,000  (id<5000 — hard restricted, fixed count)
 #
 # ${user.roles} and ${user.name} in DLS strings are OpenSearch Security template
 # variables — NOT shell variables. The roles using them must be PUT with single-quoted
@@ -161,5 +167,47 @@ put_role dls-ultrastrict '{
 }'
 put_mapping dls-ultrastrict '{"backend_roles":["restricted"],"users":["user-ultrastrict"]}'
 echo "  dls-ultrastrict -> user-ultrastrict"
+
+# ── dls-ultrastrict-narrow: user-ultrastrict-narrow (bucket 94 only, ~1%) ─────────
+# Hard filter: access_users MUST match AND security_classification MUST = restricted.
+# Dedicated bucket 94 — exactly 1% of corpus, isolated from user-ultrastrict.
+put_role dls-ultrastrict-narrow '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"term\":{\"access_users\":\"${user.name}\"}},{\"term\":{\"security_classification\":\"restricted\"}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats"]
+  }]
+}'
+put_mapping dls-ultrastrict-narrow '{"backend_roles":["restricted"],"users":["user-ultrastrict-narrow"]}'
+echo "  dls-ultrastrict-narrow -> user-ultrastrict-narrow"
+
+# ── dls-ultrastrict-micro: user-ultrastrict-micro (id%1000<6, ~0.6%) ──────────
+# Hard filter: access_users MUST match AND security_classification MUST = restricted.
+# ~0.6% of corpus (id%1000<6 window, outside first 5000 IDs).
+put_role dls-ultrastrict-micro '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"term\":{\"access_users\":\"${user.name}\"}},{\"term\":{\"security_classification\":\"restricted\"}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats"]
+  }]
+}'
+put_mapping dls-ultrastrict-micro '{"backend_roles":["restricted"],"users":["user-ultrastrict-micro"]}'
+echo "  dls-ultrastrict-micro -> user-ultrastrict-micro"
+
+# ── dls-ultrastrict-fixed: user-ultrastrict-fixed (id<5000, fixed 5k docs) ──────────
+# Hard filter: access_users MUST match AND security_classification MUST = restricted.
+# Fixed 5,000 documents regardless of corpus size (first 5k IDs at ingest time).
+put_role dls-ultrastrict-fixed '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"term\":{\"access_users\":\"${user.name}\"}},{\"term\":{\"security_classification\":\"restricted\"}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats"]
+  }]
+}'
+put_mapping dls-ultrastrict-fixed '{"backend_roles":["restricted"],"users":["user-ultrastrict-fixed"]}'
+echo "  dls-ultrastrict-fixed -> user-ultrastrict-fixed"
 
 echo "[acl-roles] Done."

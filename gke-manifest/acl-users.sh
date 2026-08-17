@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Creates 8 internal users, one per DLS scenario.
+# Creates 11 internal users, one per DLS scenario.
 #
 # Each user's backend_roles simulates their JWT claims in production:
 #   - backend_roles values that match corpus access_roles/access_groups fields
@@ -11,14 +11,17 @@
 #     whose security_classification field equals that value
 #
 # User -> backend_roles -> DLS Role -> what they can see:
-#   user-unrestricted  ["grp-broad"]                      dls-baseline        (~1M no DLS baseline)
-#   user-role-only     ["role-svc"]                       dls-role-only       (~320k role-only docs)
-#   user-group-only    ["grp-finance"]                    dls-group-only      (~400k group-only docs)
-#   user-name-only     []                                 dls-name-only       (~100k name-only docs)
-#   user-role-group    ["role-svc","grp-finance"]         dls-role-group      (~640k role OR group docs)
-#   user-group-name    ["grp-finance"]                    dls-group-name      (~400k group OR name docs)
-#   user-classified    ["grp-restricted","restricted"]    dls-classified      (~60k restricted group + classified)
-#   user-ultrastrict   []                                 dls-ultrastrict     (~10k hard restricted only)
+#   user-unrestricted        ["grp-broad"]                   dls-baseline           (~1M   no DLS baseline)
+#   user-role-only           ["role-svc"]                    dls-role-only          (~320k role-only docs)
+#   user-group-only          ["grp-finance"]                 dls-group-only         (~400k group-only docs)
+#   user-name-only           []                              dls-name-only          (~100k name-only docs)
+#   user-role-group          ["role-svc","grp-finance"]      dls-role-group         (~640k role OR group docs)
+#   user-group-name          ["grp-finance"]                 dls-group-name         (~400k group OR name docs)
+#   user-classified          ["grp-restricted","restricted"] dls-classified         (~60k  restricted group + classified)
+#   user-ultrastrict         ["restricted"]                  dls-ultrastrict        (~10k  bucket 99, hard restricted)
+#   user-ultrastrict-narrow    ["restricted"]                  dls-ultrastrict-narrow   (~10k  bucket 94, ~1%)
+#   user-ultrastrict-micro   ["restricted"]                  dls-ultrastrict-micro  (~6k   id%1000<6, ~0.6%)
+#   user-ultrastrict-fixed      ["restricted"]                  dls-ultrastrict-fixed     (5,000 id<5000, fixed)
 
 set -euo pipefail
 
@@ -66,5 +69,14 @@ create_user user-classified '["grp-restricted","restricted"]'
 
 # dls-ultrastrict role — identity-only match, MUST have "restricted" clearance for bucket 99
 create_user user-ultrastrict '["restricted"]'
+
+# dls-ultrastrict-narrow role — dedicated bucket 94 user, ~1% of corpus, hard restricted
+create_user user-ultrastrict-narrow '["restricted"]'
+
+# dls-ultrastrict-micro role — ~0.6% of corpus (id%1000<6 outside first 5k), hard restricted
+create_user user-ultrastrict-micro '["restricted"]'
+
+# dls-ultrastrict-fixed role — fixed 5,000 docs (id<5000), hard restricted, corpus-size independent
+create_user user-ultrastrict-fixed '["restricted"]'
 
 echo "[acl-users] Done."

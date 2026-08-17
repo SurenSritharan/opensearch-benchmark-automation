@@ -18,6 +18,10 @@ pipeline {
                 'acl-sweep-1m',
                 'acl-sweep-5m',
                 // ── ACL individual variant pipelines ──────────────────────
+                'acl-ultrastrict',
+                'acl-ultrastrict-narrow',
+                'acl-ultrastrict-micro',
+                'acl-ultrastrict-fixed',
                 'acl-e1-baseline',
                 'acl-e2-tenant-only',
                 'acl-e3-static-groups',
