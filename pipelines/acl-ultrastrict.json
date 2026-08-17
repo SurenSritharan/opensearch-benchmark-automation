@@ -1,5 +1,5 @@
 {
-  "description": "DLS ultrastrict persona — user-ultrastrict has no backend_roles and uses the dls-ultrastrict role which requires access_users match AND security_classification=restricted with no absent fallback (~1% of corpus, bucket 99 only). Measures max-restriction DLS overhead — nearly zero docs visible. Index must exist from a prior build run.",
+  "description": "DLS ultrastrict persona — user-ultrastrict sees bucket 99 only (access_users match AND security_classification=restricted, no absent fallback). ~1% of corpus (~10k docs at 1M). Index must exist from a prior build run.",
   "engine": "__ENGINE__",
   "params": { "corpus_size": "1m" },
   "log_level": "info",
