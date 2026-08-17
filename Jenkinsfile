@@ -14,24 +14,20 @@ pipeline {
         choice(
             name: 'PIPELINE',
             choices: [
-                // ── DLS benchmark sweep (run all variants in one job) ──────
-                'dls-sweep-1m',
-                'dls-sweep-5m',
-                // ── DLS individual variant pipelines ──────────────────────
-                'dls-e1-baseline',
-                'dls-e2-tenant-only',
-                'dls-e3-static-groups',
-                'dls-m1-tenant-group',
-                'dls-m2-full-identity',
-                'dls-m3-identity-classification',
-                'dls-c1-dual-validation',
-                'dls-c3-large-users-list',
-                'dls-c5-multi-tenant',
-                'dls-c8-no-classification',
-                // ── ACL complete / search pipelines ───────────────────────
-                'complete-1m-acl-wiki-only',
-                'complete-1m-acl',
-                'search-1m-acl',
+                // ── ACL benchmark sweep (run all variants in one job) ──────
+                'acl-sweep-1m',
+                'acl-sweep-5m',
+                // ── ACL individual variant pipelines ──────────────────────
+                'acl-e1-baseline',
+                'acl-e2-tenant-only',
+                'acl-e3-static-groups',
+                'acl-m1-tenant-group',
+                'acl-m2-full-identity',
+                'acl-m3-identity-classification',
+                'acl-c1-dual-validation',
+                'acl-c3-large-users-list',
+                'acl-c5-multi-tenant',
+                'acl-c8-no-classification',
                 // ── Standard non-ACL pipelines ────────────────────────────
                 'search-compare',
                 'search-all',
