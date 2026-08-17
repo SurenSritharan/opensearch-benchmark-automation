@@ -17,6 +17,7 @@ pipeline {
                 // ── ACL benchmark sweep (run all variants in one job) ──────
                 'acl-sweep-1m',
                 'acl-sweep-5m',
+                'acl-sweep-10m',
                 // ── ACL individual variant pipelines ──────────────────────
                 'acl-ultrastrict',
                 'acl-ultrastrict-narrow',
