@@ -521,7 +521,7 @@ pipeline {
                                         // on the worker pod — if the pod is still starting its git pull
                                         // the TCP connection to the OpenSearch service is refused (exit 7).
                                         script {
-                                            if (pipeline.contains('-acl') || pipeline.startsWith('dls-')) {
+                                            if (pipeline.contains('-acl') || pipeline.startsWith('acl-')) {
                                                 sh """
                                                     echo "=== [${engine}] Waiting for worker pod to be Ready before ACL setup ==="
                                                     kubectl wait --for=condition=ready pod \
@@ -575,7 +575,7 @@ pipeline {
                                         //   [B] 10 random docs have ACL fields populated
                                         //   [C] DLS is restrictive (ACL user < admin count)
                                         script {
-                                            if (pipeline.contains('-acl') || pipeline.startsWith('dls-')) {
+                                            if (pipeline.contains('-acl') || pipeline.startsWith('acl-') || pipeline.startsWith('dls-')) {
                                                 sh """
                                                     echo "=== [${engine}] Post-ingest ACL verification ==="
                                                     gke-manifest/acl-setup.sh ${ns} verify
