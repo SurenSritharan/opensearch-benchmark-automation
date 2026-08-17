@@ -28,7 +28,6 @@
         "step_password": "BenchmarkACL-2024!",
         "parameter_sweeps": [
           { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
-          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
           { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
         ]
       }
@@ -43,7 +42,6 @@
         "step_password": "BenchmarkACL-2024!",
         "parameter_sweeps": [
           { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
-          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
           { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
         ]
       }
@@ -58,7 +56,6 @@
         "step_password": "BenchmarkACL-2024!",
         "parameter_sweeps": [
           { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
-          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
           { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
         ]
       }
@@ -73,7 +70,6 @@
         "step_password": "BenchmarkACL-2024!",
         "parameter_sweeps": [
           { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
-          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
           { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
         ]
       }
@@ -88,7 +84,6 @@
         "step_password": "BenchmarkACL-2024!",
         "parameter_sweeps": [
           { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
-          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
           { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
         ]
       }
@@ -103,7 +98,6 @@
         "step_password": "BenchmarkACL-2024!",
         "parameter_sweeps": [
           { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
-          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
           { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
         ]
       }
@@ -118,7 +112,6 @@
         "step_password": "BenchmarkACL-2024!",
         "parameter_sweeps": [
           { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
-          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
           { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
         ]
       }
@@ -133,7 +126,6 @@
         "step_password": "BenchmarkACL-2024!",
         "parameter_sweeps": [
           { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
-          { "params": { "query_k": 10, "hnsw_ef_search": 256 } },
           { "params": { "query_k": 100, "hnsw_ef_search": 128 } }
         ]
       }
