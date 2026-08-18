@@ -221,7 +221,7 @@ datasets:
     format: parquet
     space_type: "cosinesimil"
     description: "Cohere Wikipedia multilingual-v3 embeddings streamed from HuggingFace parquet files — ground truth computed on-the-fly by workload.py"
-    workload: "wikiparquet"
+    workload: "parquet"
 
     supported_corpus_sizes: ["50k", "500k", "1m", "5m"]
 
