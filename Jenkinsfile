@@ -158,7 +158,7 @@ print(json.dumps(s))
                             kubectl scale deployment opensearch-benchmark-api-server \
                                 --replicas=1 -n benchmark-api-develop
                             kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
-                                -n benchmark-api-develop --timeout=300s
+                                -n benchmark-api-develop --timeout=600s
                         '''
                     },
                     (workerBranchKey): {
