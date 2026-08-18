@@ -10,7 +10,7 @@
 #
 # DLS filter patterns:
 #
-#   Standard (dls-baseline … dls-classified):
+#   Standard (dls-role-only … dls-classified):
 #     A single bool.should with minimum_should_match:1 across:
 #       terms: {access_roles:  [${user.roles}]}
 #       terms: {access_groups: [${user.roles}]}
@@ -28,6 +28,16 @@
 #     and the specific username in access_users, on every ultrastrict document.
 #     A document is visible only if the user's name appears in access_users
 #     AND "need-to-know" appears in both access_roles and access_groups.
+#
+# IMPORTANT — shell quoting rule:
+#   ${user.roles} and ${user.name} are OpenSearch Security template variables
+#   expanded at QUERY TIME by the Security plugin — NOT bash variables.
+#   All role bodies that contain a "dls" field use single-quoted strings so
+#   that bash never expands them. CLUSTER_PERMS and INDEX_PATTERNS are
+#   defined below and their literal values are pasted inline into each body.
+#   Do NOT convert DLS role bodies to double-quoted strings — bash would
+#   silently expand ${user.roles} and ${user.name} to empty, corrupting the
+#   DLS filter before it reaches the Security API.
 #
 # Role → User mapping (one-to-one):
 #   dls-baseline           → user-unrestricted       (no DLS filter — raw baseline)
@@ -59,17 +69,10 @@ set -euo pipefail
 
 OS_HOST="$1"
 
+# These two values are expanded by bash (they contain no OpenSearch template variables).
+# They are pasted as literal JSON into each role body below.
 CLUSTER_PERMS='["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"]'
 INDEX_PATTERNS='["cohere-wiki-en-768-*","cohere-msmarco-1024-*"]'
-
-# Standard DLS — single should across all three access fields, minimum_should_match:1
-# ${user.roles} and ${user.name} are expanded by OpenSearch Security at query time.
-STANDARD_DLS='{"bool":{"should":[{"terms":{"access_roles":[${user.roles}]}},{"terms":{"access_groups":[${user.roles}]}},{"terms":{"access_users":["${user.name}"]}}],"minimum_should_match":1}}'
-
-# Ultrastrict DLS — hard AND across all three access fields
-# Doc must have "need-to-know" in access_roles AND "need-to-know" in access_groups
-# AND the user's login name in access_users.
-ULTRASTRICT_DLS='{"bool":{"filter":[{"terms":{"access_roles":[${user.roles}]}},{"terms":{"access_groups":[${user.roles}]}},{"terms":{"access_users":["${user.name}"]}}]}}'
 
 os_security() {
     kubectl exec -n "$WORKER_NS" "$WORKER_POD" -c worker -- \
@@ -98,11 +101,12 @@ put_mapping() {
 echo "[acl-roles] Installing DLS roles..."
 
 # ── dls-baseline: no DLS filter — raw vector search baseline ──────────────────
+# No dls clause — double-quoted body is safe here (no OpenSearch template variables).
 put_role dls-baseline "{
   \"cluster_permissions\": ${CLUSTER_PERMS},
   \"index_permissions\": [{
     \"index_patterns\": ${INDEX_PATTERNS},
-    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
+    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\",\"indices:monitor/settings/get\"]
   }]
 }"
 put_mapping dls-baseline '{"backend_roles":["grp-broad"],"users":["user-unrestricted"]}'
@@ -112,29 +116,32 @@ echo "  dls-baseline -> user-unrestricted"
 # backend_roles = ["role-svc"]
 # ${user.roles} expands to ["role-svc"] → matches docs with access_roles:["role-svc"]
 # Visible: buckets 0–34 (35 buckets) + 78–82 (5 buckets) = ~400k docs
-put_role dls-role-only "{
-  \"cluster_permissions\": ${CLUSTER_PERMS},
-  \"index_permissions\": [{
-    \"index_patterns\": ${INDEX_PATTERNS},
-    \"dls\": \"${STANDARD_DLS}\",
-    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
+# NOTE: single-quoted body — ${user.roles} and ${user.name} must reach the server
+# unexpanded as OpenSearch Security template variables (bash must not touch them).
+put_role dls-role-only '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"terms\":{\"access_users\":[\"${user.name}\"]}}],\"minimum_should_match\":1}}",
+    "allowed_actions": ["read","search","indices:monitor/stats","indices:monitor/settings/get"]
   }]
-}"
+}'
 put_mapping dls-role-only '{"backend_roles":["role-svc"],"users":["user-role-only"]}'
 echo "  dls-role-only -> user-role-only"
 
 # ── dls-group-only: access via access_groups match only ───────────────────────
 # backend_roles = ["grp-finance"]
 # ${user.roles} expands to ["grp-finance"] → matches docs with access_groups:["grp-finance"]
-# Visible: buckets 35–87 (53 buckets) = ~430k docs (78–82 also has role-svc but grp-finance fires too)
-put_role dls-group-only "{
-  \"cluster_permissions\": ${CLUSTER_PERMS},
-  \"index_permissions\": [{
-    \"index_patterns\": ${INDEX_PATTERNS},
-    \"dls\": \"${STANDARD_DLS}\",
-    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
+# Visible: buckets 35–87 (53 buckets) = ~430k docs
+# NOTE: single-quoted body — protects ${user.roles} and ${user.name} from bash.
+put_role dls-group-only '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"terms\":{\"access_users\":[\"${user.name}\"]}}],\"minimum_should_match\":1}}",
+    "allowed_actions": ["read","search","indices:monitor/stats","indices:monitor/settings/get"]
   }]
-}"
+}'
 put_mapping dls-group-only '{"backend_roles":["grp-finance"],"users":["user-group-only"]}'
 echo "  dls-group-only -> user-group-only"
 
@@ -143,14 +150,15 @@ echo "  dls-group-only -> user-group-only"
 # ${user.roles} expands to [] → terms checks on access_roles/access_groups match nothing
 # Only ${user.name} = "user-name-only" fires → matches docs with access_users:["user-name-only"]
 # Visible: buckets 68–77 (10 buckets) = ~100k docs
-put_role dls-name-only "{
-  \"cluster_permissions\": ${CLUSTER_PERMS},
-  \"index_permissions\": [{
-    \"index_patterns\": ${INDEX_PATTERNS},
-    \"dls\": \"${STANDARD_DLS}\",
-    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
+# NOTE: single-quoted body — protects ${user.roles} and ${user.name} from bash.
+put_role dls-name-only '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"terms\":{\"access_users\":[\"${user.name}\"]}}],\"minimum_should_match\":1}}",
+    "allowed_actions": ["read","search","indices:monitor/stats","indices:monitor/settings/get"]
   }]
-}"
+}'
 put_mapping dls-name-only '{"backend_roles":[],"users":["user-name-only"]}'
 echo "  dls-name-only -> user-name-only"
 
@@ -159,14 +167,15 @@ echo "  dls-name-only -> user-name-only"
 # ${user.roles} expands to ["role-svc","grp-finance"] — both values checked against
 # access_roles and access_groups simultaneously.
 # Visible: buckets 0–87 (88 buckets, minus 68–77 username-only) = ~780k docs
-put_role dls-role-group "{
-  \"cluster_permissions\": ${CLUSTER_PERMS},
-  \"index_permissions\": [{
-    \"index_patterns\": ${INDEX_PATTERNS},
-    \"dls\": \"${STANDARD_DLS}\",
-    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
+# NOTE: single-quoted body — protects ${user.roles} and ${user.name} from bash.
+put_role dls-role-group '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"terms\":{\"access_users\":[\"${user.name}\"]}}],\"minimum_should_match\":1}}",
+    "allowed_actions": ["read","search","indices:monitor/stats","indices:monitor/settings/get"]
   }]
-}"
+}'
 put_mapping dls-role-group '{"backend_roles":["role-svc","grp-finance"],"users":["user-role-group"]}'
 echo "  dls-role-group -> user-role-group"
 
@@ -175,14 +184,15 @@ echo "  dls-role-group -> user-role-group"
 # In addition to group match, ${user.name} = "user-group-name" fires on buckets 83–87
 # where the ingest pipeline writes access_users:[..., "user-group-name", ...]
 # Visible: buckets 35–87 = ~430k docs (same count as group-only but two OR branches fire)
-put_role dls-group-name "{
-  \"cluster_permissions\": ${CLUSTER_PERMS},
-  \"index_permissions\": [{
-    \"index_patterns\": ${INDEX_PATTERNS},
-    \"dls\": \"${STANDARD_DLS}\",
-    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
+# NOTE: single-quoted body — protects ${user.roles} and ${user.name} from bash.
+put_role dls-group-name '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"terms\":{\"access_users\":[\"${user.name}\"]}}],\"minimum_should_match\":1}}",
+    "allowed_actions": ["read","search","indices:monitor/stats","indices:monitor/settings/get"]
   }]
-}"
+}'
 put_mapping dls-group-name '{"backend_roles":["grp-finance"],"users":["user-group-name"]}'
 echo "  dls-group-name -> user-group-name"
 
@@ -192,14 +202,15 @@ echo "  dls-group-name -> user-group-name"
 # "need-to-know" in ${user.roles} also checked but ingest writes it only on ultrastrict
 # docs that require the AND filter — so it does not expand access to ultrastrict buckets.
 # Visible: buckets 88–93 (6 buckets) = ~60k docs
-put_role dls-classified "{
-  \"cluster_permissions\": ${CLUSTER_PERMS},
-  \"index_permissions\": [{
-    \"index_patterns\": ${INDEX_PATTERNS},
-    \"dls\": \"${STANDARD_DLS}\",
-    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
+# NOTE: single-quoted body — protects ${user.roles} and ${user.name} from bash.
+put_role dls-classified '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"should\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"terms\":{\"access_users\":[\"${user.name}\"]}}],\"minimum_should_match\":1}}",
+    "allowed_actions": ["read","search","indices:monitor/stats","indices:monitor/settings/get"]
   }]
-}"
+}'
 put_mapping dls-classified '{"backend_roles":["grp-restricted","need-to-know"],"users":["user-classified"]}'
 echo "  dls-classified -> user-classified"
 
@@ -210,14 +221,15 @@ echo "  dls-classified -> user-classified"
 #   access_groups contains "need-to-know"  (${user.roles} = ["need-to-know"])
 #   access_users  contains "user-ultrastrict" (${user.name})
 # Ingest writes all three on buckets 95–99. ~50k docs at 1M.
-put_role dls-ultrastrict "{
-  \"cluster_permissions\": ${CLUSTER_PERMS},
-  \"index_permissions\": [{
-    \"index_patterns\": ${INDEX_PATTERNS},
-    \"dls\": \"${ULTRASTRICT_DLS}\",
-    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
+# NOTE: single-quoted body — protects ${user.roles} and ${user.name} from bash.
+put_role dls-ultrastrict '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"terms\":{\"access_users\":[\"${user.name}\"]}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats","indices:monitor/settings/get"]
   }]
-}"
+}'
 put_mapping dls-ultrastrict '{"backend_roles":["need-to-know"],"users":["user-ultrastrict"]}'
 echo "  dls-ultrastrict -> user-ultrastrict"
 
@@ -225,14 +237,15 @@ echo "  dls-ultrastrict -> user-ultrastrict"
 # backend_roles = ["need-to-know"]
 # Same triple AND filter as dls-ultrastrict but keyed to "user-ultrastrict-narrow".
 # Ingest writes all three on bucket 94 only. ~10k docs at 1M.
-put_role dls-ultrastrict-narrow "{
-  \"cluster_permissions\": ${CLUSTER_PERMS},
-  \"index_permissions\": [{
-    \"index_patterns\": ${INDEX_PATTERNS},
-    \"dls\": \"${ULTRASTRICT_DLS}\",
-    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
+# NOTE: single-quoted body — protects ${user.roles} and ${user.name} from bash.
+put_role dls-ultrastrict-narrow '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"terms\":{\"access_users\":[\"${user.name}\"]}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats","indices:monitor/settings/get"]
   }]
-}"
+}'
 put_mapping dls-ultrastrict-narrow '{"backend_roles":["need-to-know"],"users":["user-ultrastrict-narrow"]}'
 echo "  dls-ultrastrict-narrow -> user-ultrastrict-narrow"
 
@@ -240,14 +253,15 @@ echo "  dls-ultrastrict-narrow -> user-ultrastrict-narrow"
 # backend_roles = ["need-to-know"]
 # Same triple AND filter keyed to "user-ultrastrict-micro".
 # Ingest writes all three on docs where id>=5000 AND id%1000<6. ~6k docs at 1M.
-put_role dls-ultrastrict-micro "{
-  \"cluster_permissions\": ${CLUSTER_PERMS},
-  \"index_permissions\": [{
-    \"index_patterns\": ${INDEX_PATTERNS},
-    \"dls\": \"${ULTRASTRICT_DLS}\",
-    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
+# NOTE: single-quoted body — protects ${user.roles} and ${user.name} from bash.
+put_role dls-ultrastrict-micro '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"terms\":{\"access_users\":[\"${user.name}\"]}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats","indices:monitor/settings/get"]
   }]
-}"
+}'
 put_mapping dls-ultrastrict-micro '{"backend_roles":["need-to-know"],"users":["user-ultrastrict-micro"]}'
 echo "  dls-ultrastrict-micro -> user-ultrastrict-micro"
 
@@ -255,14 +269,15 @@ echo "  dls-ultrastrict-micro -> user-ultrastrict-micro"
 # backend_roles = ["need-to-know"]
 # Same triple AND filter keyed to "user-ultrastrict-fixed".
 # Ingest writes all three on docs where id<5000. Exactly 5,000 docs regardless of corpus size.
-put_role dls-ultrastrict-fixed "{
-  \"cluster_permissions\": ${CLUSTER_PERMS},
-  \"index_permissions\": [{
-    \"index_patterns\": ${INDEX_PATTERNS},
-    \"dls\": \"${ULTRASTRICT_DLS}\",
-    \"allowed_actions\": [\"read\",\"search\",\"indices:monitor/stats\"]
+# NOTE: single-quoted body — protects ${user.roles} and ${user.name} from bash.
+put_role dls-ultrastrict-fixed '{
+  "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
+  "index_permissions": [{
+    "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
+    "dls": "{\"bool\":{\"filter\":[{\"terms\":{\"access_roles\":[${user.roles}]}},{\"terms\":{\"access_groups\":[${user.roles}]}},{\"terms\":{\"access_users\":[\"${user.name}\"]}}]}}",
+    "allowed_actions": ["read","search","indices:monitor/stats","indices:monitor/settings/get"]
   }]
-}"
+}'
 put_mapping dls-ultrastrict-fixed '{"backend_roles":["need-to-know"],"users":["user-ultrastrict-fixed"]}'
 echo "  dls-ultrastrict-fixed -> user-ultrastrict-fixed"
 
