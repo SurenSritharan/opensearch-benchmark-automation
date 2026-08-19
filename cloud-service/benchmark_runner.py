@@ -815,11 +815,12 @@ class BenchmarkRunner:
             if index:
                 try:
                     url  = f"https://{ctx.target_host}/{index}/_count"
-                    resp = requests.get(
+                    resp = requests.post(
                         url,
                         auth=(ctx.username, ctx.password),
                         verify=False,
                         timeout=10,
+                        json={"query": {"match_all": {}}},
                     )
                     if resp.status_code == 200:
                         visible_doc_count = resp.json().get('count')
