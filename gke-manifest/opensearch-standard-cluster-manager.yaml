@@ -2,6 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: opensearch-cluster-manager-config
+  namespace: ${NAMESPACE}
 data:
   opensearch.yml: |
     cluster.name: opensearch-cluster
@@ -50,6 +51,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-cluster-manager
+  namespace: ${NAMESPACE}
   labels:
     app: opensearch-cluster-manager
 spec:
@@ -65,6 +67,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: opensearch-cluster-manager
+  namespace: ${NAMESPACE}
 spec:
   serviceName: opensearch-cluster-manager
   replicas: 1
@@ -80,13 +83,25 @@ spec:
       nodeSelector:
         cloud.google.com/gke-nodepool: server-pool
       
+      # Keep the cluster-manager off any node that is running a data pod.
+      # During force-merge the data pods saturate node RAM; without this
+      # the cluster-manager is collateral OOMKill by the Linux kernel OOM killer.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - opensearch-data
+              namespaceSelector: {}
+              topologyKey: kubernetes.io/hostname
+
       initContainers:
         - name: sysctl
           image: busybox:1.36
-          command:
-            - sh
-            - -c
-            - "sysctl -w vm.max_map_count=262144"
+          command: ["sh", "-c", "sysctl -w vm.max_map_count=262144"]
           securityContext:
             privileged: true
             runAsUser: 0
@@ -102,12 +117,8 @@ spec:
           image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
           securityContext:
             capabilities:
-              drop:
-                - ALL
-              add:
-                - CHOWN
-                - SETGID
-                - SETUID
+              drop: [ALL]
+              add: [CHOWN, SETGID, SETUID]
             runAsUser: 1000
             runAsNonRoot: true
           env:

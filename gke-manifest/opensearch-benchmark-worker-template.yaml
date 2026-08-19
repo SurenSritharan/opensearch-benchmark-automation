@@ -8,7 +8,7 @@ metadata:
     component: worker
     engine: ${ENGINE}
 spec:
-  clusterIP: None  # headless — gives pod DNS: <pod>.<svc>.<ns>.svc.cluster.local
+  clusterIP: None
   selector:
     app: opensearch-benchmark
     component: worker
@@ -45,7 +45,6 @@ spec:
       nodeSelector:
         cloud.google.com/gke-nodepool: client-pool
       
-      # Ensure workers run on separate nodes (no resource sharing)
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -88,7 +87,8 @@ spec:
             apt-get install -y -qq google-cloud-cli
             
             echo "Installing Python packages..."
-            pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn filelock
+            pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn filelock \
+              faiss-cpu pyarrow huggingface_hub
             
             echo "Setting up directories..."
             mkdir -p /datasets/opensearch-benchmark /results /opt/benchmark-src /app
@@ -135,7 +135,7 @@ spec:
         - name: WORKER_ENGINES
           value: "${ENGINE}"
         - name: WORKER_MODE
-          value: "combined"  # Use local SQLite queue (shared via PVC)
+          value: "combined"
         - name: BENCHMARK_HOME
           value: "/datasets/opensearch-benchmark"
         - name: PYTHONUNBUFFERED
