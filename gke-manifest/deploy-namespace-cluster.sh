@@ -12,7 +12,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NAMESPACE=$1
-OPENSEARCH_VERSION="3.6.0"  # Default version
+OPENSEARCH_VERSION="3.7.0"  # Default version
 FORCE_FLAG=""
 DELETE_PVCS=false
 NODE_SIZE="small"
@@ -196,36 +196,39 @@ fi
 
 # Deploy based on namespace type
 if [ "$NAMESPACE" == "os-jvector" ]; then
+    MANAGER_MANIFEST="$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml"
+    DATA_MANIFEST="$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml"
     echo ""
     echo "Deploying JVector cluster (with custom plugin)..."
+
     echo "1. Deploying cluster manager..."
     sed -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
-        "$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml" | kubectl apply -n $NAMESPACE -f -
-    
+        "$MANAGER_MANIFEST" | kubectl apply -n $NAMESPACE -f -
+
     echo "2. Waiting for cluster manager to be ready..."
     kubectl wait --for=condition=ready pod -l app=opensearch-cluster-manager -n $NAMESPACE --timeout=300s || true
-    
+
     echo "3. Deploying data nodes..."
     sed -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
         -e "s/\${NODE_CPU_REQ}/$NODE_CPU_REQ/g" \
         -e "s/\${NODE_CPU_LIM}/$NODE_CPU_LIM/g" \
         -e "s/\${NODE_MEM}/$NODE_MEM/g" \
         -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
-        "$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml" | kubectl apply -n $NAMESPACE -f -
-    
+        "$DATA_MANIFEST" | kubectl apply -n $NAMESPACE -f -
+
 else
     # For os-faiss and os-lucene, use the standard manifests
     echo ""
     echo "Deploying standard OpenSearch cluster (FAISS/Lucene)..."
-    
+
     echo "1. Deploying cluster manager..."
     sed -e "s/\${NAMESPACE}/$NAMESPACE/g" \
         -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
         "$SCRIPT_DIR/opensearch-standard-cluster-manager.yaml" | kubectl apply -n $NAMESPACE -f -
-    
+
     echo "2. Waiting for cluster manager to be ready..."
     kubectl wait --for=condition=ready pod -l app=opensearch-cluster-manager -n $NAMESPACE --timeout=300s || true
-    
+
     echo "3. Deploying data nodes..."
     sed -e "s/\${NAMESPACE}/$NAMESPACE/g" \
         -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \

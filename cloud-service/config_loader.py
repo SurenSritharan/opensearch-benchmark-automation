@@ -262,7 +262,6 @@ class ConfigLoader:
     
     def get_target_host(self, engine: str) -> str:
         """Get the OpenSearch cluster endpoint for an engine"""
-        # Kubernetes service DNS format
         namespace = f"os-{engine}"
         return f"opensearch-cluster.{namespace}.svc.cluster.local:9200"
     

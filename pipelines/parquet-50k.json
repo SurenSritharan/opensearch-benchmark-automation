@@ -1,0 +1,14 @@
+{
+  "description": "Smoke test — cohere-wiki-parquet at 50k (create, ingest, merge, search k=10)",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "50k" },
+  "steps": [
+    { "dataset": "cohere-wiki-parquet", "scenario": "delete-index" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "create-index" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "force-merge" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "vector-search", "params": { "query_k": 10 } }
+  ]
+}
