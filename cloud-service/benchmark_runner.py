@@ -818,7 +818,8 @@ class BenchmarkRunner:
                     resp = requests.post(
                         url,
                         auth=(ctx.username, ctx.password),
-                        verify=False,
+                        cert=(_CERT, _KEY),
+                        verify=_CA,
                         timeout=10,
                         json={"query": {"match_all": {}}},
                     )
