@@ -111,6 +111,7 @@ pipeline {
                     '''
                 }
                 sh 'chmod +x gke-manifest/*.sh cloud-service/scripts/*.sh'
+                echo "Results workspace: ${env.WORKSPACE}/${RESULTS_DIR}"
             }
         }
 
@@ -465,6 +466,7 @@ print(json.dumps(s))
                                             || echo "WARNING: catch-up kubectl cp failed — worker pod may not be running"
 
                                         echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
+                                        echo "  Results dir: ${env.WORKSPACE}/${RESULTS_DIR}/${runKey}"
                                     else
                                         echo "WARNING: no job_id for ${versionLabel}/${runSize} — benchmark may not have submitted"
                                     fi
