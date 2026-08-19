@@ -48,11 +48,15 @@ count_as() {
     local user="$1"
     kubectl exec -n "$WORKER_NS" "$WORKER_POD" -c worker -- \
         curl -sk -u "${user}:BenchmarkACL-2024!" \
-        "https://${OS_HOST}/${INDEX}/_count" \
+        -X POST "https://${OS_HOST}/${INDEX}/_count" \
+        -H "Content-Type: application/json" \
+        -d '{"query":{"match_all":{}}}' \
         2>/dev/null | jq -r '.count // "N/A"' 2>/dev/null || echo "N/A"
 }
 
-ADMIN_COUNT=$(os_api "https://${OS_HOST}/${INDEX}/_count" \
+ADMIN_COUNT=$(os_api -X POST "https://${OS_HOST}/${INDEX}/_count" \
+  -H "Content-Type: application/json" \
+  -d '{"query":{"match_all":{}}}' \
   2>/dev/null | jq -r '.count // "N/A"' 2>/dev/null || echo "N/A")
 ROLEGROUP_COUNT=$(count_as "user-role-group")
 NAMEONLY_COUNT=$(count_as "user-name-only")
