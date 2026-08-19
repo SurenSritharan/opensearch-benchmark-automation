@@ -147,6 +147,8 @@ while IFS= read -r raw_step; do
   dataset=$(echo  "$raw_step" | jq -r '.dataset')
   procedure=$(echo "$raw_step" | jq -r '.scenario')
   step_params=$(echo "$raw_step" | jq '.params // {}')
+  # Per-step label — explicit label on the step overrides auto-generation
+  step_label=$(echo "$raw_step" | jq -r '.label // ""')
   # Per-step profile flag — null means "inherit job-level enable_profiling"
   step_profile=$(echo "$raw_step" | jq '.profile // null')
 
@@ -173,12 +175,20 @@ while IFS= read -r raw_step; do
     fi
   fi
 
-  # Build label from dataset (strip "cohere-"), corpus_size, and procedure
+  # Build label: dataset (strip "cohere-") + corpus_size + procedure [+ step_label | + kN].
+  # step_label takes priority — query_k is only appended when no explicit label is set,
+  # avoiding duplication when the label already encodes k and ef (e.g. dls-e1-baseline-k10-ef128).
   dataset_short="${dataset#cohere-}"
-  label="${dataset_short}-${corpus_size}-${procedure}"
-  # Append query_k to search labels so k=10 and k=100 are distinct
   query_k=$(echo "$merged_params" | jq -r '.query_k // ""')
-  [ -n "$query_k" ] && label="${label}-k${query_k}"
+  label="${dataset_short}-${corpus_size}-${procedure}"
+  # If step_label is provided, then query_k is already part of the step_label.
+  # Hence, we can eliminate it from the label. If step_label is not present,
+  # then, we include the query_k.
+  if [ -n "$step_label" ]; then
+    label="${label}-${step_label}"
+  else
+    [ -n "$query_k" ] && label="${label}-k${query_k}"
+  fi
 
   # Deduplicate: if this label has appeared before, append an occurrence counter.
   # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.
@@ -187,14 +197,31 @@ while IFS= read -r raw_step; do
     label="${label}-${_LABEL_SEEN["$label"]}"
   fi
 
+  # Hoist step_username/step_password from step.params to dedicated top-level fields
+  # on the test entry so they are never forwarded to OSB as workload variables.
+  # These are distinct from the global pipeline.params.username / pipeline.params.password
+  # (which set a default for the whole job).  A step that wants a different user sets
+  # step_username/step_password in its own params block; other steps omit them and the
+  # runner falls back to the global job-level username/password (or admin/admin default).
+  step_username=$(echo "$merged_params" | jq -r '.step_username // ""')
+  step_password=$(echo "$merged_params" | jq -r '.step_password // ""')
+  # Strip ALL credential keys from params so none leak into OSB as workload variables.
+  # step_username/step_password  — per-step credentials defined in step.params
+  # username/password            — global pipeline-level credentials from pipeline.params
+  merged_params=$(echo "$merged_params" | jq 'del(.step_username, .step_password, .username, .password)')
+
   test_entry=$(jq -n \
     --arg     dataset      "$dataset" \
     --arg     scenario     "$procedure" \
     --arg     label        "$label" \
     --argjson params       "$merged_params" \
     --argjson step_profile "$step_profile" \
+    --arg     step_user    "$step_username" \
+    --arg     step_pass    "$step_password" \
     '{ dataset: $dataset, scenario: $scenario, label: $label, params: $params }
-     | if $step_profile != null then .profile = $step_profile else . end')
+     | if $step_profile  != null then .profile       = $step_profile  else . end
+     | if $step_user     != ""   then .step_username = $step_user     else . end
+     | if $step_pass     != ""   then .step_password = $step_pass     else . end')
 
   TESTS_JSON=$(echo "$TESTS_JSON" | jq --argjson t "$test_entry" '. + [$t]')
 

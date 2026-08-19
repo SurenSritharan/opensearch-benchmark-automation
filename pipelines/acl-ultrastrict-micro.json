@@ -1,0 +1,10 @@
+{
+  "description": "DLS ultrastrict-micro persona — user-ultrastrict-micro sees docs where (id >= 5000 AND id % 1000 < 6) with security_classification=restricted. ~0.6% of corpus (~6k docs at 1M, ~30k at 5M). Index must exist from a prior build run.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-ultrastrict-micro-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-ultrastrict-micro", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-ultrastrict-micro-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-ultrastrict-micro", "step_password": "BenchmarkACL-2024!" } }
+  ]
+}

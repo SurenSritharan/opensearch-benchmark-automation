@@ -14,6 +14,26 @@ pipeline {
         choice(
             name: 'PIPELINE',
             choices: [
+                // ── ACL benchmark sweep (run all variants in one job) ──────
+                'acl-sweep-1m',
+                'acl-sweep-5m',
+                'acl-sweep-10m',
+                // ── ACL individual variant pipelines ──────────────────────
+                'acl-ultrastrict',
+                'acl-ultrastrict-narrow',
+                'acl-ultrastrict-micro',
+                'acl-ultrastrict-fixed',
+                'acl-e1-baseline',
+                'acl-e2-tenant-only',
+                'acl-e3-static-groups',
+                'acl-m1-tenant-group',
+                'acl-m2-full-identity',
+                'acl-m3-identity-classification',
+                'acl-c1-dual-validation',
+                'acl-c3-large-users-list',
+                'acl-c5-multi-tenant',
+                'acl-c8-no-classification',
+                // ── Standard non-ACL pipelines ────────────────────────────
                 'search-compare',
                 'search-all',
                 'search-all-overquery',
@@ -489,6 +509,33 @@ pipeline {
                                             """
                                         }
 
+                                        // ── a2) ACL Setup ──────────────────────────────────
+                                        // Only runs when the selected pipeline is an ACL pipeline
+                                        // (name contains "-acl"). Bootstraps the ingest pipeline,
+                                        // index template, DLS role, and benchmark user before the
+                                        // first benchmark step fires.  Idempotent — safe to re-run
+                                        // on REDEPLOY_CLUSTERS because every call is a PUT.
+                                        //
+                                        // The worker pod readiness wait is required: cluster-green
+                                        // only confirms OpenSearch is ready, not the benchmark worker
+                                        // pod. acl-setup.sh routes all curl calls through kubectl exec
+                                        // on the worker pod — if the pod is still starting its git pull
+                                        // the TCP connection to the OpenSearch service is refused (exit 7).
+                                        script {
+                                            if (pipeline.contains('-acl') || pipeline.startsWith('acl-')) {
+                                                sh """
+                                                    echo "=== [${engine}] Waiting for worker pod to be Ready before ACL setup ==="
+                                                    kubectl wait --for=condition=ready pod \
+                                                        opensearch-benchmark-worker-${engine}-0 \
+                                                        -n benchmark-api --timeout=300s
+                                                    echo "=== [${engine}] ACL Setup for ${ns} ==="
+                                                    gke-manifest/acl-setup.sh ${ns}
+                                                """
+                                            } else {
+                                                echo "[${engine}] Non-ACL pipeline — skipping ACL setup"
+                                            }
+                                        }
+
                                         // ── b) Run benchmark ───────────────────────────────
                                         // On the first run, --first-run is passed so run-pipeline.sh
                                         // reads first_run_steps (build + search). All subsequent runs
@@ -521,6 +568,21 @@ pipeline {
 
                                             exit \$PIPE_RC
                                         """
+
+                                        // ── b2) Post-ingest ACL verification ───────────────
+                                        // Only for ACL pipelines. Runs after the full job
+                                        // completes (all 7 steps done) to confirm:
+                                        //   [A] index default_pipeline = acl_guard
+                                        //   [B] 10 random docs have ACL fields populated
+                                        //   [C] DLS is restrictive (ACL user < admin count)
+                                        script {
+                                            if (pipeline.contains('-acl') || pipeline.startsWith('acl-') || pipeline.startsWith('dls-')) {
+                                                sh """
+                                                    echo "=== [${engine}] Post-ingest ACL verification ==="
+                                                    gke-manifest/acl-setup.sh ${ns} verify
+                                                """
+                                            }
+                                        }
                                     } finally {
                                         // ── c) Fetch & save results ────────────────────────
                                         // Scenario subdirs are already copied incrementally by

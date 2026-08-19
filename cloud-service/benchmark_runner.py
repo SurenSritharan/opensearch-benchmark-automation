@@ -166,12 +166,43 @@ class BenchmarkRunner:
             base_params.update(engine_params_config[engine])
             logger.info(f"Loaded engine params for {engine}: {list(engine_params_config[engine].keys())}")
 
-        # Extract credentials before they can bleed into workload params sent to OSB
-        username = (workload_params or {}).pop('username', 'admin')
-        password = (workload_params or {}).pop('password', 'admin')
+        # Extract credentials before they can bleed into workload params sent to OSB.
+        # step_username/step_password (set per-step in the pipeline JSON under
+        # step.params.step_username) take priority over the global job-level
+        # username/password.  Both are popped so neither leaks into the OSB command
+        # as a workload variable.
+        # Work on a shallow copy so that repeated calls (e.g. ingest retries) with
+        # the same dict reference still see the credential keys on every attempt.
+        wp = dict(workload_params) if workload_params else {}
+        step_u = wp.pop('step_username', '')
+        step_p = wp.pop('step_password', '')
+        global_u = wp.pop('username', 'admin')
+        global_p = wp.pop('password', 'admin')
+        username = step_u  if step_u else global_u
+        password = step_p  if step_p else global_p
+
+        # ACL tracking — log exactly which credential source won so it is visible
+        # in the worker log for every step.
+        if step_u:
+            logger.info(
+                f"[ACL] _get_run_contexts: dataset={dataset} scenario={scenario} "
+                f"credential source=STEP step_username={step_u!r}"
+            )
+        elif global_u != 'admin':
+            logger.info(
+                f"[ACL] _get_run_contexts: dataset={dataset} scenario={scenario} "
+                f"credential source=GLOBAL username={global_u!r}"
+            )
+        else:
+            logger.info(
+                f"[ACL] _get_run_contexts: dataset={dataset} scenario={scenario} "
+                f"credential source=DEFAULT (admin/admin) — no step_username or global username set"
+            )
 
         # Procedure config: scenario-level params + engine-specific overrides
-        runtime_sweeps   = workload_params.pop('parameter_sweeps', None) if workload_params else None
+        # Use wp (the credential-stripped copy) for all remaining param work so
+        # the original workload_params dict is never mutated by this method.
+        runtime_sweeps   = wp.pop('parameter_sweeps', None)
         procedure_config = next(
             (p for p in self.config.get_test_procedures(dataset)
              if isinstance(p, dict) and p.get('name') == scenario),
@@ -198,8 +229,8 @@ class BenchmarkRunner:
         else:
             raw_sweeps = [{}]
 
-        if workload_params:
-            logger.info(f"Runtime params: {list(workload_params.keys())}")
+        if wp:
+            logger.info(f"Runtime params: {list(wp.keys())}")
 
         # Build one RunContext per sweep — all params resolved, results dir created
         sweeps = []
@@ -208,7 +239,7 @@ class BenchmarkRunner:
             if sweep_params:
                 logger.info(f"Sweep {idx} params: {list(sweep_params.keys())}")
             merged       = {**base_params, **procedure_base_params, **sweep_params}
-            final_params = self.config.resolve_workload_params(dataset, merged, workload_params)
+            final_params = self.config.resolve_workload_params(dataset, merged, wp)
 
             if '/' in job_id:
                 base = self.results_dir / job_id
@@ -424,6 +455,12 @@ class BenchmarkRunner:
         logger.info(f"Workload params written to: {params_file}")
         logger.info(f"Workload params content:\n{json.dumps(ctx.params, indent=2)}")
         logger.info(f"User tags: {user_tags_str}")
+        # ACL tracking — log the username that will appear in --client-options.
+        # This is the ground truth of who OSB actually authenticates as.
+        logger.info(
+            f"[ACL] _build_osb_command: scenario={scenario} "
+            f"OSB will authenticate as user={ctx.username!r}"
+        )
 
         cmd.extend(['--workload-params', str(params_file)])
         return cmd
@@ -753,9 +790,84 @@ class BenchmarkRunner:
             self.profiler_thread = None
 
 
+    def _add_run_context(self, test_run_data: Dict[str, Any], ctx: 'RunContext') -> Dict[str, Any]:
+        """
+        Inject live run context into test_run.json so each result file is
+        self-describing: who ran it, against what, and what the index contained.
+
+        All values come directly from the RunContext resolved at job submission
+        time — no static data, no ACL file parsing.
+
+        visible_doc_count is fetched as the same user that ran the benchmark so
+        for DLS users it reflects the DLS-filtered doc count, not the total index
+        size. Falls back to None if the cluster is unreachable — does NOT fail
+        the run.
+        """
+        if ctx is None:
+            return test_run_data
+
+        try:
+            params = ctx.params or {}
+
+            index = params.get('target_index_name') or ''
+
+            visible_doc_count = None
+            if index:
+                try:
+                    url  = f"https://{ctx.target_host}/{index}/_count"
+                    resp = requests.post(
+                        url,
+                        auth=(ctx.username, ctx.password),
+                        cert=(_CERT, _KEY),
+                        verify=_CA,
+                        timeout=10,
+                        json={"query": {"match_all": {}}},
+                    )
+                    if resp.status_code == 200:
+                        visible_doc_count = resp.json().get('count')
+                    else:
+                        logger.warning(
+                            f"[run_context] _count returned HTTP {resp.status_code} "
+                            f"for index={index!r} user={ctx.username!r}"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"[run_context] Could not fetch _count for index={index!r} "
+                        f"user={ctx.username!r}: {e}"
+                    )
+
+            space_type = (
+                params.get('target_index_space_type')
+                or (ctx.dataset_config or {}).get('space_type', '')
+            )
+
+            test_run_data['run_context'] = {
+                'username':          ctx.username,
+                'index':             index,
+                'engine':            params.get('engine', ''),
+                'space_type':        space_type,
+                'query_k':           params.get('query_k'),
+                'hnsw_ef_search':    params.get('hnsw_ef_search'),
+                'search_clients':    params.get('search_clients'),
+                'num_vectors':       params.get('num_vectors'),
+                'visible_doc_count': visible_doc_count,
+                'target_host':       ctx.target_host,
+            }
+
+            logger.info(
+                f"[run_context] user={ctx.username!r} index={index!r} "
+                f"visible_doc_count={visible_doc_count}"
+            )
+
+        except Exception as e:
+            logger.error(f"Error adding run_context to test_run.json: {e}")
+
+        return test_run_data
+
+
 
     def _download_artifacts(self, console_output: str, target_dir: Path,
-                            stderr: str = ''):
+                            ctx: 'RunContext' = None, stderr: str = ''):
         """
         Download benchmark artifacts from opensearch-benchmark home directory.
         Extracts test_run.json and benchmark.log from the benchmark execution.
@@ -777,10 +889,13 @@ class BenchmarkRunner:
             try:
                 # Read the test_run.json file
                 with open(remote_json_path, 'r') as f:
-                    test_run_content = f.read()
+                    test_run_data = json.load(f)
+                
+                # Enhance with live run context metadata
+                test_run_data = self._add_run_context(test_run_data, ctx)
                 
                 # Save to results directory
-                (target_dir / "test_run.json").write_text(test_run_content, encoding="utf-8")
+                (target_dir / "test_run.json").write_text(json.dumps(test_run_data, indent=2), encoding="utf-8")
                 logger.info(f"Downloaded test_run.json for run {run_id}")
             except FileNotFoundError:
                 logger.warning(f"test_run.json not found at {remote_json_path}")
@@ -962,7 +1077,7 @@ class BenchmarkRunner:
                     })
                     continue
 
-                self._download_artifacts(result.stdout, ctx.results_dir, stderr=result.stderr)
+                self._download_artifacts(result.stdout, ctx.results_dir, ctx, stderr=result.stderr)
 
                 is_cancelled = (cancel_event and cancel_event.is_set()) or result.returncode == -9
                 all_results.append({

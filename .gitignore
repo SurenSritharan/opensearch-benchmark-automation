@@ -19,3 +19,5 @@
 # Python cache
 lib/__pycache__
 tmp*
+
+zip_result/
