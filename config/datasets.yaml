@@ -187,17 +187,51 @@ datasets:
             method_name: "hnsw"
           lucene:
             method_name: "hnsw"
-      
+
+      # Variant of create-index for ingest-only sweeps:
+      #   replicas=0                       — no replication overhead during ingest/merge
+      #   refresh_interval=-1              — no segment refreshes until we explicitly refresh
+      #   merge_scheduler_auto_throttle=false — merge runs at full speed (no search traffic to protect)
+      # After force-merge completes, use enable-replicas then refresh-index to restore the index.
+      # All other pipelines keep using create-index (replicas=1) so their results stay representative.
+      - name: "create-index-no-replicas"
+        params:
+          target_index_body: "indices/index.json"
+          target_index_primary_shards: 3
+          target_index_replica_shards: 0
+          target_index_dimension: 1024
+          target_field_name: "vector"
+          target_index_space_type: "cosinesimil"
+          hnsw_ef_construction: 256
+          hnsw_m: 32
+          refresh_interval: "-1"
+          merge_scheduler_auto_throttle: false
+        engine_params:
+          jvector:
+            method_name: "disk_ann"
+            mode: "on_disk"
+          faiss:
+            method_name: "hnsw"
+          lucene:
+            method_name: "hnsw"
+
       - name: "bulk-ingest-data"
         params:
           target_index_bulk_size: 500
           target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base_{{corpus_size}}.fvec"
           target_index_bulk_indexing_clients: 8
           detailed_results: false
-      
+
       - name: "refresh-index"
         params: {}
-      
+
+      # Restores replicas to 1 after a no-replicas ingest, then waits for replica
+      # allocation to complete. Used as step 5 in the sweep pipeline.
+      # Requires an "enable-replicas" test procedure in workload.json (workload repo).
+      - name: "enable-replicas"
+        params:
+          target_index_replica_shards: 1
+
       - name: "force-merge"
         params:
           target_index_max_num_segments: 1

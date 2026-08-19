@@ -1,5 +1,5 @@
 {
-  "description": "Indexing parameter sweep — 16 ef_construction × m combinations. Pipeline-level sweeps run all 4 steps per combo in the correct order.",
+  "description": "Indexing parameter sweep — 16 ef_construction × m combinations using optimised ingest procedure (replicas=0, no auto-throttle during ingest+merge, then re-enable replicas and refresh).",
   "engine": "__ENGINE__",
   "no_profiling": true,
   "params": {
@@ -25,9 +25,11 @@
     { "params": { "hnsw_ef_construction": 256, "hnsw_m": 64 } }
   ],
   "steps": [
-    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index"    },
-    { "dataset": "cohere-msmarco-1024", "scenario": "create-index"    },
-    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data" },
-    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge"     }
+    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index"             },
+    { "dataset": "cohere-msmarco-1024", "scenario": "create-index-no-replicas" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data"         },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge"              },
+    { "dataset": "cohere-msmarco-1024", "scenario": "enable-replicas"          },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index"            }
   ]
 }
