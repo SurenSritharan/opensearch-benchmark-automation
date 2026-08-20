@@ -1,0 +1,39 @@
+{
+  "description": "TEST - Same as complete-5m-test but with approximate_graph_build_threshold=-1 on all create-index steps to defer HNSW graph building to force-merge, eliminating bulk ingest timeouts",
+  "engine": "__ENGINE__",
+  "steps": [
+    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index",     "params": { "corpus_size": "5m" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "create-index",     "params": { "corpus_size": "5m", "approximate_graph_build_threshold": -1 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data", "params": { "corpus_size": "5m", "target_index_bulk_size": 500 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index",    "params": { "corpus_size": "5m" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge",      "params": { "corpus_size": "5m" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index",    "params": { "corpus_size": "5m" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",    "params": { "corpus_size": "5m", "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",    "params": { "corpus_size": "5m", "query_k": 64,  "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",    "params": { "corpus_size": "5m", "query_k": 10,  "hnsw_ef_search": 256 } },
+
+    { "dataset": "cohere-wiki-parquet", "scenario": "delete-index",     "params": { "corpus_size": "50k" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "create-index",     "params": { "corpus_size": "50k", "approximate_graph_build_threshold": -1 } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "bulk-ingest-data", "params": { "corpus_size": "50k" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index",    "params": { "corpus_size": "50k" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "force-merge",      "params": { "corpus_size": "50k" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index",    "params": { "corpus_size": "50k" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "vector-search",    "params": { "corpus_size": "50k", "query_k": 10 } },
+
+    { "dataset": "cohere-wiki-parquet", "scenario": "delete-index",     "params": { "corpus_size": "1m" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "create-index",     "params": { "corpus_size": "1m", "approximate_graph_build_threshold": -1 } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "bulk-ingest-data", "params": { "corpus_size": "1m" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index",    "params": { "corpus_size": "1m" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "force-merge",      "params": { "corpus_size": "1m" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index",    "params": { "corpus_size": "1m" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "vector-search",    "params": { "corpus_size": "1m", "query_k": 10 } },
+
+    { "dataset": "cohere-wiki-parquet", "scenario": "delete-index",     "params": { "corpus_size": "5m" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "create-index",     "params": { "corpus_size": "5m", "approximate_graph_build_threshold": -1 } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "bulk-ingest-data", "params": { "corpus_size": "5m" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index",    "params": { "corpus_size": "5m" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "force-merge",      "params": { "corpus_size": "5m" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index",    "params": { "corpus_size": "5m" } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "vector-search",    "params": { "corpus_size": "5m", "query_k": 10 } }
+  ]
+}
