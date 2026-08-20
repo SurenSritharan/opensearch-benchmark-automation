@@ -2,26 +2,34 @@
 # Creates 11 internal users, one per DLS scenario.
 #
 # Each user's backend_roles simulates their JWT claims in production:
-#   - backend_roles values that match corpus access_roles/access_groups fields
-#     are matched via ${user.roles} expansion in the DLS filter
-#   - The username itself matches corpus access_users fields via ${user.name}
-#   - Classification clearance is encoded as the classification level string
-#     inside backend_roles (e.g. "restricted") — the DLS filter expands
-#     terms: security_classification: ${user.roles} which then matches docs
-#     whose security_classification field equals that value
+#   - backend_roles values are expanded into ${user.roles} by OpenSearch Security
+#     at query time and matched against access_roles / access_groups fields.
+#   - The username itself is expanded into ${user.name} and matched against
+#     access_users fields.
+#   - security_classification is NOT used. Access control is enforced purely
+#     through access_roles, access_groups, and access_users (see acl-roles.sh).
+#
+# Standard users (dls-baseline … dls-group-sensitive):
+#   DLS filter is a bool.should (OR) across access_roles, access_groups, access_users.
+#   backend_roles must match the values written by the ingest pipeline.
+#
+# Ultrastrict users (dls-ultrastrict … dls-ultrastrict-fixed):
+#   DLS filter is a hard bool.filter (AND) requiring all three fields to match.
+#   Ingest pipeline writes "need-to-know" in access_roles AND access_groups on
+#   ultrastrict docs, so users must carry "need-to-know" in their backend_roles.
 #
 # User -> backend_roles -> DLS Role -> what they can see:
-#   user-unrestricted        ["grp-broad"]                   dls-baseline           (~1M   no DLS baseline)
-#   user-role-only           ["role-svc"]                    dls-role-only          (~320k role-only docs)
-#   user-group-only          ["grp-finance"]                 dls-group-only         (~400k group-only docs)
-#   user-name-only           []                              dls-name-only          (~100k name-only docs)
-#   user-role-group          ["role-svc","grp-finance"]      dls-role-group         (~640k role OR group docs)
-#   user-group-name          ["grp-finance"]                 dls-group-name         (~400k group OR name docs)
-#   user-classified          ["grp-restricted","restricted"] dls-classified         (~60k  restricted group + classified)
-#   user-ultrastrict         ["restricted"]                  dls-ultrastrict        (~10k  bucket 99, hard restricted)
-#   user-ultrastrict-narrow    ["restricted"]                  dls-ultrastrict-narrow   (~10k  bucket 94, ~1%)
-#   user-ultrastrict-micro   ["restricted"]                  dls-ultrastrict-micro  (~6k   id%1000<6, ~0.6%)
-#   user-ultrastrict-fixed      ["restricted"]                  dls-ultrastrict-fixed     (5,000 id<5000, fixed)
+#   user-unrestricted        ["grp-broad"]                   dls-baseline           (~1M    no DLS baseline)
+#   user-role-only           ["role-svc"]                    dls-role-only          (~400k  role-only docs)
+#   user-group-only          ["grp-finance"]                 dls-group-only         (~430k  group-only docs)
+#   user-name-only           []                              dls-name-only          (~100k  name-only docs)
+#   user-role-group          ["role-svc","grp-finance"]      dls-role-group         (~780k  role OR group docs)
+#   user-group-name          ["grp-finance"]                 dls-group-name         (~430k  group OR name docs)
+#   user-group-sensitive          ["grp-sensitive"]              dls-group-sensitive    (~60k   grp-sensitive docs)
+#   user-ultrastrict         ["need-to-know"]                dls-ultrastrict        (~50k   buckets 95–99, triple AND)
+#   user-ultrastrict-narrow  ["need-to-know"]                dls-ultrastrict-narrow (~10k   bucket 94, triple AND)
+#   user-ultrastrict-micro   ["need-to-know"]                dls-ultrastrict-micro  (~6k    Tier B id%1000<6, triple AND)
+#   user-ultrastrict-fixed   ["need-to-know"]                dls-ultrastrict-fixed  (5,000  Tier A id<5000, triple AND)
 
 set -euo pipefail
 
@@ -64,19 +72,21 @@ create_user user-role-group '["role-svc","grp-finance"]'
 # dls-group-name role — backend_roles simulates JWT with grp-finance + username match
 create_user user-group-name '["grp-finance"]'
 
-# dls-classified role — backend_roles with grp-restricted group and restricted clearance
-create_user user-classified '["grp-restricted","restricted"]'
+# dls-group-sensitive role — grp-sensitive in ${user.roles} matches access_groups on buckets 88–93.
+# Must NOT include need-to-know — that would bleed into ultrastrict docs via the should-OR filter.
+create_user user-group-sensitive '["grp-sensitive"]'
 
-# dls-ultrastrict role — identity-only match, MUST have "restricted" clearance for bucket 99
-create_user user-ultrastrict '["restricted"]'
+# dls-ultrastrict role — need-to-know in ${user.roles} matches access_roles AND access_groups
+# on ultrastrict docs (buckets 95–99); username matches access_users. Triple AND DLS.
+create_user user-ultrastrict '["need-to-know"]'
 
-# dls-ultrastrict-narrow role — dedicated bucket 94 user, ~1% of corpus, hard restricted
-create_user user-ultrastrict-narrow '["restricted"]'
+# dls-ultrastrict-narrow role — same triple AND logic, dedicated to bucket 94 (~10k docs).
+create_user user-ultrastrict-narrow '["need-to-know"]'
 
-# dls-ultrastrict-micro role — ~0.6% of corpus (id%1000<6 outside first 5k), hard restricted
-create_user user-ultrastrict-micro '["restricted"]'
+# dls-ultrastrict-micro role — same triple AND logic, Tier B: id%1000<6 outside first 5k (~6k docs).
+create_user user-ultrastrict-micro '["need-to-know"]'
 
-# dls-ultrastrict-fixed role — fixed 5,000 docs (id<5000), hard restricted, corpus-size independent
-create_user user-ultrastrict-fixed '["restricted"]'
+# dls-ultrastrict-fixed role — same triple AND logic, Tier A: id<5000 (exactly 5,000 docs).
+create_user user-ultrastrict-fixed '["need-to-know"]'
 
 echo "[acl-users] Done."

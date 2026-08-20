@@ -1,0 +1,10 @@
+{
+  "description": "DLS group-sensitive persona — user-group-sensitive has backend_roles:[grp-sensitive]; matches docs with access_groups:[grp-sensitive] (~6% of corpus, buckets 88–93). Simulates a user in a narrow sensitive-access group (e.g. legal, compliance). Index must exist from a prior build run.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-group-sensitive-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-group-sensitive", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-group-sensitive-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-group-sensitive", "step_password": "BenchmarkACL-2024!" } }
+  ]
+}

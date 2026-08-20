@@ -80,7 +80,7 @@ The `acl_guard` ingest pipeline assigns ACL fields deterministically using `_id 
 | Named-user docs       | —              | —                | `user-name-only`   | Docs accessible only to a named individual    |
 | Role+group docs       | `role-svc`     | `grp-finance`    | —                  | Docs accessible by role OR group              |
 | Group+name docs       | —              | `grp-finance`    | `user-group-name`  | Docs accessible by group OR named user        |
-| Restricted-group docs | —              | `grp-restricted` | —                  | Docs accessible via a narrow restricted group |
+| Restricted-group docs | —              | `grp-sensitive` | —                  | Docs accessible via a narrow restricted group |
 | Ultrastrict docs      | —              | —                | `user-ultrastrict` | Docs accessible only to a single named user   |
 
 ### Bucket Table
@@ -95,8 +95,8 @@ The `acl_guard` ingest pipeline assigns ACL fields deterministically using `_id 
 | 68–77        | —              | —                | `user-name-only`   | —                         | name-only                                                          | 10      |
 | 78–82        | `role-svc`     | `grp-finance`    | —                  | —                         | role-only, group-only, role-group, group-name                      | 5       |
 | 83–87        | —              | `grp-finance`    | `user-group-name`  | —                         | group-only, role-group, group-name                                 | 5       |
-| 88–92        | —              | `grp-restricted` | —                  | —                         | classified                                                         | 5       |
-| 93           | —              | `grp-restricted` | —                  | `restricted`              | classified (has restricted clearance)                              | 1       |
+| 88–92        | —              | `grp-sensitive` | —                  | —                         | classified                                                         | 5       |
+| 93           | —              | `grp-sensitive` | —                  | `restricted`              | classified (has restricted clearance)                              | 1       |
 | 94–98        | —              | —                | `user-ultrastrict` | —                         | _(ultrastrict role requires classification — these are invisible)_ | 5       |
 | 99           | —              | —                | `user-ultrastrict` | `restricted`              | ultrastrict                                                        | 1       |
 | **Total**    |                |                  |                    |                           |                                                                    | **100** |
@@ -161,7 +161,7 @@ The `acl_guard` ingest pipeline assigns ACL fields deterministically using `_id 
 | `user-group-name`   | Team member + named access | `["grp-finance"]`                 | Group + named on some docs  | **~400k**     |
 | `user-role-only`    | Service account            | `["role-svc"]`                    | Has role, no groups         | **~320k**     |
 | `user-name-only`    | Named individual           | `[]`                              | Identity match only         | **~100k**     |
-| `user-classified`   | Cleared user               | `["grp-restricted","restricted"]` | Restricted team + clearance | **~60k**      |
+| `user-classified`   | Cleared user               | `["grp-sensitive","restricted"]` | Restricted team + clearance | **~60k**      |
 | `user-ultrastrict`  | Hyper-restricted           | `[]`                              | Named user, classified only | **~10k**      |
 
 All users share password `BenchmarkACL-2024!`.
@@ -197,7 +197,7 @@ Run a single persona across all three k/ef combinations. Requires the index to a
 | [`dls-group-name`](../pipelines/dls-group-name.json)     | `user-group-name`   | Group + username             | ~40%     |
 | [`dls-role-only`](../pipelines/dls-role-only.json)       | `user-role-only`    | Role match only              | ~32%     |
 | [`dls-name-only`](../pipelines/dls-name-only.json)       | `user-name-only`    | Username match only          | ~10%     |
-| [`dls-classified`](../pipelines/dls-classified.json)     | `user-classified`   | Group + restricted clearance | ~6%      |
+| [`dls-group-restricted`](../pipelines/dls-group-restricted.json)     | `user-classified`   | Group + restricted clearance | ~6%      |
 | [`dls-ultrastrict`](../pipelines/dls-ultrastrict.json)   | `user-ultrastrict`  | Username + hard restricted   | ~1%      |
 
 ## How a Pipeline Run Works

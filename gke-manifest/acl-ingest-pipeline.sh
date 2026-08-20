@@ -10,7 +10,7 @@
 #
 # Access value vocabulary:
 #   access_roles:  role-svc, need-to-know
-#   access_groups: grp-finance, grp-restricted, need-to-know
+#   access_groups: grp-finance, grp-sensitive, need-to-know
 #   access_users:  user-name-only, user-group-name,
 #                  user-ultrastrict, user-ultrastrict-narrow,
 #                  user-ultrastrict-micro, user-ultrastrict-fixed,
@@ -37,7 +37,7 @@
 #     78–82 : access_roles=[role-svc], access_groups=[grp-finance]
 #     83–87 : access_groups=[grp-finance], access_users=[user-group-name, user-noise-01..09]
 #             (10 users in access_users — large-list test bucket)
-#     88–93 : access_groups=[grp-restricted]
+#     88–93 : access_groups=[grp-sensitive]
 #     94    : access_users=[user-ultrastrict-narrow, user-noise-01..09]
 #             access_roles=[need-to-know]
 #             access_groups=[need-to-know]
@@ -54,7 +54,7 @@
 #   user-group-name         (grp-finance)              -> ~430k  (buckets 35–87)
 #   user-role-only          (role-svc)                 -> ~400k  (buckets 0–34, 78–82)
 #   user-name-only          (username match)           -> ~100k  (buckets 68–77)
-#   user-classified         (grp-restricted)           -> ~60k   (buckets 88–93)
+#   user-group-sensitive         (grp-sensitive)           -> ~60k   (buckets 88–93)
 #   user-ultrastrict        (need-to-know triple AND)  -> ~50k   (buckets 95–99)
 #   user-ultrastrict-narrow (need-to-know triple AND)  -> ~10k   (bucket 94)
 #   user-ultrastrict-micro  (need-to-know triple AND)  -> ~6k    (Tier B: id%1000<6 outside 5k)
@@ -82,7 +82,7 @@ os_api -X PUT "https://${OS_HOST}/_ingest/pipeline/acl_guard" \
       {
         "script": {
           "lang": "painless",
-          "source": "long id = Long.parseLong(ctx._id); List noise = [\"user-noise-01\",\"user-noise-02\",\"user-noise-03\",\"user-noise-04\",\"user-noise-05\",\"user-noise-06\",\"user-noise-07\",\"user-noise-08\",\"user-noise-09\"]; if (id < 5000) { List u = new ArrayList(noise); u.add(0, \"user-ultrastrict-fixed\"); ctx.access_users = u; ctx.access_roles = [\"need-to-know\"]; ctx.access_groups = [\"need-to-know\"]; } else if (id % 1000 < 6) { List u = new ArrayList(noise); u.add(0, \"user-ultrastrict-micro\"); ctx.access_users = u; ctx.access_roles = [\"need-to-know\"]; ctx.access_groups = [\"need-to-know\"]; } else { int b = (int)(id % 100); if (b >= 0 && b <= 34) { ctx.access_roles = [\"role-svc\"]; } else if (b >= 35 && b <= 67) { ctx.access_groups = [\"grp-finance\"]; } else if (b >= 68 && b <= 77) { ctx.access_users = [\"user-name-only\"]; } else if (b >= 78 && b <= 82) { ctx.access_roles = [\"role-svc\"]; ctx.access_groups = [\"grp-finance\"]; } else if (b >= 83 && b <= 87) { ctx.access_groups = [\"grp-finance\"]; List u = new ArrayList(noise); u.add(0, \"user-group-name\"); ctx.access_users = u; } else if (b >= 88 && b <= 93) { ctx.access_groups = [\"grp-restricted\"]; } else if (b == 94) { List u = new ArrayList(noise); u.add(0, \"user-ultrastrict-narrow\"); ctx.access_users = u; ctx.access_roles = [\"need-to-know\"]; ctx.access_groups = [\"need-to-know\"]; } else { List u = new ArrayList(noise); u.add(0, \"user-ultrastrict\"); ctx.access_users = u; ctx.access_roles = [\"need-to-know\"]; ctx.access_groups = [\"need-to-know\"]; } }"
+          "source": "long id = Long.parseLong(ctx._id); List noise = [\"user-noise-01\",\"user-noise-02\",\"user-noise-03\",\"user-noise-04\",\"user-noise-05\",\"user-noise-06\",\"user-noise-07\",\"user-noise-08\",\"user-noise-09\"]; if (id < 5000) { List u = new ArrayList(noise); u.add(0, \"user-ultrastrict-fixed\"); ctx.access_users = u; ctx.access_roles = [\"need-to-know\"]; ctx.access_groups = [\"need-to-know\"]; } else if (id % 1000 < 6) { List u = new ArrayList(noise); u.add(0, \"user-ultrastrict-micro\"); ctx.access_users = u; ctx.access_roles = [\"need-to-know\"]; ctx.access_groups = [\"need-to-know\"]; } else { int b = (int)(id % 100); if (b >= 0 && b <= 34) { ctx.access_roles = [\"role-svc\"]; } else if (b >= 35 && b <= 67) { ctx.access_groups = [\"grp-finance\"]; } else if (b >= 68 && b <= 77) { ctx.access_users = [\"user-name-only\"]; } else if (b >= 78 && b <= 82) { ctx.access_roles = [\"role-svc\"]; ctx.access_groups = [\"grp-finance\"]; } else if (b >= 83 && b <= 87) { ctx.access_groups = [\"grp-finance\"]; List u = new ArrayList(noise); u.add(0, \"user-group-name\"); ctx.access_users = u; } else if (b >= 88 && b <= 93) { ctx.access_groups = [\"grp-sensitive\"]; } else if (b == 94) { List u = new ArrayList(noise); u.add(0, \"user-ultrastrict-narrow\"); ctx.access_users = u; ctx.access_roles = [\"need-to-know\"]; ctx.access_groups = [\"need-to-know\"]; } else { List u = new ArrayList(noise); u.add(0, \"user-ultrastrict\"); ctx.access_users = u; ctx.access_roles = [\"need-to-know\"]; ctx.access_groups = [\"need-to-know\"]; } }"
         }
       }
     ]

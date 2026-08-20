@@ -106,9 +106,9 @@
     {
       "dataset": "cohere-wiki-en-768",
       "scenario": "vector-search",
-      "label": "dls-classified",
+      "label": "dls-group-sensitive",
       "params": {
-        "step_username": "user-classified",
+        "step_username": "user-group-sensitive",
         "step_password": "BenchmarkACL-2024!",
         "parameter_sweeps": [
           { "params": { "query_k": 10, "hnsw_ef_search": 128 } },
