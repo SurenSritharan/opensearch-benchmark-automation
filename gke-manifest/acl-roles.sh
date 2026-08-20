@@ -10,7 +10,7 @@
 #
 # DLS filter patterns:
 #
-#   Standard (dls-role-only … dls-classified):
+#   Standard (dls-role-only … dls-group-sensitive):
 #     A single bool.should with minimum_should_match:1 across:
 #       terms: {access_roles:  [${user.roles}]}
 #       terms: {access_groups: [${user.roles}]}
@@ -46,7 +46,7 @@
 #   dls-name-only          → user-name-only          (backend_roles: [] — identity-only)
 #   dls-role-group         → user-role-group         (backend_roles: [role-svc, grp-finance])
 #   dls-group-name         → user-group-name         (backend_roles: [grp-finance])
-#   dls-classified         → user-classified         (backend_roles: [grp-restricted, need-to-know])
+#   dls-group-sensitive         → user-group-sensitive         (backend_roles: [grp-sensitive])
 #   dls-ultrastrict        → user-ultrastrict        (backend_roles: [need-to-know] — buckets 95–99, ~5%)
 #   dls-ultrastrict-narrow → user-ultrastrict-narrow (backend_roles: [need-to-know] — bucket 94, ~1%)
 #   dls-ultrastrict-micro  → user-ultrastrict-micro  (backend_roles: [need-to-know] — id%1000<6, ~0.6%)
@@ -59,7 +59,7 @@
 #   user-group-name         → ~430k   (buckets 35–87; grp-finance OR username match)
 #   user-role-only          → ~400k   (buckets 0–34, 78–82; role-svc match)
 #   user-name-only          → ~100k   (buckets 68–77; username match only)
-#   user-classified         → ~60k    (buckets 88–93; grp-restricted match)
+#   user-group-sensitive         → ~60k    (buckets 88–93; grp-sensitive match)
 #   user-ultrastrict        → ~50k    (buckets 95–99; triple AND: name+need-to-know+need-to-know)
 #   user-ultrastrict-narrow → ~10k    (bucket 94; triple AND)
 #   user-ultrastrict-micro  → ~6k     (Tier B: id%1000<6 outside first 5k; triple AND)
@@ -196,14 +196,15 @@ put_role dls-group-name '{
 put_mapping dls-group-name '{"backend_roles":["grp-finance"],"users":["user-group-name"]}'
 echo "  dls-group-name -> user-group-name"
 
-# ── dls-classified: access via grp-restricted group match ─────────────────────
-# backend_roles = ["grp-restricted", "need-to-know"]
-# "grp-restricted" in ${user.roles} matches docs with access_groups:["grp-restricted"]
-# "need-to-know" in ${user.roles} also checked but ingest writes it only on ultrastrict
-# docs that require the AND filter — so it does not expand access to ultrastrict buckets.
+# ── dls-group-sensitive: access via grp-sensitive group match ─────────────────────
+# backend_roles = ["grp-sensitive"]
+# "grp-sensitive" in ${user.roles} matches docs with access_groups:["grp-sensitive"]
+# (buckets 88–93). Must NOT include need-to-know — the standard should-OR filter would
+# then match access_roles:["need-to-know"] on ultrastrict docs (Tiers A/B, buckets 94–99),
+# causing bleed from ~60k to ~130k. The role mapping activates by username directly.
 # Visible: buckets 88–93 (6 buckets) = ~60k docs
 # NOTE: single-quoted body — protects ${user.roles} and ${user.name} from bash.
-put_role dls-classified '{
+put_role dls-group-sensitive '{
   "cluster_permissions": ["cluster_composite_ops_ro","cluster:monitor/health","cluster:monitor/main","cluster:monitor/state","cluster:monitor/nodes/stats","cluster:monitor/nodes/info"],
   "index_permissions": [{
     "index_patterns": ["cohere-wiki-en-768-*","cohere-msmarco-1024-*"],
@@ -211,8 +212,8 @@ put_role dls-classified '{
     "allowed_actions": ["read","search","indices:monitor/stats","indices:monitor/settings/get"]
   }]
 }'
-put_mapping dls-classified '{"backend_roles":["grp-restricted","need-to-know"],"users":["user-classified"]}'
-echo "  dls-classified -> user-classified"
+put_mapping dls-group-sensitive '{"backend_roles":["grp-sensitive"],"users":["user-group-sensitive"]}'
+echo "  dls-group-sensitive -> user-group-sensitive"
 
 # ── dls-ultrastrict: hard AND — username + need-to-know in all three fields ───
 # backend_roles = ["need-to-know"]
