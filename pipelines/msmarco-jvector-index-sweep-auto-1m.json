@@ -26,7 +26,8 @@
   ],
   "steps": [
     { "dataset": "cohere-msmarco-1024", "scenario": "delete-index"             },
-    { "dataset": "cohere-msmarco-1024", "scenario": "create-index-no-replicas" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "create-index-no-replicas",
+      "params": { "merge_scheduler_auto_throttle": false }                       },
     { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data"         },
     { "dataset": "cohere-msmarco-1024", "scenario": "force-merge"              },
     { "dataset": "cohere-msmarco-1024", "scenario": "enable-replicas"          },

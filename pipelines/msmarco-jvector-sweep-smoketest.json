@@ -18,7 +18,8 @@
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef128-m16",
         "hnsw_ef_construction": 128,
-        "hnsw_m": 16
+        "hnsw_m": 16,
+        "merge_scheduler_auto_throttle": false
       }
     },
     {

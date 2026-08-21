@@ -205,7 +205,6 @@ datasets:
           hnsw_ef_construction: 256
           hnsw_m: 32
           refresh_interval: "-1"
-          merge_scheduler_auto_throttle: false
         engine_params:
           jvector:
             method_name: "disk_ann"
