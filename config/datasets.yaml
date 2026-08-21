@@ -88,7 +88,10 @@ datasets:
 
       - name: "refresh-index"
         params: {}
-      
+
+      - name: "update-index-settings"
+        params: {}
+
       - name: "force-merge"
         params:
           target_index_max_num_segments: 1
@@ -231,6 +234,9 @@ datasets:
         params:
           target_index_replica_shards: 1
 
+      - name: "update-index-settings"
+        params: {}
+
       - name: "force-merge"
         params:
           target_index_max_num_segments: 1
@@ -304,6 +310,9 @@ datasets:
       - name: "refresh-index"
         params: {}
 
+      - name: "update-index-settings"
+        params: {}
+
       - name: "force-merge"
         params:
           target_index_max_num_segments: 1
@@ -318,6 +327,28 @@ datasets:
           hnsw_ef_search: 128
           query_k: 10
           search_clients: 1
+          detailed_results: true
+
+      - name: "create-search-pipeline"
+        params:
+          search_pipeline: "hybrid-search-pipeline"
+          normalization_technique: "min_max"
+          bm25_weight: 0.3
+          knn_weight: 0.7
+
+      - name: "delete-search-pipeline"
+        params:
+          search_pipeline: "hybrid-search-pipeline"
+
+      - name: "hybrid-search"
+        params:
+          warmup_time_period: 60
+          time_period: 300
+          hnsw_ef_search: 128
+          query_k: 10
+          search_clients: 1
+          search_pipeline: "hybrid-search-pipeline"
+          hybrid_text_field: "text"
           detailed_results: true
 
 # Made with Bob

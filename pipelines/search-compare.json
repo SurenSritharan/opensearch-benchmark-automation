@@ -1,7 +1,7 @@
 {
   "description": "Version comparison — build index once on first run, search on all versions and node sizes (wiki + msmarco 1M + 5M + 10M)",
   "engine": "__ENGINE__",
-  "versions": ["3.7.0", "3.7.0"],
+  "versions": ["3.7.0", "3.8.0"],
   "node_sizes": ["small", "medium"],
   "first_run_steps": [
     { "dataset": "cohere-wiki-en-768",  "scenario": "create-index",    "params": { "corpus_size": "1m" } },
