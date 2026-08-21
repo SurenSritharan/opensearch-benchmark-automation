@@ -1,0 +1,17 @@
+{
+  "description": "Comparison run — cohere-wiki-parquet at 1M: ingest once, then vector-search vs hybrid-search (BM25 0.3 + kNN 0.7) for direct latency and recall comparison",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "steps": [
+    { "dataset": "cohere-wiki-parquet", "scenario": "delete-index" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "create-index" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "force-merge" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "create-search-pipeline" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "vector-search",  "params": { "query_k": 10 } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "hybrid-search",  "params": { "query_k": 10 } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "delete-search-pipeline" }
+  ]
+}

@@ -102,28 +102,37 @@ spec:
         
         resources:
           requests:
-            memory: "4Gi"
-            cpu: "2"
+            memory: "512Mi"
+            cpu: "250m"
           limits:
-            memory: "8Gi"
-            cpu: "4"
+            memory: "1Gi"
+            cpu: "500m"
 
         ports:
         - containerPort: 8080
           name: http
         
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          failureThreshold: 40
+          periodSeconds: 15
+
         livenessProbe:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 30
+          initialDelaySeconds: 0
           periodSeconds: 30
-        
+          failureThreshold: 3
+
         readinessProbe:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 15
+          initialDelaySeconds: 0
           periodSeconds: 10
+          failureThreshold: 3
       
 # Made with Bob
