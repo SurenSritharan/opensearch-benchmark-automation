@@ -88,7 +88,10 @@ datasets:
 
       - name: "refresh-index"
         params: {}
-      
+
+      - name: "update-index-settings"
+        params: {}
+
       - name: "force-merge"
         params:
           target_index_max_num_segments: 1
@@ -232,6 +235,9 @@ datasets:
         params:
           target_index_replica_shards: 1
 
+      - name: "update-index-settings"
+        params: {}
+
       - name: "force-merge"
         params:
           target_index_max_num_segments: 1
@@ -303,6 +309,9 @@ datasets:
           detailed_results: false
 
       - name: "refresh-index"
+        params: {}
+
+      - name: "update-index-settings"
         params: {}
 
       - name: "force-merge"
