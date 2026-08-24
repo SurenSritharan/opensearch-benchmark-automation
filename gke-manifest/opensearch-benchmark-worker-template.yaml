@@ -2,15 +2,15 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-benchmark-worker-${ENGINE}
-  namespace: benchmark-api-develop
+  namespace: benchmark-api
   labels:
-    app: opensearch-benchmark-develop
+    app: opensearch-benchmark
     component: worker
     engine: ${ENGINE}
 spec:
   clusterIP: None
   selector:
-    app: opensearch-benchmark-develop
+    app: opensearch-benchmark
     component: worker
     engine: ${ENGINE}
   ports:
@@ -22,9 +22,9 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: opensearch-benchmark-worker-${ENGINE}
-  namespace: benchmark-api-develop
+  namespace: benchmark-api
   labels:
-    app: opensearch-benchmark-develop
+    app: opensearch-benchmark
     component: worker
     engine: ${ENGINE}
 spec:
@@ -32,13 +32,13 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: opensearch-benchmark-develop
+      app: opensearch-benchmark
       component: worker
       engine: ${ENGINE}
   template:
     metadata:
       labels:
-        app: opensearch-benchmark-develop
+        app: opensearch-benchmark
         component: worker
         engine: ${ENGINE}
     spec:
@@ -103,20 +103,24 @@ spec:
               git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-workloads.git /datasets/opensearch-benchmark-workloads
             else
               cd /datasets/opensearch-benchmark-workloads
+              git reset --hard
+              git clean -fd
               git pull origin main || echo "Git pull failed, using existing version"
             fi
             
-            echo "Setting up workspace (merge-main-to-develop branch)..."
+            echo "Setting up workspace (main branch)..."
             if [ ! -d "/workspace/.git" ]; then
-              echo "Cloning benchmark automation project (merge-main-to-develop branch, first time)..."
-              git clone --depth 1 --branch merge-main-to-develop https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
+              echo "Cloning benchmark automation project (main branch, first time)..."
+              git clone --depth 1 --branch main https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
               cp -r /workspace-tmp/* /workspace/ 2>/dev/null || true
               cp -r /workspace-tmp/.git /workspace/ 2>/dev/null || true
               rm -rf /workspace-tmp
             else
-              echo "Workspace already exists, pulling latest merge-main-to-develop changes..."
+              echo "Workspace already exists, pulling latest main changes..."
               cd /workspace
-              git pull origin merge-main-to-develop || echo "Git pull failed, using existing version"
+              git reset --hard
+              git clean -fd
+              git pull origin main || echo "Git pull failed, using existing version"
             fi
             
             echo "Setting up worker service..."
