@@ -1056,11 +1056,12 @@ def trigger_batch_benchmark():
             if error:
                 return jsonify({'error': f'Dataset "{dataset}": {error}'}), 400
             
-            # Extract scenario-specific params
-            scenario_params = {}
+            # Extract scenario-specific params: common_params → procedure params → per-test params
+            dataset_cfg = config_loader.get_dataset_config(dataset)
+            scenario_params = dataset_cfg.get('common_params', {}).copy()
             if matched_proc and isinstance(matched_proc, dict):
-                scenario_params = matched_proc.get('params', {}).copy()
-            
+                scenario_params.update(matched_proc.get('params', {}))
+
             # Merge with per-test params (test params override scenario params)
             test_params = test.get('params', {})
             if test_params:
