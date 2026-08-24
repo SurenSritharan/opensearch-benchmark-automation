@@ -335,7 +335,7 @@ print(json.dumps(s))
                                         echo "Waiting for opensearch-data pods to be Running in \$NS..."
                                         RUNNING=0
                                         LAST_PROGRESS=\$SECONDS
-                                        STALL_LIMIT=300
+                                        STALL_LIMIT=600
                                         while true; do
                                             NEW_RUNNING=\$(kubectl get pods -n \$NS -l app=opensearch-data \
                                                 --field-selector=status.phase=Running \
