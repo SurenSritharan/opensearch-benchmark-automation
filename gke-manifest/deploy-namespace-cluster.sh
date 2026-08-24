@@ -100,13 +100,12 @@ fi
 echo ""
 echo "Cleaning up existing resources in $NAMESPACE..."
 
-# Delete StatefulSets first (to trigger graceful pod shutdown)
-echo "Deleting StatefulSets..."
-kubectl delete statefulset --all -n $NAMESPACE --ignore-not-found=true
+# Delete StatefulSets and Pods in the background to trigger graceful shutdown
+echo "Initiating deletion of StatefulSets and Pods..."
+kubectl delete statefulset --all -n $NAMESPACE --ignore-not-found=true --wait=false
+kubectl delete pod --all -n $NAMESPACE --ignore-not-found=true --wait=false
 
-# Delete pods and wait for them to terminate to release PVC locks (finalizers)
-echo "Deleting pods..."
-kubectl delete pod --all -n $NAMESPACE --ignore-not-found=true
+# Explicitly wait for pods to terminate to release PVC locks (finalizers)
 echo "Waiting for pods to terminate..."
 kubectl wait --for=delete pod --all -n $NAMESPACE --timeout=120s 2>/dev/null || true
 
@@ -119,7 +118,7 @@ kubectl delete configmap -n $NAMESPACE --field-selector metadata.name!=kube-root
 # Handle PVCs based on --delete-pvcs flag
 if [[ "$DELETE_PVCS" == true ]]; then
     echo "⚠️  Deleting PVCs (all indexed data and results will be lost)..."
-    kubectl delete pvc --all -n $NAMESPACE --ignore-not-found=true
+    kubectl delete pvc --all -n $NAMESPACE --ignore-not-found=true --wait=false
     
     echo "Waiting for PVCs to be fully deleted..."
     # Poll to ensure PVCs are completely gone before deploying new pods
