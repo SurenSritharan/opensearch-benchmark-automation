@@ -1060,7 +1060,7 @@ def trigger_batch_benchmark():
             dataset_cfg = config_loader.get_dataset_config(dataset)
             scenario_params = dataset_cfg.get('common_params', {}).copy()
             if matched_proc and isinstance(matched_proc, dict):
-                scenario_params.update(matched_proc.get('params', {}))
+                scenario_params.update(matched_proc.get('params', {}).copy())
 
             # Merge with per-test params (test params override scenario params)
             test_params = test.get('params', {})
