@@ -79,6 +79,15 @@ datasets:
           target_index_bulk_index_data_set_corpus: "{{corpus_name}}"
           target_index_bulk_indexing_clients: 8
           detailed_results: false
+        # DiskANN builds on-disk graphs during segment merges, which blocks Netty
+        # threads for minutes at a time under concurrent write pressure.
+        # Use a single client with large batches so each graph-build completes
+        # before the next batch lands — prevents 99th-pct latency spikes and
+        # partial-ingest shortfalls.
+        engine_params:
+          jvector:
+            target_index_bulk_size: 2000
+            target_index_bulk_indexing_clients: 1
 
         # uses make_blobs synthetic generation — no corpus file, supports any num_vectors
       - name: "bulk-ingest-random"
@@ -199,6 +208,11 @@ datasets:
           target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base_{{corpus_size}}.fvec"
           target_index_bulk_indexing_clients: 8
           detailed_results: false
+        # Same DiskANN constraint as cohere-wiki-en-768 — single client, large batches.
+        engine_params:
+          jvector:
+            target_index_bulk_size: 2000
+            target_index_bulk_indexing_clients: 1
 
       - name: "refresh-index"
         params: {}
