@@ -60,6 +60,7 @@ datasets:
           hnsw_ef_construction: 256
           hnsw_m: 32
           refresh_interval: "-1"
+          max_merged_segment: "2gb"
         # Engine-specific parameters for index creation
         engine_params:
           faiss:
@@ -182,6 +183,7 @@ datasets:
           hnsw_ef_construction: 256
           hnsw_m: 32
           refresh_interval: "-1"
+          max_merged_segment: "2gb"
         engine_params:
           jvector:
             method_name: "disk_ann"
@@ -265,6 +267,7 @@ datasets:
           hnsw_ef_construction: 256
           hnsw_m: 16
           refresh_interval: "-1"
+          max_merged_segment: "2gb"
         engine_params:
           faiss:
             method_name: "hnsw"
