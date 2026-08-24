@@ -582,6 +582,21 @@ while true; do
   PREV_COMPLETED="${completed:-0}"
 
   if $terminal; then
+    # Collect logs for the currently-running scenario if it never appeared in
+    # scenario_status (e.g. cancelled mid-flight at the job level before the
+    # server had a chance to mark the in-progress scenario as cancelled).
+    if [ -n "$label" ] && [ -n "${RESULTS_DEST:-}" ]; then
+      # Reconstruct the scenario key the same way the server builds it:
+      # dataset + "-" + label  (label already has the corpus+procedure suffix)
+      # We try the raw current_scenario value from the API first.
+      cur_key=$(echo "$resp" | jq -r '.current_scenario // ""')
+      [ -z "$cur_key" ] && cur_key="${ENGINE}-${label}"
+      if [ -n "$cur_key" ] && [ "${_COLLECTED[$cur_key]+set}" != "set" ]; then
+        _COLLECTED[$cur_key]=1
+        _copy_scenario_results "$cur_key"
+        _collect_scenario_server_logs "$cur_key"
+      fi
+    fi
     echo ""
     echo "=========================================="
     echo "Job finished with status: $job_status"
