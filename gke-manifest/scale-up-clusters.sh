@@ -3,7 +3,7 @@
 # Scale up OpenSearch clusters from scaled-down state
 # This script restores StatefulSet replicas to their original counts
 # Usage: ./scale-up-clusters.sh [namespace]
-# Example: ./scale-up-clusters.sh os-jvector
+# Example: ./scale-up-clusters.sh os-develop-jvector
 #          ./scale-up-clusters.sh all
 
 set -e
@@ -71,9 +71,9 @@ if [ -z "$NAMESPACE" ]; then
     echo "Usage: $0 <namespace|all>"
     echo ""
     echo "Available options:"
-    echo "  os-jvector  - Scale up JVector cluster"
-    echo "  os-faiss    - Scale up FAISS cluster"
-    echo "  os-lucene   - Scale up Lucene cluster"
+    echo "  os-develop-jvector  - Scale up JVector cluster"
+    echo "  os-develop-faiss    - Scale up FAISS cluster"
+    echo "  os-develop-lucene   - Scale up Lucene cluster"
     echo "  all         - Scale up all clusters"
     echo ""
     exit 1
@@ -83,14 +83,14 @@ if [ "$NAMESPACE" == "all" ]; then
     echo "Scaling up all OpenSearch clusters..."
     echo ""
     
-    for ns in os-jvector os-faiss os-lucene; do
+    for ns in os-develop-jvector os-develop-faiss os-develop-lucene; do
         scale_up_namespace $ns
     done
     
 else
     # Validate namespace
-    if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene)$ ]]; then
-        echo -e "${RED}❌ Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, all${NC}"
+    if [[ ! "$NAMESPACE" =~ ^(os-develop-jvector|os-develop-faiss|os-develop-lucene)$ ]]; then
+        echo -e "${RED}❌ Error: Invalid namespace. Must be one of: os-develop-jvector, os-develop-faiss, os-develop-lucene, all${NC}"
         exit 1
     fi
     

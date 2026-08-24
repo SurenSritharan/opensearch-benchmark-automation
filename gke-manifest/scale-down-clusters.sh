@@ -3,7 +3,7 @@
 # Scale down OpenSearch clusters to save resources
 # This script reduces StatefulSet replicas to 0 while preserving data in PVCs
 # Usage: ./scale-down-clusters.sh [namespace]
-# Example: ./scale-down-clusters.sh os-jvector
+# Example: ./scale-down-clusters.sh os-develop-jvector
 #          ./scale-down-clusters.sh all
 
 set -e
@@ -94,9 +94,9 @@ if [ -z "$NAMESPACE" ]; then
     echo "Usage: $0 <namespace|all>"
     echo ""
     echo "Available options:"
-    echo "  os-jvector  - Scale down JVector cluster"
-    echo "  os-faiss    - Scale down FAISS cluster"
-    echo "  os-lucene   - Scale down Lucene cluster"
+    echo "  os-develop-jvector  - Scale down JVector cluster"
+    echo "  os-develop-faiss    - Scale down FAISS cluster"
+    echo "  os-develop-lucene   - Scale down Lucene cluster"
     echo "  all         - Scale down all clusters"
     echo ""
     exit 1
@@ -106,14 +106,14 @@ if [ "$NAMESPACE" == "all" ]; then
     echo "Scaling down all OpenSearch clusters..."
     echo ""
     
-    for ns in os-jvector os-faiss os-lucene; do
+    for ns in os-develop-jvector os-develop-faiss os-develop-lucene; do
         scale_down_namespace $ns
     done
     
 else
     # Validate namespace
-    if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene)$ ]]; then
-        echo -e "${RED}❌ Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, all${NC}"
+    if [[ ! "$NAMESPACE" =~ ^(os-develop-jvector|os-develop-faiss|os-develop-lucene)$ ]]; then
+        echo -e "${RED}❌ Error: Invalid namespace. Must be one of: os-develop-jvector, os-develop-faiss, os-develop-lucene, all${NC}"
         exit 1
     fi
     

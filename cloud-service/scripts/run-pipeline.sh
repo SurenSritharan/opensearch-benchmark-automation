@@ -337,7 +337,7 @@ _start_stats_sampler() {
       # Fetch _nodes/stats via the worker pod; suppress errors so a transient
       # cluster hiccup does not kill the sampler subprocess.
       local raw
-      raw=$(kubectl exec -n benchmark-api "$worker_pod" -c worker -- \
+      raw=$(kubectl exec -n benchmark-api-develop "$worker_pod" -c worker -- \
         curl -sk -u admin:admin \
         "https://${os_host}/_nodes/stats/jvm,os,indices,thread_pool,fs" \
         2>/dev/null || true)
@@ -410,7 +410,7 @@ _copy_scenario_results() {
   local src_path="/results/${JOB_ID}/${ENGINE}/${scenario_key}"
   local dest="${RESULTS_DEST}/${scenario_key}"
   mkdir -p "$dest"
-  kubectl cp -c worker "benchmark-api/${WORKER_POD}:${src_path}/." "$dest/" >/dev/null 2>&1 || \
+  kubectl cp -c worker "benchmark-api-develop/${WORKER_POD}:${src_path}/." "$dest/" >/dev/null 2>&1 || \
     echo "  WARNING: kubectl cp failed for ${scenario_key} (pod may not be reachable)"
 }
 
@@ -481,7 +481,7 @@ _collect_scenario_server_logs() {
     local endpoint filename
     endpoint=$(echo "$entry" | awk '{print $1}')
     filename=$(echo "$entry" | awk '{print $2}')
-    kubectl exec -n benchmark-api \
+    kubectl exec -n benchmark-api-develop \
       "opensearch-benchmark-worker-${ENGINE}-0" -c worker -- \
       curl -sk -u admin:admin "https://${os_host}${endpoint}" \
       > "${tel_dir}/${filename}" 2>/dev/null || true

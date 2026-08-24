@@ -262,7 +262,7 @@ class ConfigLoader:
     
     def get_target_host(self, engine: str) -> str:
         """Get the OpenSearch cluster endpoint for an engine"""
-        namespace = f"os-{engine}"
+        namespace = f"os-develop-{engine}"
         return f"opensearch-cluster.{namespace}.svc.cluster.local:9200"
     
     def resolve_workload_params(

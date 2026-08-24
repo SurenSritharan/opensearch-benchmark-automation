@@ -22,11 +22,11 @@ echo ""
 echo "=== Syncing opensearch-shared-certs to all namespaces ==="
 NAMESPACES=$(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}' \
     | tr ' ' '\n' \
-    | grep -E '^(benchmark-api|os-jvector|os-faiss|os-lucene)$' \
+    | grep -E '^(benchmark-api-develop|os-develop-jvector|os-develop-faiss|os-develop-lucene)$' \
     || true)
 
 if [ -z "$NAMESPACES" ]; then
-    echo "  ⚠️  No matching namespaces found (benchmark-api, os-jvector, os-faiss, os-lucene)"
+    echo "  ⚠️  No matching namespaces found (benchmark-api-develop, os-develop-jvector, os-develop-faiss, os-develop-lucene)"
 else
     for ns in $NAMESPACES; do
         kubectl create secret generic opensearch-shared-certs \
