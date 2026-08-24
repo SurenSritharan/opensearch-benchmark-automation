@@ -101,10 +101,14 @@ echo ""
 echo "Cleaning up existing resources in $NAMESPACE..."
 
 # Delete StatefulSets first (to trigger graceful pod shutdown)
-kubectl delete statefulset --all -n $NAMESPACE --ignore-not-found=true --wait=false
+echo "Deleting StatefulSets..."
+kubectl delete statefulset --all -n $NAMESPACE --ignore-not-found=true
 
-# Delete pods
-kubectl delete pod --all -n $NAMESPACE --ignore-not-found=true --wait=false
+# Delete pods and wait for them to terminate to release PVC locks (finalizers)
+echo "Deleting pods..."
+kubectl delete pod --all -n $NAMESPACE --ignore-not-found=true
+echo "Waiting for pods to terminate..."
+kubectl wait --for=delete pod --all -n $NAMESPACE --timeout=120s 2>/dev/null || true
 
 # Delete services
 kubectl delete service --all -n $NAMESPACE --ignore-not-found=true --wait=false
@@ -115,8 +119,19 @@ kubectl delete configmap -n $NAMESPACE --field-selector metadata.name!=kube-root
 # Handle PVCs based on --delete-pvcs flag
 if [[ "$DELETE_PVCS" == true ]]; then
     echo "⚠️  Deleting PVCs (all indexed data and results will be lost)..."
-    kubectl delete pvc --all -n $NAMESPACE --ignore-not-found=true --wait=false
-    echo "   PVCs deleted"
+    kubectl delete pvc --all -n $NAMESPACE --ignore-not-found=true
+    
+    echo "Waiting for PVCs to be fully deleted..."
+    # Poll to ensure PVCs are completely gone before deploying new pods
+    for i in {1..12}; do
+        EXISTING_PVCS_COUNT=$(kubectl get pvc -n $NAMESPACE --no-headers 2>/dev/null | wc -l)
+        if [ "$EXISTING_PVCS_COUNT" -eq 0 ]; then
+            echo "   ✅ PVCs successfully deleted"
+            break
+        fi
+        echo "   ... waiting for PVC deletion (attempt $i/12) ..."
+        sleep 5
+    done
 else
     echo "💾 Preserving PVCs to retain data (indexed vectors, benchmark results, etc.)"
     EXISTING_PVCS=$(kubectl get pvc -n $NAMESPACE -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
@@ -132,7 +147,7 @@ else
     fi
 fi
 
-echo "Waiting for resources to be deleted..."
+echo "Waiting for remaining resources to settle..."
 sleep 5
 
 echo "Cleanup complete. Proceeding with deployment..."
