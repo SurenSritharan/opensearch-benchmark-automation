@@ -103,19 +103,23 @@ spec:
               git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-workloads.git /datasets/opensearch-benchmark-workloads
             else
               cd /datasets/opensearch-benchmark-workloads
+              git reset --hard
+              git clean -fd
               git pull origin main || echo "Git pull failed, using existing version"
             fi
             
-            echo "Setting up workspace..."
+            echo "Setting up workspace (main branch)..."
             if [ ! -d "/workspace/.git" ]; then
-              echo "Cloning benchmark automation project (first time)..."
-              git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
+              echo "Cloning benchmark automation project (main branch, first time)..."
+              git clone --depth 1 --branch main https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
               cp -r /workspace-tmp/* /workspace/ 2>/dev/null || true
               cp -r /workspace-tmp/.git /workspace/ 2>/dev/null || true
               rm -rf /workspace-tmp
             else
-              echo "Workspace already exists, pulling latest changes..."
+              echo "Workspace already exists, pulling latest main changes..."
               cd /workspace
+              git reset --hard
+              git clean -fd
               git pull origin main || echo "Git pull failed, using existing version"
             fi
             
@@ -173,15 +177,19 @@ spec:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 60
+          initialDelaySeconds: 120
           periodSeconds: 60
+          timeoutSeconds: 30
+          failureThreshold: 5
         
         readinessProbe:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 30
+          initialDelaySeconds: 60
           periodSeconds: 30
+          timeoutSeconds: 30
+          failureThreshold: 3
       
       volumes:
       - name: worker-storage

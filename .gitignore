@@ -12,6 +12,7 @@
 *.log
 *.tmp
 
+/venv
 
 # Python bytecode
 *.pyc
