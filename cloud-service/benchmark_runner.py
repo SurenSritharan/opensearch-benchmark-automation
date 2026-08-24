@@ -406,7 +406,7 @@ class BenchmarkRunner:
             'method_name':    ctx.params.get('method_name'),
         }
         user_tags_str  = ','.join(f"{k}:{v}" for k, v in user_tags.items() if v is not None)
-        client_timeout = ctx.params.get('client_timeout', 600)
+        client_timeout = ctx.params.pop('client_timeout', 600)
 
         cmd = [
             'opensearch-benchmark', 'run',

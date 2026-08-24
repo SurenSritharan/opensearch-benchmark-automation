@@ -59,7 +59,7 @@ data:
     knn.cache.item.expiry.minutes: "180m"
     knn.circuit_breaker.triggered: "false"
 
-    indexing_pressure.memory.limit: 20%
+    indexing_pressure.memory.limit: 40%
 ---
 apiVersion: v1
 kind: Service
