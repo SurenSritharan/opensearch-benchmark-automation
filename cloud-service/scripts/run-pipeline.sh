@@ -322,7 +322,7 @@ _start_stats_sampler() {
   [ "${STATS_INTERVAL:-0}" -gt 0 ] 2>/dev/null || return 0
   [ -z "${RESULTS_DEST:-}" ] && return 0
 
-  local ns="os-develop-${ENGINE}"
+  local ns="os-${ENGINE}"
   local os_host="opensearch-cluster.${ns}.svc.cluster.local:9200"
   local worker_pod="opensearch-benchmark-worker-${ENGINE}-0"
   local outfile="${RESULTS_DEST}/server-stats-timeseries.ndjson"
@@ -337,7 +337,7 @@ _start_stats_sampler() {
       # Fetch _nodes/stats via the worker pod; suppress errors so a transient
       # cluster hiccup does not kill the sampler subprocess.
       local raw
-      raw=$(kubectl exec -n benchmark-api-develop "$worker_pod" -c worker -- \
+      raw=$(kubectl exec -n benchmark-api "$worker_pod" -c worker -- \
         curl -sk -u admin:admin \
         "https://${os_host}/_nodes/stats/jvm,os,indices,thread_pool,fs" \
         2>/dev/null || true)
@@ -410,7 +410,7 @@ _copy_scenario_results() {
   local src_path="/results/${JOB_ID}/${ENGINE}/${scenario_key}"
   local dest="${RESULTS_DEST}/${scenario_key}"
   mkdir -p "$dest"
-  kubectl cp -c worker "benchmark-api-develop/${WORKER_POD}:${src_path}/." "$dest/" >/dev/null 2>&1 || \
+  kubectl cp -c worker "benchmark-api/${WORKER_POD}:${src_path}/." "$dest/" >/dev/null 2>&1 || \
     echo "  WARNING: kubectl cp failed for ${scenario_key} (pod may not be reachable)"
 }
 
@@ -426,7 +426,7 @@ _collect_scenario_server_logs() {
   local scenario_key="$1"
   [ -z "${RESULTS_DEST:-}" ] && return 0
 
-  local ns="${OS_NAMESPACE:-os-develop-${ENGINE}}"
+  local ns="${OS_NAMESPACE:-os-${ENGINE}}"
   local log_dir="${RESULTS_DEST}/${scenario_key}/server-logs"
   mkdir -p "$log_dir"
 
@@ -481,7 +481,7 @@ _collect_scenario_server_logs() {
     local endpoint filename
     endpoint=$(echo "$entry" | awk '{print $1}')
     filename=$(echo "$entry" | awk '{print $2}')
-    kubectl exec -n benchmark-api-develop \
+    kubectl exec -n benchmark-api \
       "opensearch-benchmark-worker-${ENGINE}-0" -c worker -- \
       curl -sk -u admin:admin "https://${os_host}${endpoint}" \
       > "${tel_dir}/${filename}" 2>/dev/null || true

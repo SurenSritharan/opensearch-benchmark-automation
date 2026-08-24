@@ -106,14 +106,14 @@ if [ "$NAMESPACE" == "all" ]; then
     echo "Scaling down all OpenSearch clusters..."
     echo ""
     
-    for ns in os-jvector os-faiss os-lucene os-develop-jvector os-develop-faiss os-develop-lucene; do
+    for ns in os-jvector os-faiss os-lucene; do
         scale_down_namespace $ns
     done
     
 else
     # Validate namespace
-    if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene|os-develop-jvector|os-develop-faiss|os-develop-lucene)$ ]]; then
-        echo -e "${RED}❌ Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, os-develop-jvector, os-develop-faiss, os-develop-lucene, all${NC}"
+    if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene)$ ]]; then
+        echo -e "${RED}❌ Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, all${NC}"
         exit 1
     fi
     
