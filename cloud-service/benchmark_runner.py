@@ -30,6 +30,7 @@ class RunContext:
     results_dir:    Path             # pre-built results directory for this sweep
     username:       str = 'admin'   # cluster auth — kept off params so never sent to OSB
     password:       str = 'admin'
+    client_timeout: int = 600       # HTTP client timeout (s) — runner-only, never sent to OSB
 
 
 def _kill_proc_group(proc: subprocess.Popen) -> None:
@@ -118,6 +119,10 @@ def _diff_node_stats(before: Dict, after: Dict) -> Dict:
 
 logger = logging.getLogger(__name__)
 
+# Params consumed by the runner itself — must never be forwarded to OSB as workload
+# params because the workload loader raises WorkloadConfigError on unknown parameters.
+_RUNNER_ONLY_KEYS = frozenset({'client_timeout', 'ingest_max_attempts'})
+
 
 class BenchmarkRunner:
     """Executes opensearch-benchmark commands without kubectl dependencies"""
@@ -166,9 +171,12 @@ class BenchmarkRunner:
             base_params.update(engine_params_config[engine])
             logger.info(f"Loaded engine params for {engine}: {list(engine_params_config[engine].keys())}")
 
-        # Extract credentials before they can bleed into workload params sent to OSB
-        username = (workload_params or {}).pop('username', 'admin')
-        password = (workload_params or {}).pop('password', 'admin')
+        # Extract runner-only keys before they can bleed into workload params sent to OSB.
+        # username/password are popped to prevent mutation leaking into subsequent calls.
+        # client_timeout uses .get() — it is already blocked from ctx.params by _RUNNER_ONLY_KEYS.
+        username       = (workload_params or {}).pop('username',       'admin')
+        password       = (workload_params or {}).pop('password',       'admin')
+        client_timeout = (workload_params or {}).get('client_timeout', 600)
 
         # Procedure config: scenario-level params + engine-specific overrides
         runtime_sweeps   = workload_params.pop('parameter_sweeps', None) if workload_params else None
@@ -209,6 +217,7 @@ class BenchmarkRunner:
                 logger.info(f"Sweep {idx} params: {list(sweep_params.keys())}")
             merged       = {**base_params, **procedure_base_params, **sweep_params}
             final_params = self.config.resolve_workload_params(dataset, merged, workload_params)
+            final_params = {k: v for k, v in final_params.items() if k not in _RUNNER_ONLY_KEYS}
 
             if '/' in job_id:
                 base = self.results_dir / job_id
@@ -227,6 +236,7 @@ class BenchmarkRunner:
                 results_dir    = results_dir,
                 username       = username,
                 password       = password,
+                client_timeout = client_timeout,
             ))
 
         return sweeps
@@ -406,13 +416,12 @@ class BenchmarkRunner:
             'method_name':    ctx.params.get('method_name'),
         }
         user_tags_str  = ','.join(f"{k}:{v}" for k, v in user_tags.items() if v is not None)
-        client_timeout = ctx.params.pop('client_timeout', 600)
 
         cmd = [
             'opensearch-benchmark', 'run',
             '--workload-path',   ctx.workload_path,
             '--target-hosts',    ctx.target_host,
-            '--client-options',  f'timeout:{client_timeout},use_ssl:true,verify_certs:false,basic_auth_user:{ctx.username},basic_auth_password:{ctx.password}',
+            '--client-options',  f'timeout:{ctx.client_timeout},use_ssl:true,verify_certs:false,basic_auth_user:{ctx.username},basic_auth_password:{ctx.password}',
             '--test-procedure',  scenario,
             '--kill-running-processes',
             f'--user-tag={user_tags_str}',
