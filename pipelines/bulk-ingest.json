@@ -17,6 +17,6 @@
     { "dataset": "cohere-msmarco-1024", "scenario": "create-index" },
     { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data","params": { "target_index_bulk_size": 5000 } },
     { "dataset": "cohere-msmarco-1024", "scenario": "force-merge",     "params": { "client_timeout": 28800 } },
-    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index",   "params": { "client_timeout": 3600 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index",   "params": { "client_timeout": 3600 } }
   ]
 }
