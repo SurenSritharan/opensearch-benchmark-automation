@@ -116,8 +116,9 @@ spec:
               cp -r /workspace-tmp/.git /workspace/ 2>/dev/null || true
               rm -rf /workspace-tmp
             else
-              echo "Workspace already exists, pulling latest main changes..."
+              echo "Workspace already exists, ensuring origin remote and pulling latest main changes..."
               cd /workspace
+              git remote set-url origin https://github.com/SurenSritharan/opensearch-benchmark-automation.git
               git reset --hard
               git clean -fd
               git pull origin main || echo "Git pull failed, using existing version"
