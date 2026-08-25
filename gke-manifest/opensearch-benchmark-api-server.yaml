@@ -64,7 +64,7 @@ spec:
             apt-get install -y -qq git curl wget vim gcc python3-dev jq tini
             
             echo "Installing Python packages..."
-            pip install --quiet flask flask-cors pyyaml gunicorn filelock
+            pip install --quiet flask flask-cors jinja2 pyyaml gunicorn filelock
             
             echo "Setting up directories..."
             mkdir -p /app/web

@@ -216,7 +216,7 @@ class BenchmarkRunner:
             if sweep_params:
                 logger.info(f"Sweep {idx} params: {list(sweep_params.keys())}")
             merged       = {**base_params, **procedure_base_params, **sweep_params}
-            final_params = self.config.resolve_workload_params(dataset, merged, workload_params)
+            final_params = self.config.resolve_workload_params(dataset, merged, workload_params, scenario=scenario)
             final_params = {k: v for k, v in final_params.items() if k not in _RUNNER_ONLY_KEYS}
 
             if '/' in job_id:
