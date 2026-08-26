@@ -1,0 +1,14 @@
+{
+  "description": "DBpedia OpenAI 1536-d Parquet at 500k (create, ingest, merge, search k=10)",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "500k" },
+  "steps": [
+    { "dataset": "dbpedia-openai-1536", "scenario": "delete-index" },
+    { "dataset": "dbpedia-openai-1536", "scenario": "create-index" },
+    { "dataset": "dbpedia-openai-1536", "scenario": "bulk-ingest-data" },
+    { "dataset": "dbpedia-openai-1536", "scenario": "refresh-index" },
+    { "dataset": "dbpedia-openai-1536", "scenario": "force-merge" },
+    { "dataset": "dbpedia-openai-1536", "scenario": "refresh-index" },
+    { "dataset": "dbpedia-openai-1536", "scenario": "vector-search", "params": { "query_k": 10 } }
+  ]
+}
