@@ -73,9 +73,9 @@ case "$NODE_SIZE" in
         ;;
 esac
 
-# Validate namespace
-if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene)$ ]]; then
-    echo "Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene"
+# Validate namespace — accept both prod (os-<engine>) and develop (os-develop-<engine>)
+if [[ ! "$NAMESPACE" =~ ^os-(develop-)?(jvector|faiss|lucene)$ ]]; then
+    echo "Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, os-develop-jvector, os-develop-faiss, os-develop-lucene"
     exit 1
 fi
 
@@ -199,7 +199,7 @@ else
 fi
 
 # Deploy based on namespace type
-if [ "$NAMESPACE" == "os-jvector" ]; then
+if [[ "$NAMESPACE" =~ jvector ]]; then
     MANAGER_MANIFEST="$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml"
     DATA_MANIFEST="$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml"
     echo ""

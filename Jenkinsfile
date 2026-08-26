@@ -83,6 +83,8 @@ pipeline {
     environment {
         RESULTS_DIR = "results/${BUILD_ID}"
         KUBECONFIG  = "${env.WORKSPACE}/.kube/config"
+        // main → os-<engine>, any other branch → os-develop-<engine>.
+        OS_NAMESPACE = "${scm.branches[0].name.contains('main') ? 'os' : 'os-develop'}-${params.ENGINE}"
     }
 
     // triggers {
@@ -125,8 +127,8 @@ pipeline {
             }
             steps {
                 sh """
-                    echo "Syncing opensearch-shared-certs from os-develop-${params.ENGINE} into benchmark-api-develop..."
-                    kubectl get secret opensearch-shared-certs -n os-develop-${params.ENGINE} -o json | \
+                    echo "Syncing opensearch-shared-certs from ${OS_NAMESPACE} into benchmark-api-develop..."
+                    kubectl get secret opensearch-shared-certs -n ${OS_NAMESPACE} -o json | \
                         python3 -c "
 import sys, json
 s = json.load(sys.stdin)
@@ -187,8 +189,8 @@ print(json.dumps(s))
         stage('Verify Health') {
             steps {
                 sh """
-                    echo "=== os-develop-${params.ENGINE} cluster ==="
-                    kubectl get pods -n os-develop-${params.ENGINE} 2>/dev/null || echo "(not deployed)"
+                    echo "=== ${OS_NAMESPACE} cluster ==="
+                    kubectl get pods -n ${OS_NAMESPACE} 2>/dev/null || echo "(not deployed)"
                     echo ""
                     echo "=== Benchmark API develop (benchmark-api-develop namespace) ==="
                     kubectl get pods -n benchmark-api-develop
@@ -312,11 +314,10 @@ print(json.dumps(s))
                                 // ── a) Scale up or deploy the cluster ─────────────
                                 if (params.SCALE_CLUSTERS) {
                                     sh """
-                                        NS="os-develop-${params.ENGINE}"
-                                        DEPLOY_NS="os-${params.ENGINE}"
+                                        NS="${OS_NAMESPACE}"
                                         if [ "${multiRun}" = "true" ] || [ "${redeploy}" = "true" ]; then
-                                            echo "Deploying \$DEPLOY_NS (version ${version}, size ${runSize})..."
-                                            gke-manifest/deploy-namespace-cluster.sh \$DEPLOY_NS ${runExtraArgs}
+                                            echo "Deploying \$NS (version ${version}, size ${runSize})..."
+                                            gke-manifest/deploy-namespace-cluster.sh \$NS ${runExtraArgs}
                                         else
                                             STS_COUNT=\$(kubectl get statefulset -n \$NS --no-headers 2>/dev/null | wc -l)
                                             if [ "\$STS_COUNT" -gt 0 ]; then
@@ -324,7 +325,7 @@ print(json.dumps(s))
                                                 gke-manifest/scale-up-clusters.sh \$NS
                                             else
                                                 echo "No StatefulSets in \$NS — running initial deploy..."
-                                                gke-manifest/deploy-namespace-cluster.sh \$DEPLOY_NS ${runExtraArgs}
+                                                gke-manifest/deploy-namespace-cluster.sh \$NS ${runExtraArgs}
                                             fi
                                         fi
 
@@ -512,7 +513,7 @@ Date:      \$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
 Parameters:
   Pipeline:           ${pipeline}
-  Cluster:            os-develop-${params.ENGINE}
+  Cluster:            ${OS_NAMESPACE}
   API URL:            ${params.API_URL}
   Scale Clusters:     ${params.SCALE_CLUSTERS}
   Redeploy Clusters:  ${params.REDEPLOY_CLUSTERS}
@@ -609,8 +610,8 @@ EOF
                         kubectl scale deployment opensearch-benchmark-api-server \
                             --replicas=0 -n benchmark-api-develop || true
                     """
-                    echo "Scaling down os-develop-${params.ENGINE} cluster..."
-                    sh "gke-manifest/scale-down-clusters.sh os-develop-${params.ENGINE} || true"
+                    echo "Scaling down ${OS_NAMESPACE} cluster..."
+                    sh "gke-manifest/scale-down-clusters.sh ${OS_NAMESPACE} || true"
                 }
 
                 sh """
