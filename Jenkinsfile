@@ -313,9 +313,10 @@ print(json.dumps(s))
                                 if (params.SCALE_CLUSTERS) {
                                     sh """
                                         NS="os-develop-${params.ENGINE}"
+                                        DEPLOY_NS="os-${params.ENGINE}"
                                         if [ "${multiRun}" = "true" ] || [ "${redeploy}" = "true" ]; then
-                                            echo "Deploying \$NS (version ${version}, size ${runSize})..."
-                                            gke-manifest/deploy-namespace-cluster.sh \$NS ${runExtraArgs}
+                                            echo "Deploying \$DEPLOY_NS (version ${version}, size ${runSize})..."
+                                            gke-manifest/deploy-namespace-cluster.sh \$DEPLOY_NS ${runExtraArgs}
                                         else
                                             STS_COUNT=\$(kubectl get statefulset -n \$NS --no-headers 2>/dev/null | wc -l)
                                             if [ "\$STS_COUNT" -gt 0 ]; then
@@ -323,7 +324,7 @@ print(json.dumps(s))
                                                 gke-manifest/scale-up-clusters.sh \$NS
                                             else
                                                 echo "No StatefulSets in \$NS — running initial deploy..."
-                                                gke-manifest/deploy-namespace-cluster.sh \$NS ${runExtraArgs}
+                                                gke-manifest/deploy-namespace-cluster.sh \$DEPLOY_NS ${runExtraArgs}
                                             fi
                                         fi
 
