@@ -103,6 +103,8 @@ spec:
               git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-workloads.git /datasets/opensearch-benchmark-workloads
             else
               cd /datasets/opensearch-benchmark-workloads
+              git reset --hard
+              git clean -fd
               git pull origin main || echo "Git pull failed, using existing version"
             fi
             
@@ -173,15 +175,19 @@ spec:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 60
+          initialDelaySeconds: 120
           periodSeconds: 60
+          timeoutSeconds: 30
+          failureThreshold: 5
         
         readinessProbe:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 30
+          initialDelaySeconds: 60
           periodSeconds: 30
+          timeoutSeconds: 30
+          failureThreshold: 3
       
       volumes:
       - name: worker-storage

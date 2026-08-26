@@ -60,6 +60,7 @@ datasets:
           hnsw_ef_construction: 256
           hnsw_m: 32
           refresh_interval: "-1"
+          max_merged_segment: "2gb"
         # Engine-specific parameters for index creation
         engine_params:
           faiss:
@@ -78,6 +79,15 @@ datasets:
           target_index_bulk_index_data_set_corpus: "{{corpus_name}}"
           target_index_bulk_indexing_clients: 8
           detailed_results: false
+        # DiskANN builds on-disk graphs during segment merges, which blocks Netty
+        # threads for minutes at a time under concurrent write pressure.
+        # Use a single client with large batches so each graph-build completes
+        # before the next batch lands — prevents 99th-pct latency spikes and
+        # partial-ingest shortfalls.
+        engine_params:
+          jvector:
+            target_index_bulk_size: 2000
+            target_index_bulk_indexing_clients: 1
 
         # uses make_blobs synthetic generation — no corpus file, supports any num_vectors
       - name: "bulk-ingest-random"
@@ -182,6 +192,7 @@ datasets:
           hnsw_ef_construction: 256
           hnsw_m: 32
           refresh_interval: "-1"
+          max_merged_segment: "2gb"
         engine_params:
           jvector:
             method_name: "disk_ann"
@@ -197,6 +208,11 @@ datasets:
           target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base_{{corpus_size}}.fvec"
           target_index_bulk_indexing_clients: 8
           detailed_results: false
+        # Same DiskANN constraint as cohere-wiki-en-768 — single client, large batches.
+        engine_params:
+          jvector:
+            target_index_bulk_size: 2000
+            target_index_bulk_indexing_clients: 1
 
       - name: "refresh-index"
         params: {}
@@ -262,6 +278,7 @@ datasets:
           hnsw_ef_construction: 256
           hnsw_m: 16
           refresh_interval: "-1"
+          max_merged_segment: "2gb"
         engine_params:
           faiss:
             method_name: "hnsw"
@@ -293,6 +310,98 @@ datasets:
           # Ground truth file is computed during bulk-ingest-data and keyed by num_vectors.
           # workload.json derives both target_index_name and queries_file from num_vectors
           # automatically — no need to set them here unless overriding.
+          warmup_time_period: 60
+          time_period: 300
+          hnsw_ef_search: 128
+          query_k: 10
+          search_clients: 1
+          detailed_results: true
+
+      - name: "create-search-pipeline"
+        params:
+          search_pipeline: "hybrid-search-pipeline"
+          normalization_technique: "min_max"
+          bm25_weight: 0.3
+          knn_weight: 0.7
+
+      - name: "delete-search-pipeline"
+        params:
+          search_pipeline: "hybrid-search-pipeline"
+
+      - name: "hybrid-search"
+        params:
+          warmup_time_period: 60
+          time_period: 300
+          hnsw_ef_search: 128
+          query_k: 10
+          search_clients: 1
+          search_pipeline: "hybrid-search-pipeline"
+          hybrid_text_field: "text"
+          detailed_results: true
+
+  dbpedia-openai-1536:
+    dimension: 1536
+    format: parquet
+    space_type: "cosinesimil"
+    description: "DBpedia entities with 1536-dimensional OpenAI embeddings streamed from HuggingFace parquet files — ground truth computed on-the-fly by workload.py"
+    workload: "parquet"
+
+    supported_corpus_sizes: ["50k", "500k", "1m"]
+
+    # Data is streamed directly from HuggingFace at runtime.
+    common_params:
+      target_index_name: "dbpedia-openai-1536-{{corpus_size}}"
+      target_index_dimension: 1536
+      target_field_name: "openai"
+      hf_repo_id: "KShivendu/dbpedia-entities-openai-1M"
+      hf_dataset_dir: "datasets/KShivendu/dbpedia-entities-openai-1M/data"
+
+    engine_params:
+      faiss:
+        engine: "faiss"
+      lucene:
+        engine: "lucene"
+      jvector:
+        engine: "jvector"
+
+    test_procedures:
+      - name: "delete-index"
+        params: {}
+
+      - name: "create-index"
+        params:
+          target_index_body: "indices/index.json"
+          target_index_primary_shards: 1
+          target_index_replica_shards: 0
+          target_index_space_type: "cosinesimil"
+          hnsw_ef_construction: 256
+          hnsw_m: 16
+          refresh_interval: "-1"
+        engine_params:
+          faiss:
+            method_name: "hnsw"
+          lucene:
+            method_name: "hnsw"
+          jvector:
+            method_name: "disk_ann"
+            mode: "on_disk"
+
+      - name: "bulk-ingest-data"
+        params:
+          target_index_bulk_size: 1000
+          target_index_bulk_indexing_clients: 1
+          num_queries: 1000
+          detailed_results: false
+
+      - name: "refresh-index"
+        params: {}
+
+      - name: "force-merge"
+        params:
+          target_index_max_num_segments: 1
+
+      - name: "vector-search"
+        params:
           warmup_time_period: 60
           time_period: 300
           hnsw_ef_search: 128

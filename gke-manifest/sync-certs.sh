@@ -20,15 +20,13 @@ CERT_DIR="$SCRIPT_DIR/certs"
 
 echo ""
 echo "=== Syncing opensearch-shared-certs to all namespaces ==="
-# Discover all develop namespaces dynamically so new engines are covered
-# automatically without editing this script.
 NAMESPACES=$(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}' \
     | tr ' ' '\n' \
-    | grep -E '^(benchmark-api-develop|os-develop-)' \
+    | grep -E '^(benchmark-api-develop|os-develop-jvector|os-develop-faiss|os-develop-lucene)$' \
     || true)
 
 if [ -z "$NAMESPACES" ]; then
-    echo "  ⚠️  No matching namespaces found (benchmark-api-develop or os-develop-*)"
+    echo "  ⚠️  No matching namespaces found (benchmark-api-develop, os-develop-jvector, os-develop-faiss, os-develop-lucene)"
 else
     for ns in $NAMESPACES; do
         kubectl create secret generic opensearch-shared-certs \

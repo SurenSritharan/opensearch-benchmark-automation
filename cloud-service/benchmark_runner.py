@@ -406,7 +406,7 @@ class BenchmarkRunner:
             'method_name':    ctx.params.get('method_name'),
         }
         user_tags_str  = ','.join(f"{k}:{v}" for k, v in user_tags.items() if v is not None)
-        client_timeout = ctx.params.get('client_timeout', 600)
+        client_timeout = ctx.params.pop('client_timeout', 600)
 
         cmd = [
             'opensearch-benchmark', 'run',
@@ -548,12 +548,12 @@ class BenchmarkRunner:
 
         Returns a CompletedProcess with the exit code, stdout, and stderr.
         """
-        TIMEOUT_SECONDS    = 28800   # 8-hour hard limit
+        TIMEOUT_SECONDS    = 86400   # 24-hour hard limit
         POLL_INTERVAL      = 1.0     # seconds between loop iterations
         HEALTH_INTERVAL    = 60.0    # seconds between cluster health checks
         RED_TOLERANCE      = 5       # consecutive connection failures → kill
         BUSY_TOLERANCE     = 60      # consecutive read timeouts → kill
-                                     # 60 × 60 s = 60 min grace; the 6-hour hard limit
+                                     # 60 × 60 s = 60 min grace; the 24-hour hard limit
                                      # is the real backstop for CPU-bound work like
                                      # jvector force-merge (final graph build can take
                                      # 2-4 h on small nodes for a 1.67M-vector shard)
@@ -1175,10 +1175,14 @@ class BenchmarkRunner:
             )
 
         # ----------------------------------------------------------------
-        # Pre-flight check: wait for stable count — skip ingest if already complete
+        # Pre-flight check: wait for stable count — skip ingest if already complete.
+        # Exception: parquet-format datasets generate their queries/ground-truth file
+        # as a side-effect of bulk-ingest-data, so we must always run ingest for them
+        # even when the index already contains the expected number of documents.
         # ----------------------------------------------------------------
+        dataset_format = self.config.get_dataset_config(dataset).get('format', '')
         pre_count = self._wait_for_stable_count(target_host, index, expected)
-        if pre_count is not None and pre_count >= expected:
+        if pre_count is not None and pre_count >= expected and dataset_format != 'parquet':
             logger.info(
                 f"Index [{index}] already has {pre_count}/{expected} docs — skipping ingest."
             )
@@ -1190,6 +1194,11 @@ class BenchmarkRunner:
                 "all_attempts":    [],
                 "skipped":         True,
             }
+        if pre_count is not None and pre_count >= expected and dataset_format == 'parquet':
+            logger.info(
+                f"Index [{index}] already has {pre_count}/{expected} docs but dataset format is "
+                f"'parquet' — running bulk-ingest-data to ensure queries/ground-truth file exists."
+            )
 
         all_attempt_results = []
 

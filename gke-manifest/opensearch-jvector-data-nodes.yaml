@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: opensearch-data-config
-  namespace: os-develop-jvector
+  namespace: os-jvector
 data:
   opensearch.yml: |
     cluster.name: opensearch-cluster
@@ -11,10 +11,10 @@ data:
     node.roles: [data, ingest]
     
     discovery.seed_hosts:
-      - opensearch-cluster-manager-0.opensearch-cluster-manager.os-develop-jvector.svc.cluster.local
-      - opensearch-data-0.opensearch-data.os-develop-jvector.svc.cluster.local
-      - opensearch-data-1.opensearch-data.os-develop-jvector.svc.cluster.local
-      - opensearch-data-2.opensearch-data.os-develop-jvector.svc.cluster.local
+      - opensearch-cluster-manager-0.opensearch-cluster-manager.os-jvector.svc.cluster.local
+      - opensearch-data-0.opensearch-data.os-jvector.svc.cluster.local
+      - opensearch-data-1.opensearch-data.os-jvector.svc.cluster.local
+      - opensearch-data-2.opensearch-data.os-jvector.svc.cluster.local
     
     discovery.seed_resolver.timeout: 10s
     discovery.seed_resolver.max_concurrent_resolvers: 3
@@ -59,13 +59,13 @@ data:
     knn.cache.item.expiry.minutes: "180m"
     knn.circuit_breaker.triggered: "false"
 
-    indexing_pressure.memory.limit: 20%
+    indexing_pressure.memory.limit: 40%
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-data
-  namespace: os-develop-jvector
+  namespace: os-jvector
   labels:
     app: opensearch-data
 spec:
@@ -84,7 +84,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-cluster
-  namespace: os-develop-jvector
+  namespace: os-jvector
   labels:
     app: opensearch-data
 spec:
@@ -100,7 +100,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: opensearch-data
-  namespace: os-develop-jvector
+  namespace: os-jvector
 spec:
   serviceName: opensearch-data
   replicas: 3

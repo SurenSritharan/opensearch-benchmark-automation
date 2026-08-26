@@ -322,7 +322,7 @@ _start_stats_sampler() {
   [ "${STATS_INTERVAL:-0}" -gt 0 ] 2>/dev/null || return 0
   [ -z "${RESULTS_DEST:-}" ] && return 0
 
-  local ns="os-develop-${ENGINE}"
+  local ns="os-${ENGINE}"
   local os_host="opensearch-cluster.${ns}.svc.cluster.local:9200"
   local worker_pod="opensearch-benchmark-worker-${ENGINE}-0"
   local outfile="${RESULTS_DEST}/server-stats-timeseries.ndjson"
@@ -426,7 +426,7 @@ _collect_scenario_server_logs() {
   local scenario_key="$1"
   [ -z "${RESULTS_DEST:-}" ] && return 0
 
-  local ns="${OS_NAMESPACE:-os-develop-${ENGINE}}"
+  local ns="${OS_NAMESPACE:-os-${ENGINE}}"
   local log_dir="${RESULTS_DEST}/${scenario_key}/server-logs"
   mkdir -p "$log_dir"
 
@@ -582,6 +582,21 @@ while true; do
   PREV_COMPLETED="${completed:-0}"
 
   if $terminal; then
+    # Collect logs for the currently-running scenario if it never appeared in
+    # scenario_status (e.g. cancelled mid-flight at the job level before the
+    # server had a chance to mark the in-progress scenario as cancelled).
+    if [ -n "$label" ] && [ -n "${RESULTS_DEST:-}" ]; then
+      # Reconstruct the scenario key the same way the server builds it:
+      # dataset + "-" + label  (label already has the corpus+procedure suffix)
+      # We try the raw current_scenario value from the API first.
+      cur_key=$(echo "$resp" | jq -r '.current_scenario // ""')
+      [ -z "$cur_key" ] && cur_key="${ENGINE}-${label}"
+      if [ -n "$cur_key" ] && [ "${_COLLECTED[$cur_key]+set}" != "set" ]; then
+        _COLLECTED[$cur_key]=1
+        _copy_scenario_results "$cur_key"
+        _collect_scenario_server_logs "$cur_key"
+      fi
+    fi
     echo ""
     echo "=========================================="
     echo "Job finished with status: $job_status"

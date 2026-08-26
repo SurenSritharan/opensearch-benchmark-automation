@@ -74,8 +74,8 @@ case "$NODE_SIZE" in
 esac
 
 # Validate namespace
-if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene|os-develop-jvector|os-develop-faiss|os-develop-lucene)$ ]]; then
-    echo "Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, os-develop-jvector, os-develop-faiss, os-develop-lucene"
+if [[ ! "$NAMESPACE" =~ ^(os-jvector|os-faiss|os-lucene)$ ]]; then
+    echo "Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene"
     exit 1
 fi
 
@@ -100,11 +100,14 @@ fi
 echo ""
 echo "Cleaning up existing resources in $NAMESPACE..."
 
-# Delete StatefulSets first (to trigger graceful pod shutdown)
+# Delete StatefulSets and Pods in the background to trigger graceful shutdown
+echo "Initiating deletion of StatefulSets and Pods..."
 kubectl delete statefulset --all -n $NAMESPACE --ignore-not-found=true --wait=false
-
-# Delete pods
 kubectl delete pod --all -n $NAMESPACE --ignore-not-found=true --wait=false
+
+# Explicitly wait for pods to terminate to release PVC locks (finalizers)
+echo "Waiting for pods to terminate..."
+kubectl wait --for=delete pod --all -n $NAMESPACE --timeout=120s 2>/dev/null || true
 
 # Delete services
 kubectl delete service --all -n $NAMESPACE --ignore-not-found=true --wait=false
@@ -115,8 +118,9 @@ kubectl delete configmap -n $NAMESPACE --field-selector metadata.name!=kube-root
 # Handle PVCs based on --delete-pvcs flag
 if [[ "$DELETE_PVCS" == true ]]; then
     echo "⚠️  Deleting PVCs (all indexed data and results will be lost)..."
-    kubectl delete pvc --all -n $NAMESPACE --ignore-not-found=true --wait=false
-    echo "   PVCs deleted"
+    # This blocks natively until the PVCs are completely deleted from the cluster
+    kubectl delete pvc --all -n $NAMESPACE --ignore-not-found=true
+    echo "   ✅ PVCs successfully deleted"
 else
     echo "💾 Preserving PVCs to retain data (indexed vectors, benchmark results, etc.)"
     EXISTING_PVCS=$(kubectl get pvc -n $NAMESPACE -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
@@ -132,7 +136,7 @@ else
     fi
 fi
 
-echo "Waiting for resources to be deleted..."
+echo "Waiting for remaining resources to settle..."
 sleep 5
 
 echo "Cleanup complete. Proceeding with deployment..."
@@ -195,32 +199,9 @@ else
 fi
 
 # Deploy based on namespace type
-if [[ "$NAMESPACE" =~ ^os-develop- ]]; then
-    # develop-* namespaces use the jvector manifests (jvector develop build)
+if [ "$NAMESPACE" == "os-jvector" ]; then
     MANAGER_MANIFEST="$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml"
     DATA_MANIFEST="$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml"
-    echo ""
-    echo "Deploying JVector develop cluster..."
-
-    echo "1. Deploying cluster manager..."
-    sed -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
-        "$MANAGER_MANIFEST" | kubectl apply -n $NAMESPACE -f -
-
-    echo "2. Waiting for cluster manager to be ready..."
-    kubectl wait --for=condition=ready pod -l app=opensearch-cluster-manager -n $NAMESPACE --timeout=300s || true
-
-    echo "3. Deploying data nodes..."
-    sed -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
-        -e "s/\${NODE_CPU_REQ}/$NODE_CPU_REQ/g" \
-        -e "s/\${NODE_CPU_LIM}/$NODE_CPU_LIM/g" \
-        -e "s/\${NODE_MEM}/$NODE_MEM/g" \
-        -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
-        "$DATA_MANIFEST" | kubectl apply -n $NAMESPACE -f -
-
-elif [ "$NAMESPACE" == "os-jvector" ]; then
-    MANAGER_MANIFEST="$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml"
-    DATA_MANIFEST="$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml"
-    # NOTE: this branch targets the main-branch os-jvector namespace (not used on develop)
     echo ""
     echo "Deploying JVector cluster (with custom plugin)..."
 
