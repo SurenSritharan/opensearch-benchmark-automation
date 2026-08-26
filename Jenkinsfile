@@ -28,6 +28,9 @@ pipeline {
                 'msmarco-jvector-index-sweep-auto-1m',
                 'parquet-50k',
                 'parquet-1m',
+                'dbpedia-parquet-50k',
+                'dbpedia-parquet-500k',
+                'dbpedia-parquet-1m',
                 'complete-5m-test',
             ],
             description: 'Pipeline to run. Corresponds to a file in the pipelines/ directory.'
