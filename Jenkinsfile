@@ -539,6 +539,8 @@ EOF
                         echo "========================================" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
                         cat ${RESULTS_DIR}/BUILD_SUMMARY.txt
                     """
+                    def resultsUrl = BUILD_URL + "execution/node/3/ws/results/" + BUILD_ID
+                    println "Results workspace: ${resultsUrl}"
                 }
             }
         }
