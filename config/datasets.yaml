@@ -208,9 +208,6 @@ datasets:
         params:
           target_index_replica_shards: 1
 
-      - name: "update-index-settings"
-        params: {}
-
       - name: "force-merge"
         params:
           target_index_max_num_segments: 1
