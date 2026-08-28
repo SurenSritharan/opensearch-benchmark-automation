@@ -51,7 +51,7 @@ pipeline {
         )
         choice(
             name: 'ENGINE_TARGET',
-            choices: ['all', 'os-jvector', 'os-faiss', 'os-lucene'],
+            choices: ['all', 'jvector', 'faiss', 'lucene'],
             description: 'Which engine cluster(s) to run. "all" targets all three. On develop, engines run sequentially; on main they run in parallel.'
         )
         booleanParam(
@@ -827,7 +827,7 @@ def getEngines() {
         // all three engines.
         return isProd() ? ['jvector', 'faiss', 'lucene'] : ['jvector']
     }
-    return [params.ENGINE_TARGET.replace('os-', '')]
+    return [params.ENGINE_TARGET]
 }
 
 // Made with Bob
