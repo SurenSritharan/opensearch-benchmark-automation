@@ -3,7 +3,8 @@
 # Scale down OpenSearch clusters to save resources
 # This script reduces StatefulSet replicas to 0 while preserving data in PVCs
 # Usage: ./scale-down-clusters.sh [namespace]
-# Example: ./scale-down-clusters.sh os-develop-jvector
+# Example: ./scale-down-clusters.sh os-develop-jvector   (develop)
+#          ./scale-down-clusters.sh os-jvector            (prod)
 #          ./scale-down-clusters.sh all
 
 set -e
@@ -94,26 +95,32 @@ if [ -z "$NAMESPACE" ]; then
     echo "Usage: $0 <namespace|all>"
     echo ""
     echo "Available options:"
-    echo "  os-develop-jvector  - Scale down JVector cluster"
-    echo "  os-develop-faiss    - Scale down FAISS cluster"
-    echo "  os-develop-lucene   - Scale down Lucene cluster"
-    echo "  all         - Scale down all clusters"
+    echo "  os-jvector          - Scale down JVector cluster (prod)"
+    echo "  os-faiss            - Scale down FAISS cluster (prod)"
+    echo "  os-lucene           - Scale down Lucene cluster (prod)"
+    echo "  os-develop-jvector  - Scale down JVector cluster (develop)"
+    echo "  os-develop-faiss    - Scale down FAISS cluster (develop)"
+    echo "  os-develop-lucene   - Scale down Lucene cluster (develop)"
+    echo "  all                 - Scale down all clusters (develop)"
     echo ""
     exit 1
 fi
 
 if [ "$NAMESPACE" == "all" ]; then
-    echo "Scaling down all OpenSearch clusters..."
+    echo -e "${YELLOW}⚠️  WARNING: scaling down ALL namespaces (prod + develop).${NC}"
+    echo -e "${YELLOW}   Do not use 'all' while a benchmark pipeline job is running — it will${NC}"
+    echo -e "${YELLOW}   tear down clusters that are actively in use by the other job.${NC}"
     echo ""
-    
-    for ns in os-develop-jvector os-develop-faiss os-develop-lucene; do
+
+    for ns in os-jvector os-faiss os-lucene os-develop-jvector os-develop-faiss os-develop-lucene; do
         scale_down_namespace $ns
     done
     
 else
-    # Validate namespace
-    if [[ ! "$NAMESPACE" =~ ^(os-develop-jvector|os-develop-faiss|os-develop-lucene)$ ]]; then
-        echo -e "${RED}❌ Error: Invalid namespace. Must be one of: os-develop-jvector, os-develop-faiss, os-develop-lucene, all${NC}"
+    # Accept both prod (os-<engine>) and develop (os-develop-<engine>) namespaces.
+    if [[ ! "$NAMESPACE" =~ ^os(-develop)?-(jvector|faiss|lucene)$ ]]; then
+        echo -e "${RED}❌ Error: Invalid namespace '$NAMESPACE'."
+        echo "   Expected one of: os-jvector, os-faiss, os-lucene, os-develop-jvector, os-develop-faiss, os-develop-lucene, all${NC}"
         exit 1
     fi
     

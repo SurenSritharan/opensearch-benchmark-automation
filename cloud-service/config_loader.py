@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Configuration loader for cloud-native benchmark service"""
+import os
 import yaml
 import subprocess
 import copy
@@ -9,6 +10,17 @@ from typing import Dict, List, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def get_os_namespace(engine: str) -> str:
+    """Return the OpenSearch cluster namespace for *engine*.
+
+    Reads OS_NAMESPACE from the environment when set (injected by the
+    Jenkinsfile so prod and develop pipelines resolve to the right namespace
+    without code changes).  Falls back to os-<engine> so the module works
+    outside Jenkins too.
+    """
+    return os.environ.get('OS_NAMESPACE', f'os-{engine}')
 
 
 def get_num_vectors(corpus_size) -> int:
@@ -262,7 +274,7 @@ class ConfigLoader:
     
     def get_target_host(self, engine: str) -> str:
         """Get the OpenSearch cluster endpoint for an engine"""
-        namespace = f"os-develop-{engine}"
+        namespace = get_os_namespace(engine)
         return f"opensearch-cluster.{namespace}.svc.cluster.local:9200"
     
     def resolve_workload_params(
