@@ -7,6 +7,8 @@
 
 # IDE files
 .idea/
+.claude/
+.bob/
 
 # Temporary files
 *.log
@@ -20,3 +22,7 @@
 # Python cache
 lib/__pycache__
 tmp*
+
+results/
+
+/.bob
