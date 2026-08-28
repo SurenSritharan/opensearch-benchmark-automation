@@ -332,10 +332,14 @@ print(json.dumps(s))
 
                                 // ── a) Start this engine's worker just-in-time ─────────
                                 if (params.SCALE_CLUSTERS) {
+                                    def workerStorageClaim = prodRun \
+                                        ? "benchmark-worker-storage-${engine}" \
+                                        : "benchmark-worker-storage"
                                     sh """
                                         MANIFEST=\$(sed -e 's/\\\${ENGINE}/${engine}/g' \
                                             -e 's|\\\${NAMESPACE}|${apiNs}|g' \
                                             -e 's|\\\${AUTOMATION_BRANCH}|${automationBranch}|g' \
+                                            -e 's|\\\${WORKER_STORAGE_CLAIM}|${workerStorageClaim}|g' \
                                             gke-manifest/opensearch-benchmark-worker-template.yaml)
 
                                         if kubectl get statefulset opensearch-benchmark-worker-${engine} \

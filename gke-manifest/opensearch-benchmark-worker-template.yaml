@@ -192,7 +192,7 @@ spec:
       volumes:
       - name: worker-storage
         persistentVolumeClaim:
-          claimName: benchmark-worker-storage-${ENGINE}
+          claimName: ${WORKER_STORAGE_CLAIM}
       - name: certs
         secret:
           secretName: opensearch-shared-certs
