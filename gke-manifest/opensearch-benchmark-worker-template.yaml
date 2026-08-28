@@ -4,13 +4,13 @@ metadata:
   name: opensearch-benchmark-worker-${ENGINE}
   namespace: ${NAMESPACE}
   labels:
-    app: ${APP_LABEL}
+    app: opensearch-benchmark
     component: worker
     engine: ${ENGINE}
 spec:
   clusterIP: None
   selector:
-    app: ${APP_LABEL}
+    app: opensearch-benchmark
     component: worker
     engine: ${ENGINE}
   ports:
@@ -24,7 +24,7 @@ metadata:
   name: opensearch-benchmark-worker-${ENGINE}
   namespace: ${NAMESPACE}
   labels:
-    app: ${APP_LABEL}
+    app: opensearch-benchmark
     component: worker
     engine: ${ENGINE}
 spec:
@@ -32,13 +32,13 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ${APP_LABEL}
+      app: opensearch-benchmark
       component: worker
       engine: ${ENGINE}
   template:
     metadata:
       labels:
-        app: ${APP_LABEL}
+        app: opensearch-benchmark
         component: worker
         engine: ${ENGINE}
     spec:

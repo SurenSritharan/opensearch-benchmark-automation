@@ -194,9 +194,8 @@ print(json.dumps(s))
             }
             steps {
                 script {
-                    def apiNs    = getApiNamespace()
-                    def appLabel = isProd() ? 'opensearch-benchmark' : 'opensearch-benchmark-develop'
-                    def engines  = getEngines()
+                    def apiNs   = getApiNamespace()
+                    def engines = getEngines()
 
                     def waitBranches = [:]
 
@@ -211,7 +210,7 @@ print(json.dumps(s))
                             kubectl scale deployment opensearch-benchmark-api-server \
                                 --replicas=0 -n ${apiNs}
                             kubectl wait --for=delete pod \
-                                -l app=${appLabel},component=api-server \
+                                -l app=opensearch-benchmark,component=api-server \
                                 -n ${apiNs} --timeout=120s || true
                             kubectl scale deployment opensearch-benchmark-api-server \
                                 --replicas=1 -n ${apiNs}
@@ -221,20 +220,17 @@ print(json.dumps(s))
                     }
 
                     // One worker per engine — all started in parallel regardless of prod/develop.
-                    // The worker template now has ${NAMESPACE} and ${APP_LABEL} placeholders
-                    // so the manifest lands in the correct namespace with the correct labels.
                     engines.each { engine ->
                         waitBranches["benchmark-worker-${engine}"] = {
                             sh """
                                 sed -e 's/\\\${ENGINE}/${engine}/g' \
                                     -e 's|\\\${NAMESPACE}|${apiNs}|g' \
-                                    -e 's|\\\${APP_LABEL}|${appLabel}|g' \
                                     gke-manifest/opensearch-benchmark-worker-template.yaml | \
                                     kubectl apply -f -
                                 kubectl scale statefulset opensearch-benchmark-worker-${engine} \
                                     --replicas=0 -n ${apiNs}
                                 kubectl wait --for=delete pod \
-                                    -l app=${appLabel},component=worker,engine=${engine} \
+                                    -l app=opensearch-benchmark,component=worker,engine=${engine} \
                                     -n ${apiNs} --timeout=120s || true
                                 kubectl scale statefulset opensearch-benchmark-worker-${engine} \
                                     --replicas=1 -n ${apiNs}
@@ -533,6 +529,7 @@ print(json.dumps(s))
                                             API_URL=${apiUrl} \
                                             RESULTS_DEST="\$DEST" \
                                             OS_NAMESPACE="${ns}" \
+                                            API_NAMESPACE="${apiNs}" \
                                             WORKER_POD="opensearch-benchmark-worker-${engine}-0" \
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
@@ -683,10 +680,9 @@ EOF
     post {
         always {
             script {
-                def engines  = getEngines()
-                def apiNs    = getApiNamespace()
-                def apiUrl   = getApiUrl()
-                def appLabel = isProd() ? 'opensearch-benchmark' : 'opensearch-benchmark-develop'
+                def engines = getEngines()
+                def apiNs   = getApiNamespace()
+                def apiUrl  = getApiUrl()
 
                 // Cancel any running cloud service jobs before scale-down kills the worker pods.
                 if (currentBuild.currentResult in ['ABORTED', 'FAILURE']) {
@@ -694,7 +690,7 @@ EOF
 
                     def apiRunning = sh(
                         script: """
-                            PHASE=\$(kubectl get pods -n ${apiNs} -l app=${appLabel},component=api-server \
+                            PHASE=\$(kubectl get pods -n ${apiNs} -l app=opensearch-benchmark,component=api-server \
                                 --no-headers 2>/dev/null | awk '{print \$3}' | head -1)
                             [ "\$PHASE" = "Running" ]
                         """,
