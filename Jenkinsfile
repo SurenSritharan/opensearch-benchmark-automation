@@ -196,7 +196,9 @@ print(json.dumps(s))
                 script {
                     def apiNs = getApiNamespace()
                     sh """
-                        MANIFEST=\$(sed 's|namespace: benchmark-api\$|namespace: ${apiNs}|g' \
+                        MANIFEST=\$(sed \
+                            -e 's|namespace: benchmark-api\$|namespace: ${apiNs}|g' \
+                            -e 's|\.benchmark-api\.svc|.${apiNs}.svc|g' \
                             gke-manifest/opensearch-benchmark-api-server.yaml)
 
                         # Deployment spec.selector is immutable — delete and recreate if the
