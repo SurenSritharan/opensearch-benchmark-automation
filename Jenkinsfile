@@ -358,6 +358,25 @@ print(json.dumps(s))
                                             --replicas=1 -n ${apiNs}
                                         kubectl rollout status statefulset/opensearch-benchmark-worker-${engine} \
                                             -n ${apiNs} --timeout=1200s
+
+                                        # rollout status only means the pod is Running — the app
+                                        # inside may still be starting. Poll the API server's proxy
+                                        # until the worker is reachable before proceeding.
+                                        echo "Waiting for worker-${engine} to be reachable via API server..."
+                                        for i in \$(seq 1 60); do
+                                            STATUS=\$(curl -s -o /dev/null -w '%{http_code}' \
+                                                "${apiUrl}/api/v1/benchmark?engine=${engine}" || echo 000)
+                                            if [ "\$STATUS" = "200" ]; then
+                                                echo "  ✅ worker-${engine} reachable (attempt \$i)"
+                                                break
+                                            fi
+                                            echo "  [attempt \$i/60] worker-${engine} not ready (HTTP \$STATUS) — retrying in 5s"
+                                            sleep 5
+                                        done
+                                        if [ "\$STATUS" != "200" ]; then
+                                            echo "❌ worker-${engine} did not become reachable after 5 minutes"
+                                            exit 1
+                                        fi
                                     """
                                 }
 
@@ -395,11 +414,7 @@ print(json.dumps(s))
                                     def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
                                     if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
 
-                                    stage("${engine} / ${versionLabel} / ${runSize}") {
-                                    echo "════════════════════════════════════════"
-                                    echo "[${engine}] Benchmarking OpenSearch ${version} / ${runSize}"
-                                    echo "════════════════════════════════════════"
-
+                                    stage("${engine} / ${versionLabel} / ${runSize} — Prepare Cluster") {
                                     try {
                                         // ── a) Scale up or deploy this engine's cluster ────
                                         if (params.SCALE_CLUSTERS) {
@@ -500,7 +515,10 @@ print(json.dumps(s))
                                             """
                                         }
 
-                                        // ── b) Run benchmark ───────────────────────────────
+                                    } // Prepare Cluster stage
+
+                                    stage("${engine} / ${versionLabel} / ${runSize} — Run Benchmark") {
+                                    try {
                                         // On the first run, --first-run is passed so run-pipeline.sh
                                         // reads first_run_steps (build + search). All subsequent runs
                                         // omit the flag and use steps (search-only), reusing the PVC.
@@ -573,7 +591,7 @@ print(json.dumps(s))
                                             echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
                                         """
                                     } // try/finally
-                                    } // stage
+                                    } // Run Benchmark stage
                                 } // runs.each
                             } // catchError
                         } // closure
@@ -590,9 +608,22 @@ print(json.dumps(s))
                         // PROD: run all engines in parallel — independent clusters, maximise throughput.
                         parallel engineBranches
                     } else {
-                        // DEVELOP: run engines sequentially — shared dev resources, avoid contention.
-                        engines.each { engine ->
+                        // DEVELOP: run engines sequentially — shared dev node, avoid contention.
+                        // Scale down each engine's worker after it finishes before the next one
+                        // starts, regardless of SKIP_SCALE_DOWN (which only controls what stays
+                        // up after the final engine completes).
+                        engines.eachWithIndex { engine, idx ->
                             engineBranches[engine].call()
+                            def isLast = (idx == engines.size() - 1)
+                            if (params.SCALE_CLUSTERS && !isLast) {
+                                sh """
+                                    kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                        --replicas=0 -n ${apiNs} || true
+                                    kubectl wait --for=delete pod \
+                                        -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                        -n ${apiNs} --timeout=120s || true
+                                """
+                            }
                         }
                     }
                 }
@@ -718,7 +749,6 @@ EOF
                         """
                     }
 
-                    // The API server is shared by all workers in this namespace — always scale it down.
                     echo "Scaling down API server..."
                     sh """
                         kubectl scale deployment opensearch-benchmark-api-server \
