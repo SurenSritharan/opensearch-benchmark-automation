@@ -514,7 +514,7 @@ print(json.dumps(s))
                                                 done
                                             """
                                         }
-
+                                    } // try
                                     } // Prepare Cluster stage
 
                                     stage("${engine} / ${versionLabel} / ${runSize} — Run Benchmark") {
