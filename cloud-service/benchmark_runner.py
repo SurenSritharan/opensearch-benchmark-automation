@@ -233,7 +233,7 @@ class BenchmarkRunner:
 
     # ── 2. Pre-flight ─────────────────────────────────────────────────────────
 
-    def _check_cluster_health(self, target_host: str, retries: int = 6, retry_delay: int = 10) -> bool:
+    def _check_cluster_health(self, target_host: str, retries: int = 30, retry_delay: int = 20) -> bool:
         """Check if OpenSearch cluster is healthy and ready.
 
         Retries up to `retries` times with `retry_delay` seconds between
