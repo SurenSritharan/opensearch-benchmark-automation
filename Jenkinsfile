@@ -161,10 +161,8 @@ pipeline {
         //    on first deploy and persists in the OS namespace indefinitely.
         //    Copy it into the API namespace so worker pods can mount it.
         //    All engine namespaces share the same CA — copy from the first targeted engine.
+        //    Always runs — certs must be current regardless of whether clusters are scaled.
         stage('Copy Certs') {
-            when {
-                expression { params.SCALE_CLUSTERS }
-            }
             steps {
                 script {
                     def apiNs = getApiNamespace()
@@ -339,6 +337,7 @@ print(json.dumps(s))
                                         export NAMESPACE="${apiNs}"
                                         export AUTOMATION_BRANCH="${automationBranch}"
                                         export WORKER_STORAGE_CLAIM="${workerStorageClaim}"
+                                        export OS_NAMESPACE="${getNamespace(engine)}"
                                         MANIFEST=\$(envsubst < gke-manifest/opensearch-benchmark-worker-template.yaml)
 
                                         if kubectl get statefulset opensearch-benchmark-worker-${engine} \
