@@ -120,7 +120,8 @@ pipeline {
         stage('Print Branch') {
             steps {
                 script{
-                    def rawBranch = scm.branches[0].name
+                    def rawBranch = env.GIT_BRANCH
+                    println rawBranch
                     def branchName = rawBranch.contains('/') ? rawBranch.tokenize('/').last() : rawBranch
 
                     def envType = 'os-develop' // default fallback
