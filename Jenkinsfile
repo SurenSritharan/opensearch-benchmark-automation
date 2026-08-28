@@ -220,11 +220,13 @@ print(json.dumps(s))
                     }
 
                     // One worker per engine — all started in parallel regardless of prod/develop.
+                    def automationBranch = isProd() ? 'main' : (env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main')
                     engines.each { engine ->
                         waitBranches["benchmark-worker-${engine}"] = {
                             sh """
                                 sed -e 's/\\\${ENGINE}/${engine}/g' \
                                     -e 's|\\\${NAMESPACE}|${apiNs}|g' \
+                                    -e 's|\\\${AUTOMATION_BRANCH}|${automationBranch}|g' \
                                     gke-manifest/opensearch-benchmark-worker-template.yaml | \
                                     kubectl apply -f -
                                 kubectl scale statefulset opensearch-benchmark-worker-${engine} \
