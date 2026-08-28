@@ -360,14 +360,18 @@ print(json.dumps(s))
                                             -n ${apiNs} --timeout=1200s
 
                                         # rollout status only means the pod is Running — the app
-                                        # inside may still be starting. Poll the API server's proxy
-                                        # until the worker is reachable before proceeding.
-                                        echo "Waiting for worker-${engine} to be reachable via API server..."
+                                        # inside may still be starting. Poll the worker pod's own
+                                        # /health endpoint directly (port 8080) until it responds,
+                                        # then verify the API server can proxy to it before proceeding.
+                                        WORKER_POD="opensearch-benchmark-worker-${engine}-0"
+                                        WORKER_NS="${apiNs}"
+                                        echo "Waiting for worker-${engine} app to be ready..."
                                         for i in \$(seq 1 60); do
-                                            STATUS=\$(curl -s -o /dev/null -w '%{http_code}' \
-                                                "${apiUrl}/api/v1/benchmark?engine=${engine}" || echo 000)
+                                            STATUS=\$(kubectl exec -n \$WORKER_NS \$WORKER_POD -- \
+                                                curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health \
+                                                2>/dev/null || echo 000)
                                             if [ "\$STATUS" = "200" ]; then
-                                                echo "  ✅ worker-${engine} reachable (attempt \$i)"
+                                                echo "  ✅ worker-${engine} app ready (attempt \$i)"
                                                 break
                                             fi
                                             echo "  [attempt \$i/60] worker-${engine} not ready (HTTP \$STATUS) — retrying in 5s"
