@@ -415,7 +415,6 @@ print(json.dumps(s))
                                     if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
 
                                     stage("${engine} / ${versionLabel} / ${runSize} — Prepare Cluster") {
-                                    try {
                                         // ── a) Scale up or deploy this engine's cluster ────
                                         if (params.SCALE_CLUSTERS) {
                                             sh """
@@ -514,7 +513,6 @@ print(json.dumps(s))
                                                 done
                                             """
                                         }
-                                    } // try
                                     } // Prepare Cluster stage
 
                                     stage("${engine} / ${versionLabel} / ${runSize} — Run Benchmark") {
