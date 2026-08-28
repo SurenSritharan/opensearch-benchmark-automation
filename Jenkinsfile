@@ -198,7 +198,7 @@ print(json.dumps(s))
                     sh """
                         MANIFEST=\$(sed \
                             -e 's|namespace: benchmark-api\$|namespace: ${apiNs}|g' \
-                            -e 's|\.benchmark-api\.svc|.${apiNs}.svc|g' \
+                            -e 's|\\.benchmark-api\\.svc|.${apiNs}.svc|g' \
                             gke-manifest/opensearch-benchmark-api-server.yaml)
 
                         # Deployment spec.selector is immutable — delete and recreate if the
