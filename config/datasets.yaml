@@ -205,7 +205,7 @@ datasets:
       - name: "bulk-ingest-data"
         params:
           target_index_bulk_size: 500
-          target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base_{{corpus_size}}.fvec"
+          target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base.fvec"
           target_index_bulk_indexing_clients: 8
           detailed_results: false
         # Same DiskANN constraint as cohere-wiki-en-768 — single client, large batches.
