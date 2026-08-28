@@ -204,7 +204,7 @@ print(json.dumps(s))
                     // hardcoded namespace: field matches the target (prod vs develop).
                     waitBranches['benchmark-api-server'] = {
                         sh """
-                            sed 's|namespace: benchmark-api$|namespace: ${apiNs}|g' \
+                            sed 's|namespace: benchmark-api\$|namespace: ${apiNs}|g' \
                                 gke-manifest/opensearch-benchmark-api-server.yaml | \
                                 kubectl apply -f -
                             kubectl scale deployment opensearch-benchmark-api-server \
@@ -391,7 +391,7 @@ print(json.dumps(s))
                     sh "mkdir -p ${RESULTS_DIR}"
 
                     def redeploy         = params.REDEPLOY_CLUSTERS || pipelineJson.redeploy == true
-                    def multiRun         = pipelineJson.versions || pipelineJson.node_sizes
+                    def multiRun         = (pipelineJson.versions || pipelineJson.node_sizes) ? true : false
                     def hasFirstRunSteps = pipelineJson.first_run_steps && pipelineJson.first_run_steps.size() > 0
 
                     // Build a closure that runs all (version × size) iterations for a single engine.
@@ -649,8 +649,8 @@ EOF
                             version=\$(basename "\$version_dir")
                             echo "  --- OpenSearch \$version ---" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
                             for engine in ${engines.join(' ')}; do
-                                JOB_FILE="job_id_\${engine}-\${version}.txt"
-                                if [ -f "\$JOB_FILE" ]; then
+                                JOB_FILE=\$(ls job_id_\${engine}-\${version}-*.txt 2>/dev/null | head -1)
+                                if [ -n "\$JOB_FILE" ] && [ -f "\$JOB_FILE" ]; then
                                     JOB_ID=\$(cat "\$JOB_FILE")
                                     echo "    \${engine}: ${apiUrl}/results.html?job_id=\${JOB_ID}" \
                                         >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
