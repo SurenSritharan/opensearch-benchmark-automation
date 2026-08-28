@@ -820,7 +820,10 @@ def getApiUrl() {
 
 def getEngines() {
     if (params.ENGINE_TARGET == 'all') {
-        return ['jvector', 'faiss', 'lucene']
+        // On develop, 'all' defaults to jvector only — the shared dev node can only
+        // run one engine at a time. Explicit ENGINE_TARGET selection still works for
+        // all three engines.
+        return isProd() ? ['jvector', 'faiss', 'lucene'] : ['jvector']
     }
     return [params.ENGINE_TARGET.replace('os-', '')]
 }
