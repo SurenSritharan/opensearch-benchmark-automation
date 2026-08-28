@@ -2,7 +2,7 @@
   "description": "Storage feature comparison — index size and recall across Baseline (3.5.0.2), Derived Source (3.6.0), and NVQ (3.8.0). Uses the optimised ingest procedure (replicas=0, no auto-throttle) with ef=128/m=16. Each version gets a fresh cluster deploy with PVCs wiped.",
   "engine": "__ENGINE__",
   "no_profiling": true,
-  "versions": ["3.5.0.2", "3.6.0", "3.8.0"],
+  "versions": ["3.5.0", "3.6.0", "3.8.0"],
   "node_sizes": ["small"],
   "params": {
     "corpus_size": "1m",
