@@ -119,7 +119,21 @@ pipeline {
     stages {
         stage('Print Branch') {
             steps {
-                echo "The configured SCM branch is: ${env.SCM_BRANCH}"
+                script{
+                    def rawBranch = scm.branches[0].name
+                    def branchName = rawBranch.contains('/') ? rawBranch.tokenize('/').last() : rawBranch
+
+                    def envType = 'os-develop' // default fallback
+
+                    if (branchName == 'main') {
+                        envType = 'os'
+                    } else if (branchName.contains('develop')) {
+                        envType = 'os-develop'
+                    }
+
+                    OS_NAMESPACE = "${envType}-${params.ENGINE}"
+                    println "NAMESPACE = ${OS_NAMESPACE}"
+                }
             }
         }
     }
