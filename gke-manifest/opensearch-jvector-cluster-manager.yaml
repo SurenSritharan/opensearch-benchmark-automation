@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: opensearch-cluster-manager-config
-  namespace: os-jvector
+  namespace: ${NAMESPACE}
 data:
   opensearch.yml: |
     cluster.name: opensearch-cluster
@@ -11,7 +11,7 @@ data:
     node.roles: [cluster_manager]
     
     discovery.seed_hosts:
-      - opensearch-cluster-manager-0.opensearch-cluster-manager.os-jvector.svc.cluster.local
+      - opensearch-cluster-manager-0.opensearch-cluster-manager.${NAMESPACE}.svc.cluster.local
       
     cluster.initial_cluster_manager_nodes:
       - opensearch-cluster-manager-0
@@ -51,7 +51,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-cluster-manager
-  namespace: os-jvector
+  namespace: ${NAMESPACE}
   labels:
     app: opensearch-cluster-manager
 spec:
@@ -67,7 +67,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: opensearch-cluster-manager
-  namespace: os-jvector
+  namespace: ${NAMESPACE}
 spec:
   serviceName: opensearch-cluster-manager
   replicas: 1
