@@ -120,17 +120,11 @@ pipeline {
         stage('Print Branch') {
             steps {
                 script{
-                    def rawBranch = env.GIT_BRANCH
-                    println rawBranch
-                    def branchName = rawBranch.contains('/') ? rawBranch.tokenize('/').last() : rawBranch
+                    def branch = (env.BRANCH_NAME ?: env.GIT_BRANCH ?: scm.branches[0].name).tokenize('/').last()
 
-                    def envType = 'os-develop' // default fallback
-
-                    if (branchName == 'main') {
-                        envType = 'os'
-                    } else if (branchName.contains('develop')) {
-                        envType = 'os-develop'
-                    }
+                    // Allow a manual parameter override or branch name convention to target production
+                    def isProd = params.FORCE_PROD || branch == 'main' || branch.startsWith('test-prod/')
+                    def envType = isProd ? 'os' : 'os-develop'
 
                     OS_NAMESPACE = "${envType}-${params.ENGINE}"
                     println "NAMESPACE = ${OS_NAMESPACE}"
