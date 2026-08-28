@@ -272,7 +272,8 @@ print(json.dumps(s))
                     def engines        = getEngines()
                     def prodRun        = isProd()
                     def apiUrl         = getApiUrl()
-                    def automationBranch = prodRun ? 'main' : (env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main')
+                    def rawAutomationBranch = prodRun ? 'main' : (env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main')
+                    def automationBranch = rawAutomationBranch.contains('/') ? rawAutomationBranch.tokenize('/').last() : rawAutomationBranch
 
                     // Cancel any running/queued jobs from a previous build.
                     sh """
@@ -336,11 +337,11 @@ print(json.dumps(s))
                                         ? "benchmark-worker-storage-${engine}" \
                                         : "benchmark-worker-storage"
                                     sh """
-                                        MANIFEST=\$(sed -e 's/\\\${ENGINE}/${engine}/g' \
-                                            -e 's|\\\${NAMESPACE}|${apiNs}|g' \
-                                            -e 's|\\\${AUTOMATION_BRANCH}|${automationBranch}|g' \
-                                            -e 's|\\\${WORKER_STORAGE_CLAIM}|${workerStorageClaim}|g' \
-                                            gke-manifest/opensearch-benchmark-worker-template.yaml)
+                                        export ENGINE="${engine}"
+                                        export NAMESPACE="${apiNs}"
+                                        export AUTOMATION_BRANCH="${automationBranch}"
+                                        export WORKER_STORAGE_CLAIM="${workerStorageClaim}"
+                                        MANIFEST=\$(envsubst < gke-manifest/opensearch-benchmark-worker-template.yaml)
 
                                         if kubectl get statefulset opensearch-benchmark-worker-${engine} \
                                                 -n ${apiNs} >/dev/null 2>&1; then
