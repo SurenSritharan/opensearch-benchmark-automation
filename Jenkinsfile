@@ -185,94 +185,45 @@ print(json.dumps(s))
         }
 
         // ── 3. Prepare Workers ─────────────────────────────────────────────────
-        //    Brings the API server and benchmark workers up before seeding and
-        //    benchmarking. OpenSearch cluster scale-up/deploy happens per-engine
-        //    inside Run Benchmarks.
+        //    Brings up the shared API server. Individual benchmark workers are
+        //    started just-in-time inside Run Benchmarks, immediately before the
+        //    engine that needs them — one at a time on both prod and develop.
         stage('Prepare Workers') {
             when {
                 expression { params.SCALE_CLUSTERS }
             }
             steps {
                 script {
-                    def apiNs   = getApiNamespace()
-                    def engines = getEngines()
+                    def apiNs = getApiNamespace()
+                    sh """
+                        MANIFEST=\$(sed 's|namespace: benchmark-api\$|namespace: ${apiNs}|g' \
+                            gke-manifest/opensearch-benchmark-api-server.yaml)
 
-                    def waitBranches = [:]
-
-                    // One API server shared by all engine workers in this namespace.
-                    // Substitute the namespace into the manifest before applying so the
-                    // hardcoded namespace: field matches the target (prod vs develop).
-                    waitBranches['benchmark-api-server'] = {
-                        sh """
-                            MANIFEST=\$(sed 's|namespace: benchmark-api\$|namespace: ${apiNs}|g' \
-                                gke-manifest/opensearch-benchmark-api-server.yaml)
-
-                            # Deployment spec.selector is immutable — delete and recreate if the
-                            # dry-run shows it would be rejected.
-                            if kubectl get deployment opensearch-benchmark-api-server \
-                                    -n ${apiNs} >/dev/null 2>&1; then
-                                if ! echo "\$MANIFEST" | kubectl apply --dry-run=server -f - >/dev/null 2>&1; then
-                                    echo "Deployment spec changed — deleting and recreating opensearch-benchmark-api-server..."
-                                    kubectl delete deployment opensearch-benchmark-api-server \
-                                        -n ${apiNs}
-                                    kubectl wait --for=delete pod \
-                                        -l app=opensearch-benchmark,component=api-server \
-                                        -n ${apiNs} --timeout=120s || true
-                                fi
-                            fi
-
-                            echo "\$MANIFEST" | kubectl apply -f -
-                            kubectl scale deployment opensearch-benchmark-api-server \
-                                --replicas=0 -n ${apiNs}
-                            kubectl wait --for=delete pod \
-                                -l app=opensearch-benchmark,component=api-server \
-                                -n ${apiNs} --timeout=120s || true
-                            kubectl scale deployment opensearch-benchmark-api-server \
-                                --replicas=1 -n ${apiNs}
-                            kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
-                                -n ${apiNs} --timeout=600s
-                        """
-                    }
-
-                    // One worker per engine — all started in parallel regardless of prod/develop.
-                    def automationBranch = isProd() ? 'main' : (env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main')
-                    engines.each { engine ->
-                        waitBranches["benchmark-worker-${engine}"] = {
-                            sh """
-                                MANIFEST=\$(sed -e 's/\\\${ENGINE}/${engine}/g' \
-                                    -e 's|\\\${NAMESPACE}|${apiNs}|g' \
-                                    -e 's|\\\${AUTOMATION_BRANCH}|${automationBranch}|g' \
-                                    gke-manifest/opensearch-benchmark-worker-template.yaml)
-
-                                # StatefulSet volumeClaimTemplates are immutable — if the spec has
-                                # changed we must delete and recreate rather than apply.
-                                if kubectl get statefulset opensearch-benchmark-worker-${engine} \
-                                        -n ${apiNs} >/dev/null 2>&1; then
-                                    if ! echo "\$MANIFEST" | kubectl apply --dry-run=server -f - >/dev/null 2>&1; then
-                                        echo "StatefulSet spec changed — deleting and recreating opensearch-benchmark-worker-${engine}..."
-                                        kubectl delete statefulset opensearch-benchmark-worker-${engine} \
-                                            -n ${apiNs} --cascade=orphan
-                                        kubectl wait --for=delete pod \
-                                            -l app=opensearch-benchmark,component=worker,engine=${engine} \
-                                            -n ${apiNs} --timeout=120s || true
-                                    fi
-                                fi
-
-                                echo "\$MANIFEST" | kubectl apply -f -
-                                kubectl scale statefulset opensearch-benchmark-worker-${engine} \
-                                    --replicas=0 -n ${apiNs}
+                        # Deployment spec.selector is immutable — delete and recreate if the
+                        # dry-run shows it would be rejected.
+                        if kubectl get deployment opensearch-benchmark-api-server \
+                                -n ${apiNs} >/dev/null 2>&1; then
+                            if ! echo "\$MANIFEST" | kubectl apply --dry-run=server -f - >/dev/null 2>&1; then
+                                echo "Deployment spec changed — deleting and recreating opensearch-benchmark-api-server..."
+                                kubectl delete deployment opensearch-benchmark-api-server \
+                                    -n ${apiNs}
                                 kubectl wait --for=delete pod \
-                                    -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                    -l app=opensearch-benchmark,component=api-server \
                                     -n ${apiNs} --timeout=120s || true
-                                kubectl scale statefulset opensearch-benchmark-worker-${engine} \
-                                    --replicas=1 -n ${apiNs}
-                                kubectl rollout status statefulset/opensearch-benchmark-worker-${engine} \
-                                    -n ${apiNs} --timeout=1200s
-                            """
-                        }
-                    }
+                            fi
+                        fi
 
-                    parallel waitBranches
+                        echo "\$MANIFEST" | kubectl apply -f -
+                        kubectl scale deployment opensearch-benchmark-api-server \
+                            --replicas=0 -n ${apiNs}
+                        kubectl wait --for=delete pod \
+                            -l app=opensearch-benchmark,component=api-server \
+                            -n ${apiNs} --timeout=120s || true
+                        kubectl scale deployment opensearch-benchmark-api-server \
+                            --replicas=1 -n ${apiNs}
+                        kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
+                            -n ${apiNs} --timeout=600s
+                    """
                 }
             }
         }
@@ -301,94 +252,25 @@ print(json.dumps(s))
             }
         }
 
-        // ── 4. Seed Dataset Cache ──────────────────────────────────────────────
-        //    Ensures GCS-hosted corpus files are present on every worker PVC
-        //    before benchmarking starts. Which files to seed is driven entirely
-        //    by the `gcs_cache_files` list in config/datasets.yaml.
-        stage('Seed Dataset Cache') {
-            steps {
-                script {
-                    def apiNs   = getApiNamespace()
-                    def engines = getEngines()
-
-                    def pipeline      = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
-                    def pipelineJson  = readJSON file: "pipelines/${pipeline}.json"
-                    def corpusSizeVal = pipelineJson.params?.corpus_size
-                    def corpusSizes   = corpusSizeVal ? [corpusSizeVal] : ['1m', '5m']
-                    def datasets      = (pipelineJson.steps ?: []).collect { it.dataset }.unique()
-
-                    def filesToSeed = []
-                    def datasetsConfig = readYaml file: 'config/datasets.yaml'
-
-                    datasets.each { dataset ->
-                        def cacheFiles = datasetsConfig.datasets[dataset]?.gcs_cache_files ?: []
-                        cacheFiles.each { entry ->
-                            if (corpusSizes.contains(entry.corpus_size)) {
-                                filesToSeed << entry
-                            }
-                        }
-                    }
-
-                    if (filesToSeed.isEmpty()) {
-                        echo "No GCS cache files required for ${pipeline} — skipping"
-                        return
-                    }
-
-                    echo "Files to seed: ${filesToSeed.collect { it.gcs_path }.join(', ')}"
-
-                    filesToSeed.each { entry ->
-                        def gcsPath    = entry.gcs_path
-                        def targetPath = entry.target_path
-                        def fileName   = gcsPath.tokenize('/').last()
-
-                        echo "Seeding ${fileName} to ${engines.size()} worker(s)..."
-
-                        def seedBranches = engines.collectEntries { engine ->
-                            [(engine): {
-                                sh """
-                                    set -euo pipefail
-                                    POD="opensearch-benchmark-worker-${engine}-0"
-
-                                    if kubectl exec -n ${apiNs} \$POD -- test -f '${targetPath}' 2>/dev/null; then
-                                        echo "[${engine}] ${fileName} already present — skipping"
-                                    else
-                                        echo "[${engine}] Downloading ${fileName} from GCS..."
-                                        kubectl exec -n ${apiNs} \$POD -- sh -c \
-                                            "mkdir -p \$(dirname '${targetPath}') && gcloud storage cp '${gcsPath}' '${targetPath}'"
-                                        FINAL_SIZE=\$(kubectl exec -n ${apiNs} \$POD -- \
-                                            stat -c '%s' '${targetPath}' 2>/dev/null || echo 0)
-                                        echo "[${engine}] Done — \${FINAL_SIZE} bytes"
-                                    fi
-                                """
-                            }]
-                        }
-
-                        parallel seedBranches
-                    }
-                }
-            }
-        }
-
-        // ── 5. Run Benchmarks ──────────────────────────────────────────────────
-        //    Outer loop: iterates over each (version, node_size) combination.
-        //    Inner iteration: all engines.
-        //      - PROD  → engines run in parallel   (independent clusters, fast)
-        //      - DEVELOP → engines run sequentially (shared dev resources)
+        // ── 4. Run Benchmarks ──────────────────────────────────────────────────
+        //    Per engine, in order:
+        //      a) Start worker (just-in-time — only one worker up at a time)
+        //      b) Seed dataset cache onto that worker's PVC
+        //      c) Scale up / deploy OpenSearch cluster
+        //      d) Run benchmark pipeline
+        //      e) Fetch & save results
         //
-        //    Per engine, each run:
-        //      a) Scale up / deploy cluster
-        //      b) Run benchmark pipeline
-        //      c) Fetch & save results
-        //      d) Collect server logs & telemetry
-        //
+        //    PROD:    engines run in parallel (independent clusters + resource pools)
+        //    DEVELOP: engines run sequentially (shared dev node)
         //    Results land in <RESULTS_DIR>/<version>/<node_size>/.
         stage('Run Benchmarks') {
             steps {
                 script {
-                    def apiNs   = getApiNamespace()
-                    def engines = getEngines()
-                    def prodRun = isProd()
-                    def apiUrl  = getApiUrl()
+                    def apiNs          = getApiNamespace()
+                    def engines        = getEngines()
+                    def prodRun        = isProd()
+                    def apiUrl         = getApiUrl()
+                    def automationBranch = prodRun ? 'main' : (env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main')
 
                     // Cancel any running/queued jobs from a previous build.
                     sh """
@@ -424,11 +306,82 @@ print(json.dumps(s))
                     def multiRun         = (pipelineJson.versions || pipelineJson.node_sizes) ? true : false
                     def hasFirstRunSteps = pipelineJson.first_run_steps && pipelineJson.first_run_steps.size() > 0
 
+                    // Resolve dataset cache files to seed (same logic as the old Seed Dataset Cache stage).
+                    def corpusSizeVal  = pipelineJson.params?.corpus_size
+                    def corpusSizes    = corpusSizeVal ? [corpusSizeVal] : ['1m', '5m']
+                    def datasets       = (pipelineJson.steps ?: []).collect { it.dataset }.unique()
+                    def datasetsConfig = readYaml file: 'config/datasets.yaml'
+                    def filesToSeed    = []
+                    datasets.each { dataset ->
+                        def cacheFiles = datasetsConfig.datasets[dataset]?.gcs_cache_files ?: []
+                        cacheFiles.each { entry ->
+                            if (corpusSizes.contains(entry.corpus_size)) { filesToSeed << entry }
+                        }
+                    }
+                    if (filesToSeed) {
+                        echo "Files to seed per worker: ${filesToSeed.collect { it.gcs_path }.join(', ')}"
+                    }
+
                     // Build a closure that runs all (version × size) iterations for a single engine.
                     def makeEngineClosure = { String engine ->
                         def ns = getNamespace(engine)
                         return {
                             catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+
+                                // ── a) Start this engine's worker just-in-time ─────────
+                                if (params.SCALE_CLUSTERS) {
+                                    sh """
+                                        MANIFEST=\$(sed -e 's/\\\${ENGINE}/${engine}/g' \
+                                            -e 's|\\\${NAMESPACE}|${apiNs}|g' \
+                                            -e 's|\\\${AUTOMATION_BRANCH}|${automationBranch}|g' \
+                                            gke-manifest/opensearch-benchmark-worker-template.yaml)
+
+                                        if kubectl get statefulset opensearch-benchmark-worker-${engine} \
+                                                -n ${apiNs} >/dev/null 2>&1; then
+                                            if ! echo "\$MANIFEST" | kubectl apply --dry-run=server -f - >/dev/null 2>&1; then
+                                                echo "StatefulSet spec changed — deleting and recreating opensearch-benchmark-worker-${engine}..."
+                                                kubectl delete statefulset opensearch-benchmark-worker-${engine} \
+                                                    -n ${apiNs} --cascade=orphan
+                                                kubectl wait --for=delete pod \
+                                                    -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                                    -n ${apiNs} --timeout=120s || true
+                                            fi
+                                        fi
+
+                                        echo "\$MANIFEST" | kubectl apply -f -
+                                        kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                            --replicas=0 -n ${apiNs}
+                                        kubectl wait --for=delete pod \
+                                            -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                            -n ${apiNs} --timeout=120s || true
+                                        kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                            --replicas=1 -n ${apiNs}
+                                        kubectl rollout status statefulset/opensearch-benchmark-worker-${engine} \
+                                            -n ${apiNs} --timeout=1200s
+                                    """
+                                }
+
+                                // ── b) Seed dataset cache onto this worker's PVC ───────
+                                filesToSeed.each { entry ->
+                                    def gcsPath    = entry.gcs_path
+                                    def targetPath = entry.target_path
+                                    def fileName   = gcsPath.tokenize('/').last()
+                                    sh """
+                                        set -euo pipefail
+                                        POD="opensearch-benchmark-worker-${engine}-0"
+                                        if kubectl exec -n ${apiNs} \$POD -- test -f '${targetPath}' 2>/dev/null; then
+                                            echo "[${engine}] ${fileName} already present — skipping"
+                                        else
+                                            echo "[${engine}] Seeding ${fileName} from GCS..."
+                                            kubectl exec -n ${apiNs} \$POD -- sh -c \
+                                                "mkdir -p \$(dirname '${targetPath}') && gcloud storage cp '${gcsPath}' '${targetPath}'"
+                                            FINAL_SIZE=\$(kubectl exec -n ${apiNs} \$POD -- \
+                                                stat -c '%s' '${targetPath}' 2>/dev/null || echo 0)
+                                            echo "[${engine}] Done — \${FINAL_SIZE} bytes"
+                                        fi
+                                    """
+                                }
+
                                 def engineFirstRun = true
                                 runs.each { run ->
                                     if (currentBuild.currentResult == 'ABORTED') { return }
