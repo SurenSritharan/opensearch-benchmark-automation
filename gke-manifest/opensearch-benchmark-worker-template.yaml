@@ -138,6 +138,8 @@ spec:
           value: "${ENGINE}"
         - name: WORKER_MODE
           value: "combined"
+        - name: OS_NAMESPACE
+          value: "${OS_NAMESPACE}"
         - name: BENCHMARK_HOME
           value: "/datasets/opensearch-benchmark"
         - name: PYTHONUNBUFFERED
