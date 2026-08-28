@@ -204,9 +204,24 @@ print(json.dumps(s))
                     // hardcoded namespace: field matches the target (prod vs develop).
                     waitBranches['benchmark-api-server'] = {
                         sh """
-                            sed 's|namespace: benchmark-api\$|namespace: ${apiNs}|g' \
-                                gke-manifest/opensearch-benchmark-api-server.yaml | \
-                                kubectl apply -f -
+                            MANIFEST=\$(sed 's|namespace: benchmark-api\$|namespace: ${apiNs}|g' \
+                                gke-manifest/opensearch-benchmark-api-server.yaml)
+
+                            # Deployment spec.selector is immutable — delete and recreate if the
+                            # dry-run shows it would be rejected.
+                            if kubectl get deployment opensearch-benchmark-api-server \
+                                    -n ${apiNs} >/dev/null 2>&1; then
+                                if ! echo "\$MANIFEST" | kubectl apply --dry-run=server -f - >/dev/null 2>&1; then
+                                    echo "Deployment spec changed — deleting and recreating opensearch-benchmark-api-server..."
+                                    kubectl delete deployment opensearch-benchmark-api-server \
+                                        -n ${apiNs}
+                                    kubectl wait --for=delete pod \
+                                        -l app=opensearch-benchmark,component=api-server \
+                                        -n ${apiNs} --timeout=120s || true
+                                fi
+                            fi
+
+                            echo "\$MANIFEST" | kubectl apply -f -
                             kubectl scale deployment opensearch-benchmark-api-server \
                                 --replicas=0 -n ${apiNs}
                             kubectl wait --for=delete pod \
@@ -224,11 +239,26 @@ print(json.dumps(s))
                     engines.each { engine ->
                         waitBranches["benchmark-worker-${engine}"] = {
                             sh """
-                                sed -e 's/\\\${ENGINE}/${engine}/g' \
+                                MANIFEST=\$(sed -e 's/\\\${ENGINE}/${engine}/g' \
                                     -e 's|\\\${NAMESPACE}|${apiNs}|g' \
                                     -e 's|\\\${AUTOMATION_BRANCH}|${automationBranch}|g' \
-                                    gke-manifest/opensearch-benchmark-worker-template.yaml | \
-                                    kubectl apply -f -
+                                    gke-manifest/opensearch-benchmark-worker-template.yaml)
+
+                                # StatefulSet volumeClaimTemplates are immutable — if the spec has
+                                # changed we must delete and recreate rather than apply.
+                                if kubectl get statefulset opensearch-benchmark-worker-${engine} \
+                                        -n ${apiNs} >/dev/null 2>&1; then
+                                    if ! echo "\$MANIFEST" | kubectl apply --dry-run=server -f - >/dev/null 2>&1; then
+                                        echo "StatefulSet spec changed — deleting and recreating opensearch-benchmark-worker-${engine}..."
+                                        kubectl delete statefulset opensearch-benchmark-worker-${engine} \
+                                            -n ${apiNs} --cascade=orphan
+                                        kubectl wait --for=delete pod \
+                                            -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                            -n ${apiNs} --timeout=120s || true
+                                    fi
+                                fi
+
+                                echo "\$MANIFEST" | kubectl apply -f -
                                 kubectl scale statefulset opensearch-benchmark-worker-${engine} \
                                     --replicas=0 -n ${apiNs}
                                 kubectl wait --for=delete pod \
