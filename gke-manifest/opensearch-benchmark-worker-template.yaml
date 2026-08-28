@@ -2,15 +2,15 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-benchmark-worker-${ENGINE}
-  namespace: benchmark-api-develop
+  namespace: ${NAMESPACE}
   labels:
-    app: opensearch-benchmark-develop
+    app: ${APP_LABEL}
     component: worker
     engine: ${ENGINE}
 spec:
   clusterIP: None
   selector:
-    app: opensearch-benchmark-develop
+    app: ${APP_LABEL}
     component: worker
     engine: ${ENGINE}
   ports:
@@ -22,9 +22,9 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: opensearch-benchmark-worker-${ENGINE}
-  namespace: benchmark-api-develop
+  namespace: ${NAMESPACE}
   labels:
-    app: opensearch-benchmark-develop
+    app: ${APP_LABEL}
     component: worker
     engine: ${ENGINE}
 spec:
@@ -32,13 +32,13 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: opensearch-benchmark-develop
+      app: ${APP_LABEL}
       component: worker
       engine: ${ENGINE}
   template:
     metadata:
       labels:
-        app: opensearch-benchmark-develop
+        app: ${APP_LABEL}
         component: worker
         engine: ${ENGINE}
     spec:

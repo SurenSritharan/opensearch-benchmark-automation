@@ -1,7 +1,15 @@
 pipeline {
-    // Develop branch pipeline — targets os-develop-<engine> clusters in benchmark-api-develop namespace.
-    // This IS the primary Jenkinsfile on the develop branch.
-    // The production multi-engine pipeline lives in Jenkinsfile.main (main branch).
+    // Unified Jenkinsfile — works on both main and develop (and feature branches).
+    //
+    // Branch → environment mapping (resolved at runtime by getNamespace()):
+    //   main / test-prod/*      → os-<engine>         in benchmark-api
+    //   any other branch        → os-develop-<engine>  in benchmark-api-develop
+    //
+    // Set FORCE_PROD=true to force a develop-branch build to target the prod clusters.
+    //
+    // Multi-engine behaviour:
+    //   prod  (isProd=true)  → engines run in PARALLEL   (fast, independent clusters)
+    //   develop (isProd=false) → engines run SEQUENTIALLY (shared dev resources)
     //
     // Prerequisites on the Jenkins node: kubectl, curl, jq, bash
     // Kubeconfig is sourced from the gke-kubeconfig Secret file credential.
@@ -14,34 +22,57 @@ pipeline {
                 'complete',
                 'search-all',
                 'search-compare',
-                'complete-5m-profile-ingest'
+                'complete-5m-profile-ingest',
+                'search-all-overquery',
+                'overquery-5m-k10',
+                'search-1m',
+                'search-5m',
+                'complete-1m',
+                'complete-5m',
+                'complete-1m-profile-ingest',
+                'msmarco-jvector-hq-build',
+                'msmarco-jvector-hq-full',
+                'msmarco-jvector-hq-search',
+                'msmarco-jvector-index-sweep-1m',
+                'msmarco-jvector-index-sweep-auto-1m',
+                'parquet-50k',
+                'parquet-1m',
+                'dbpedia-parquet-50k',
+                'dbpedia-parquet-500k',
+                'dbpedia-parquet-1m',
+                'complete-5m-test',
             ],
             description: 'Pipeline to run. Corresponds to a file in the pipelines/ directory.'
         )
         string(
             name: 'PIPELINE_OVERRIDE',
             defaultValue: '',
-            description: 'Optional: name of any pipeline in pipelines/ (overrides the choice above).'
+            description: 'Optional: name of any pipeline in pipelines/ (overrides the choice above). Must exist as pipelines/<name>.json.'
         )
         choice(
-            name: 'ENGINE',
-            choices: ['jvector', 'faiss', 'lucene'],
-            description: 'Engine to benchmark against. Targets the os-develop-<engine> cluster.'
+            name: 'ENGINE_TARGET',
+            choices: ['all', 'os-jvector', 'os-faiss', 'os-lucene'],
+            description: 'Which engine cluster(s) to run. "all" targets all three. On develop, engines run sequentially; on main they run in parallel.'
+        )
+        booleanParam(
+            name: 'FORCE_PROD',
+            defaultValue: false,
+            description: 'Force this build to target prod clusters (os-<engine> / benchmark-api) regardless of branch. Useful on develop for hotfix validation.'
         )
         string(
             name: 'API_URL',
-            defaultValue: 'http://136.116.139.175',
-            description: 'Base URL of the develop benchmark cloud service API.'
+            defaultValue: '',
+            description: 'Base URL of the benchmark cloud service API. Leave blank to use the branch default (prod: http://34.132.114.18, develop: http://136.116.139.175).'
         )
         booleanParam(
             name: 'SCALE_CLUSTERS',
             defaultValue: true,
-            description: 'Scale up the os-develop-<engine> cluster + develop worker before benchmarking and scale them down afterwards.'
+            description: 'Scale up engine clusters + benchmark workers before benchmarking and scale them down afterwards.'
         )
         booleanParam(
             name: 'REDEPLOY_CLUSTERS',
             defaultValue: false,
-            description: 'Re-deploy the os-develop-<engine> cluster before benchmarking (applies OPENSEARCH_VERSION). Implies scale-up.'
+            description: 'Re-deploy OpenSearch clusters before benchmarking (applies OPENSEARCH_VERSION). Implies scale-up.'
         )
         string(
             name: 'OPENSEARCH_VERSION',
@@ -56,22 +87,22 @@ pipeline {
         booleanParam(
             name: 'SKIP_SCALE_DOWN',
             defaultValue: false,
-            description: 'Skip post-run scale-down so the cluster and worker stay up for investigation.'
+            description: 'Skip post-run scale-down so clusters and workers stay up for investigation.'
         )
         choice(
             name: 'LOG_LEVEL',
             choices: ['', 'debug', 'info', 'warning', 'error'],
-            description: 'opensearch-benchmark log level. Leave blank to use the pipeline default. Set to "debug" to enable verbose OSB internal logging.'
+            description: 'opensearch-benchmark log level. Leave blank to use the pipeline default. Set to "debug" for verbose OSB internal logging.'
         )
         booleanParam(
             name: 'ENABLE_PROFILING',
             defaultValue: false,
-            description: 'Enable profiling to capture CPU profiling and flame graphs'
+            description: 'Enable profiling to capture CPU profiling and flame graphs.'
         )
         string(
             name: 'PROFILING_DURATION',
             defaultValue: '60',
-            description: 'Default profiling duration is 60, can be modified'
+            description: 'Duration in seconds for async-profiler sampling (used when ENABLE_PROFILING is true).'
         )
         string(
             name: 'STATS_INTERVAL',
@@ -83,8 +114,6 @@ pipeline {
     environment {
         RESULTS_DIR = "results/${BUILD_ID}"
         KUBECONFIG  = "${env.WORKSPACE}/.kube/config"
-        // main → os-<engine>, any other branch → os-develop-<engine>.
-        OS_NAMESPACE = "${scm.branches[0].name.contains('main') ? 'os' : 'os-develop'}-${params.ENGINE}"
     }
 
     // triggers {
@@ -113,99 +142,147 @@ pipeline {
                     '''
                 }
                 sh 'chmod +x gke-manifest/*.sh cloud-service/scripts/*.sh'
-                echo "Results workspace: ${env.WORKSPACE}/${RESULTS_DIR}"
+                script {
+                    // Resolve and display environment context for this build.
+                    def apiNs       = getApiNamespace()
+                    def resolvedUrl = getApiUrl()
+                    def engines     = getEngines()
+                    echo "Branch context : ${isProd() ? 'PROD' : 'DEVELOP'}"
+                    echo "API namespace  : ${apiNs}"
+                    echo "API URL        : ${resolvedUrl}"
+                    echo "Engines        : ${engines.join(', ')}"
+                    echo "Results dir    : ${env.WORKSPACE}/${RESULTS_DIR}"
+                }
             }
         }
 
-        // ── 2. Seed Certs ──────────────────────────────────────────────────────
-        //     Must complete before worker pods start — they mount this secret.
-        //     Always syncs from os-develop-<engine> so a cluster re-deploy that
-        //     regenerates certs is picked up on every run, not just the first.
+        // ── 2. Copy Certs ──────────────────────────────────────────────────────
+        //    The opensearch-shared-certs secret is created by deploy-namespace-cluster.sh
+        //    on first deploy and persists in the OS namespace indefinitely.
+        //    Copy it into the API namespace so worker pods can mount it.
+        //    All engine namespaces share the same CA — copy from the first targeted engine.
         stage('Copy Certs') {
             when {
                 expression { params.SCALE_CLUSTERS }
             }
             steps {
-                sh """
-                    echo "Syncing opensearch-shared-certs from ${OS_NAMESPACE} into benchmark-api-develop..."
-                    kubectl get secret opensearch-shared-certs -n ${OS_NAMESPACE} -o json | \
-                        python3 -c "
+                script {
+                    def apiNs = getApiNamespace()
+                    def srcNs = getNamespace(getEngines()[0])
+                    sh """
+                        echo "Copying opensearch-shared-certs from ${srcNs} → ${apiNs}..."
+                        kubectl get secret opensearch-shared-certs -n ${srcNs} -o json | \
+                            python3 -c "
 import sys, json
 s = json.load(sys.stdin)
-s['metadata'] = {'name': s['metadata']['name'], 'namespace': 'benchmark-api-develop'}
+s['metadata'] = {'name': s['metadata']['name'], 'namespace': '${apiNs}'}
 print(json.dumps(s))
 " | kubectl apply -f -
-                    echo "✅ Certs synced into benchmark-api-develop"
-                """
+                        echo "✅ Certs copied into ${apiNs}"
+                    """
+                }
             }
         }
 
-        // ── 3. Prepare Worker ─────────────────────────────────────────────────
-        stage('Prepare Worker') {
+        // ── 3. Prepare Workers ─────────────────────────────────────────────────
+        //    Brings the API server and benchmark workers up before seeding and
+        //    benchmarking. OpenSearch cluster scale-up/deploy happens per-engine
+        //    inside Run Benchmarks.
+        stage('Prepare Workers') {
             when {
                 expression { params.SCALE_CLUSTERS }
             }
             steps {
                 script {
-                def workerBranchKey = "benchmark-worker-${params.ENGINE}"
-                parallel(
-                    'benchmark-api-server': {
-                        sh '''
-                            # Apply the develop-specific API server (benchmark-api-develop namespace)
-                            kubectl apply -f gke-manifest/opensearch-benchmark-api-server.yaml
-                            kubectl scale deployment opensearch-benchmark-api-server \
-                                --replicas=0 -n benchmark-api-develop
-                            kubectl wait --for=delete pod \
-                                -l app=opensearch-benchmark-develop,component=api-server \
-                                -n benchmark-api-develop --timeout=120s || true
-                            kubectl scale deployment opensearch-benchmark-api-server \
-                                --replicas=1 -n benchmark-api-develop
-                            kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
-                                -n benchmark-api-develop --timeout=600s
-                        '''
-                    },
-                    (workerBranchKey): {
+                    def apiNs    = getApiNamespace()
+                    def appLabel = isProd() ? 'opensearch-benchmark' : 'opensearch-benchmark-develop'
+                    def engines  = getEngines()
+
+                    def waitBranches = [:]
+
+                    // One API server shared by all engine workers in this namespace.
+                    // Substitute the namespace into the manifest before applying so the
+                    // hardcoded namespace: field matches the target (prod vs develop).
+                    waitBranches['benchmark-api-server'] = {
                         sh """
-                            cat gke-manifest/opensearch-benchmark-worker-template.yaml | \
-                                sed 's/\\\${ENGINE}/${params.ENGINE}/g' | \
+                            sed 's|namespace: benchmark-api$|namespace: ${apiNs}|g' \
+                                gke-manifest/opensearch-benchmark-api-server.yaml | \
                                 kubectl apply -f -
-                            kubectl scale statefulset opensearch-benchmark-worker-${params.ENGINE} \
-                                --replicas=0 -n benchmark-api-develop
+                            kubectl scale deployment opensearch-benchmark-api-server \
+                                --replicas=0 -n ${apiNs}
                             kubectl wait --for=delete pod \
-                                -l app=opensearch-benchmark-develop,component=worker,engine=${params.ENGINE} \
-                                -n benchmark-api-develop --timeout=120s || true
-                            kubectl scale statefulset opensearch-benchmark-worker-${params.ENGINE} \
-                                --replicas=1 -n benchmark-api-develop
-                            kubectl rollout status statefulset/opensearch-benchmark-worker-${params.ENGINE} \
-                                -n benchmark-api-develop --timeout=1200s
+                                -l app=${appLabel},component=api-server \
+                                -n ${apiNs} --timeout=120s || true
+                            kubectl scale deployment opensearch-benchmark-api-server \
+                                --replicas=1 -n ${apiNs}
+                            kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
+                                -n ${apiNs} --timeout=600s
                         """
                     }
-                )
-                } // script
+
+                    // One worker per engine — all started in parallel regardless of prod/develop.
+                    // The worker template now has ${NAMESPACE} and ${APP_LABEL} placeholders
+                    // so the manifest lands in the correct namespace with the correct labels.
+                    engines.each { engine ->
+                        waitBranches["benchmark-worker-${engine}"] = {
+                            sh """
+                                sed -e 's/\\\${ENGINE}/${engine}/g' \
+                                    -e 's|\\\${NAMESPACE}|${apiNs}|g' \
+                                    -e 's|\\\${APP_LABEL}|${appLabel}|g' \
+                                    gke-manifest/opensearch-benchmark-worker-template.yaml | \
+                                    kubectl apply -f -
+                                kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                    --replicas=0 -n ${apiNs}
+                                kubectl wait --for=delete pod \
+                                    -l app=${appLabel},component=worker,engine=${engine} \
+                                    -n ${apiNs} --timeout=120s || true
+                                kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                    --replicas=1 -n ${apiNs}
+                                kubectl rollout status statefulset/opensearch-benchmark-worker-${engine} \
+                                    -n ${apiNs} --timeout=1200s
+                            """
+                        }
+                    }
+
+                    parallel waitBranches
+                }
             }
         }
 
-        // ── 4. Verify Health ───────────────────────────────────────────────────
+        // ── 3. Verify Health ───────────────────────────────────────────────────
         stage('Verify Health') {
             steps {
-                sh """
-                    echo "=== ${OS_NAMESPACE} cluster ==="
-                    kubectl get pods -n ${OS_NAMESPACE} 2>/dev/null || echo "(not deployed)"
-                    echo ""
-                    echo "=== Benchmark API develop (benchmark-api-develop namespace) ==="
-                    kubectl get pods -n benchmark-api-develop
-                """
-                sh """
-                    curl -sf ${params.API_URL}/health || \
-                        (echo "WARNING: API health check failed — service may still be starting" && true)
-                """
+                script {
+                    def apiNs   = getApiNamespace()
+                    def engines = getEngines()
+                    sh """
+                        echo "=== OpenSearch Clusters ==="
+                        for ns in ${engines.collect { getNamespace(it) }.join(' ')}; do
+                            echo "--- \$ns ---"
+                            kubectl get pods -n \$ns 2>/dev/null || echo "(not deployed)"
+                        done
+                        echo ""
+                        echo "=== Benchmark API (${apiNs}) ==="
+                        kubectl get pods -n ${apiNs}
+                    """
+                    sh """
+                        curl -sf ${getApiUrl()}/health || \
+                            (echo "WARNING: API health check failed — service may still be starting" && true)
+                    """
+                }
             }
         }
 
-        // ── 5. Seed Dataset Cache ──────────────────────────────────────────────
+        // ── 4. Seed Dataset Cache ──────────────────────────────────────────────
+        //    Ensures GCS-hosted corpus files are present on every worker PVC
+        //    before benchmarking starts. Which files to seed is driven entirely
+        //    by the `gcs_cache_files` list in config/datasets.yaml.
         stage('Seed Dataset Cache') {
             steps {
                 script {
+                    def apiNs   = getApiNamespace()
+                    def engines = getEngines()
+
                     def pipeline      = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
                     def pipelineJson  = readJSON file: "pipelines/${pipeline}.json"
                     def corpusSizeVal = pipelineJson.params?.corpus_size
@@ -229,49 +306,79 @@ print(json.dumps(s))
                         return
                     }
 
+                    echo "Files to seed: ${filesToSeed.collect { it.gcs_path }.join(', ')}"
+
                     filesToSeed.each { entry ->
                         def gcsPath    = entry.gcs_path
                         def targetPath = entry.target_path
                         def fileName   = gcsPath.tokenize('/').last()
 
-                        echo "Seeding ${fileName} to develop worker..."
-                        sh """
-                            set -euo pipefail
-                            POD="opensearch-benchmark-worker-${params.ENGINE}-0"
+                        echo "Seeding ${fileName} to ${engines.size()} worker(s)..."
 
-                            if kubectl exec -n benchmark-api-develop \$POD -- test -f '${targetPath}' 2>/dev/null; then
-                                echo "[develop] ${fileName} already present — skipping"
-                            else
-                                echo "[develop] Downloading ${fileName} from GCS..."
-                                kubectl exec -n benchmark-api-develop \$POD -- sh -c \
-                                    "mkdir -p \$(dirname '${targetPath}') && gcloud storage cp '${gcsPath}' '${targetPath}'"
-                                FINAL_SIZE=\$(kubectl exec -n benchmark-api-develop \$POD -- \
-                                    stat -c '%s' '${targetPath}' 2>/dev/null || echo 0)
-                                echo "[develop] Done — \${FINAL_SIZE} bytes"
-                            fi
-                        """
+                        def seedBranches = engines.collectEntries { engine ->
+                            [(engine): {
+                                sh """
+                                    set -euo pipefail
+                                    POD="opensearch-benchmark-worker-${engine}-0"
+
+                                    if kubectl exec -n ${apiNs} \$POD -- test -f '${targetPath}' 2>/dev/null; then
+                                        echo "[${engine}] ${fileName} already present — skipping"
+                                    else
+                                        echo "[${engine}] Downloading ${fileName} from GCS..."
+                                        kubectl exec -n ${apiNs} \$POD -- sh -c \
+                                            "mkdir -p \$(dirname '${targetPath}') && gcloud storage cp '${gcsPath}' '${targetPath}'"
+                                        FINAL_SIZE=\$(kubectl exec -n ${apiNs} \$POD -- \
+                                            stat -c '%s' '${targetPath}' 2>/dev/null || echo 0)
+                                        echo "[${engine}] Done — \${FINAL_SIZE} bytes"
+                                    fi
+                                """
+                            }]
+                        }
+
+                        parallel seedBranches
                     }
                 }
             }
         }
 
-        // ── 6. Per-Run (version × node_size) ──────────────────────────────────
-        //    Loops over every (version, nodeSize) combination declared in the
-        //    pipeline JSON — same pattern as the main Jenkinsfile.
-        //    Single-version / single-size pipelines produce one iteration.
-        //    Results land in <RESULTS_DIR>/<version>/<size>/.
-        stage('Per-Run') {
+        // ── 5. Run Benchmarks ──────────────────────────────────────────────────
+        //    Outer loop: iterates over each (version, node_size) combination.
+        //    Inner iteration: all engines.
+        //      - PROD  → engines run in parallel   (independent clusters, fast)
+        //      - DEVELOP → engines run sequentially (shared dev resources)
+        //
+        //    Per engine, each run:
+        //      a) Scale up / deploy cluster
+        //      b) Run benchmark pipeline
+        //      c) Fetch & save results
+        //      d) Collect server logs & telemetry
+        //
+        //    Results land in <RESULTS_DIR>/<version>/<node_size>/.
+        stage('Run Benchmarks') {
             steps {
                 script {
+                    def apiNs   = getApiNamespace()
+                    def engines = getEngines()
+                    def prodRun = isProd()
+                    def apiUrl  = getApiUrl()
+
+                    // Cancel any running/queued jobs from a previous build.
+                    sh """
+                        for engine in ${engines.join(' ')}; do
+                            JOBS=\$(curl -s "${apiUrl}/api/v1/benchmark?engine=\$engine" \
+                                | jq -r '.jobs[] | select(.status == "running" or .status == "queued") | .job_id' 2>/dev/null || true)
+                            for JOB_ID in \$JOBS; do
+                                echo "Cancelling stale \$engine job: \$JOB_ID"
+                                curl -s -X POST "${apiUrl}/api/v1/benchmark/\$JOB_ID/cancel?engine=\$engine" || true
+                            done
+                        done
+                    """
+
                     def pipeline     = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
                     def pipelineJson = readJSON file: "pipelines/${pipeline}.json"
 
-                    // Build the list of (version, nodeSize) pairs to iterate.
-                    // versions and node_sizes can each be a single value or an array —
-                    // all combinations are run sequentially.
                     def rawVersions = pipelineJson.versions   ?: [params.OPENSEARCH_VERSION]
                     def rawSizes    = pipelineJson.node_sizes ?: (pipelineJson.node_size ? [pipelineJson.node_size] : ['small'])
-                    // Count occurrences of each version so duplicate versions get _run1, _run2 labels.
                     def versionCounts = [:]
                     rawVersions.each { v -> versionCounts[v] = (versionCounts[v] ?: 0) + 1 }
                     def versionOccurrence = [:]
@@ -283,147 +390,150 @@ print(json.dumps(s))
                         rawSizes.each { s -> runs << [version: v, nodeSize: s, versionLabel: versionLabel] }
                     }
 
-                    // first_run_steps: when a pipeline defines this key, run-pipeline.sh is
-                    // invoked with --first-run on the very first run so it reads first_run_steps
-                    // (build + search). All subsequent runs use steps (search-only).
-                    def hasFirstRunSteps = pipelineJson.first_run_steps && pipelineJson.first_run_steps.size() > 0
-                    def isFirstRun = true
-
-                    def redeploy = params.REDEPLOY_CLUSTERS || pipelineJson.redeploy == true
-                    def multiRun = pipelineJson.versions || pipelineJson.node_sizes
-
                     sh "mkdir -p ${RESULTS_DIR}"
 
-                    runs.each { run ->
-                        def version      = run.version
-                        def runSize      = run.nodeSize
-                        def versionLabel = run.versionLabel
-                        def runKey       = "${versionLabel}/${runSize}"
-                        def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
-                        // Always wipe the PVC on the first run when first_run_steps are defined.
-                        // Also wipe on subsequent runs if DELETE_PVCS was explicitly requested.
-                        if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
+                    def redeploy         = params.REDEPLOY_CLUSTERS || pipelineJson.redeploy == true
+                    def multiRun         = pipelineJson.versions || pipelineJson.node_sizes
+                    def hasFirstRunSteps = pipelineJson.first_run_steps && pipelineJson.first_run_steps.size() > 0
 
-                        stage("${params.ENGINE} / ${versionLabel} / ${runSize}") {
-                        echo "════════════════════════════════════════"
-                        echo "Benchmarking OpenSearch ${version} / ${runSize}"
-                        echo "════════════════════════════════════════"
+                    // Build a closure that runs all (version × size) iterations for a single engine.
+                    def makeEngineClosure = { String engine ->
+                        def ns = getNamespace(engine)
+                        return {
+                            catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
+                                def engineFirstRun = true
+                                runs.each { run ->
+                                    if (currentBuild.currentResult == 'ABORTED') { return }
+                                    def version      = run.version
+                                    def runSize      = run.nodeSize
+                                    def versionLabel = run.versionLabel
+                                    def runKey       = "${versionLabel}/${runSize}"
+                                    def isFirstRun   = engineFirstRun
+                                    engineFirstRun   = false
 
-                        catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
-                            try {
-                                // ── a) Scale up or deploy the cluster ─────────────
-                                if (params.SCALE_CLUSTERS) {
-                                    sh """
-                                        NS="${OS_NAMESPACE}"
-                                        if [ "${multiRun}" = "true" ] || [ "${redeploy}" = "true" ]; then
-                                            echo "Deploying \$NS (version ${version}, size ${runSize})..."
-                                            gke-manifest/deploy-namespace-cluster.sh \$NS ${runExtraArgs}
-                                        else
-                                            STS_COUNT=\$(kubectl get statefulset -n \$NS --no-headers 2>/dev/null | wc -l)
-                                            if [ "\$STS_COUNT" -gt 0 ]; then
-                                                echo "Scaling up existing \$NS cluster..."
-                                                gke-manifest/scale-up-clusters.sh \$NS
-                                            else
-                                                echo "No StatefulSets in \$NS — running initial deploy..."
-                                                gke-manifest/deploy-namespace-cluster.sh \$NS ${runExtraArgs}
-                                            fi
-                                        fi
+                                    def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
+                                    if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
 
-                                        # Wait for manager pod
-                                        kubectl rollout status statefulset/opensearch-cluster-manager \
-                                            -n \$NS --timeout=300s
+                                    stage("${engine} / ${versionLabel} / ${runSize}") {
+                                    echo "════════════════════════════════════════"
+                                    echo "[${engine}] Benchmarking OpenSearch ${version} / ${runSize}"
+                                    echo "════════════════════════════════════════"
 
-                                        # Wait for all data pods to be Running
-                                        echo "Waiting for opensearch-data pods to be Running in \$NS..."
-                                        RUNNING=0
-                                        LAST_PROGRESS=\$SECONDS
-                                        STALL_LIMIT=600
-                                        while true; do
-                                            NEW_RUNNING=\$(kubectl get pods -n \$NS -l app=opensearch-data \
-                                                --field-selector=status.phase=Running \
-                                                --no-headers 2>/dev/null | wc -l)
-                                            TOTAL=\$(kubectl get pods -n \$NS -l app=opensearch-data \
-                                                --no-headers 2>/dev/null | wc -l)
-                                            echo "  [\$NS] data pods Running: \${NEW_RUNNING}/\${TOTAL}"
-                                            if [ "\$NEW_RUNNING" -ge 3 ] && [ "\$TOTAL" -ge 3 ]; then
-                                                echo "  ✅ [\$NS] all data pods Running"
-                                                break
-                                            fi
-                                            if [ "\$NEW_RUNNING" -gt "\$RUNNING" ]; then
-                                                RUNNING=\$NEW_RUNNING; LAST_PROGRESS=\$SECONDS
-                                            fi
-                                            STALLED=\$((SECONDS - LAST_PROGRESS))
-                                            if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
-                                                echo "❌ [\$NS] data pods stalled at \${RUNNING}/3 for \${STALL_LIMIT}s — giving up"
-                                                exit 1
-                                            fi
-                                            sleep 10
-                                        done
-
-                                        # Wait for cluster to reach green with no initializing shards
-                                        echo "Waiting for \$NS cluster health (green + 0 initializing shards)..."
-                                        LAST_PROGRESS=\$SECONDS
-                                        LAST_ACTIVE=9999
-                                        STALL_LIMIT=7200
-                                        RETRIED=0
-                                        while true; do
-                                            { set +x; } 2>/dev/null
-                                            HEALTH=\$(kubectl exec -n \$NS opensearch-data-0 -c opensearch -- \
-                                                curl -sk -u admin:admin \
-                                                'https://localhost:9200/_cluster/health' 2>/dev/null || true)
-                                            STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || echo "unknown")
-                                            INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 0)
-                                            RELOC=\$(echo "\$HEALTH" | grep -oP '(?<="relocating_shards":)\\d+' || echo 0)
-                                            UNASSIGNED=\$(echo "\$HEALTH" | grep -oP '(?<="unassigned_shards":)\\d+' || echo 0)
-                                            ACTIVE=\$(kubectl exec -n \$NS opensearch-data-0 -c opensearch -- \
-                                                curl -sk -u admin:admin \
-                                                'https://localhost:9200/_cat/recovery?h=stage&active_only=true' \
-                                                2>/dev/null | grep -c . || true)
-                                            set -x
-                                            if [ "\$STATUS" = "green" ] && [ "\$INIT" = "0" ]; then
-                                                echo "  ✅ [\$NS] cluster green — ready"
-                                                break
-                                            fi
-                                            STALLED=\$((SECONDS - LAST_PROGRESS))
-                                            echo "  [\$NS] status=\${STATUS}  initializing=\${INIT}  relocating=\${RELOC}  unassigned=\${UNASSIGNED}  active_recoveries=\${ACTIVE}  (stall \${STALLED}s/\${STALL_LIMIT}s)"
-                                            if [ "\$ACTIVE" -lt "\$LAST_ACTIVE" ]; then
-                                                LAST_PROGRESS=\$SECONDS
-                                            fi
-                                            LAST_ACTIVE=\$ACTIVE
-                                            STALLED=\$((SECONDS - LAST_PROGRESS))
-                                            if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
-                                                if [ "\$RETRIED" = "0" ]; then
-                                                    echo "⚠️  [\$NS] shard recovery stalled for \${STALL_LIMIT}s — retrying failed shards"
-                                                    kubectl exec -n \$NS opensearch-data-0 -c opensearch -- \
-                                                        curl -sk -u admin:admin -X POST \
-                                                        'https://localhost:9200/_cluster/reroute?retry_failed=true' > /dev/null || true
-                                                    RETRIED=1
-                                                    LAST_PROGRESS=\$SECONDS
-                                                    LAST_ACTIVE=9999
+                                    try {
+                                        // ── a) Scale up or deploy this engine's cluster ────
+                                        if (params.SCALE_CLUSTERS) {
+                                            sh """
+                                                if [ "${multiRun}" = "true" ] || [ "${redeploy}" = "true" ]; then
+                                                    echo "Deploying ${ns} (version ${version}, size ${runSize})..."
+                                                    gke-manifest/deploy-namespace-cluster.sh ${ns} ${runExtraArgs}
                                                 else
-                                                    echo "❌ [\$NS] shard recovery stalled for \${STALL_LIMIT}s after retry — giving up"
-                                                    exit 1
+                                                    STS_COUNT=\$(kubectl get statefulset -n ${ns} --no-headers 2>/dev/null | wc -l)
+                                                    if [ "\$STS_COUNT" -gt 0 ]; then
+                                                        echo "Scaling up existing cluster in ${ns}..."
+                                                        gke-manifest/scale-up-clusters.sh ${ns}
+                                                    else
+                                                        echo "No StatefulSets in ${ns} — running initial deploy..."
+                                                        gke-manifest/deploy-namespace-cluster.sh ${ns} ${runExtraArgs}
+                                                    fi
                                                 fi
-                                            fi
-                                            sleep 10
-                                        done
-                                    """
-                                }
+
+                                                # Wait for manager pod
+                                                kubectl rollout status statefulset/opensearch-cluster-manager \
+                                                    -n ${ns} --timeout=600s
+
+                                                # Wait for all data pods to be Running
+                                                echo "Waiting for opensearch-data pods to be Running in ${ns}..."
+                                                RUNNING=0
+                                                LAST_PROGRESS=\$SECONDS
+                                                STALL_LIMIT=600
+                                                while true; do
+                                                    NEW_RUNNING=\$(kubectl get pods -n ${ns} -l app=opensearch-data \
+                                                        --field-selector=status.phase=Running \
+                                                        --no-headers 2>/dev/null | wc -l)
+                                                    TOTAL=\$(kubectl get pods -n ${ns} -l app=opensearch-data \
+                                                        --no-headers 2>/dev/null | wc -l)
+                                                    echo "  [${ns}] data pods Running: \${NEW_RUNNING}/\${TOTAL}"
+                                                    if [ "\$NEW_RUNNING" -ge 3 ] && [ "\$TOTAL" -ge 3 ]; then
+                                                        echo "  ✅ [${ns}] all data pods Running"
+                                                        break
+                                                    fi
+                                                    if [ "\$NEW_RUNNING" -gt "\$RUNNING" ]; then
+                                                        RUNNING=\$NEW_RUNNING
+                                                        LAST_PROGRESS=\$SECONDS
+                                                    fi
+                                                    STALLED=\$((SECONDS - LAST_PROGRESS))
+                                                    if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
+                                                        echo "❌ [${ns}] data pods stalled at \${RUNNING}/3 for \${STALL_LIMIT}s — giving up"
+                                                        exit 1
+                                                    fi
+                                                    sleep 10
+                                                done
+
+                                                # Wait for cluster to reach green with no initializing shards
+                                                echo "Waiting for ${ns} cluster health (green + 0 initializing shards)..."
+                                                LAST_PROGRESS=\$SECONDS
+                                                LAST_ACTIVE=9999
+                                                STALL_LIMIT=7200
+                                                RETRIED=0
+                                                while true; do
+                                                    { set +x; } 2>/dev/null
+                                                    HEALTH=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                                        curl -sk -u admin:admin \
+                                                        'https://localhost:9200/_cluster/health' 2>/dev/null || true)
+                                                    STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || echo "unknown")
+                                                    INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 0)
+                                                    RELOC=\$(echo "\$HEALTH" | grep -oP '(?<="relocating_shards":)\\d+' || echo 0)
+                                                    UNASSIGNED=\$(echo "\$HEALTH" | grep -oP '(?<="unassigned_shards":)\\d+' || echo 0)
+                                                    ACTIVE=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                                        curl -sk -u admin:admin \
+                                                        'https://localhost:9200/_cat/recovery?h=stage&active_only=true' \
+                                                        2>/dev/null | grep -c . || true)
+                                                    set -x
+                                                    if [ "\$STATUS" = "green" ] && [ "\$INIT" = "0" ]; then
+                                                        echo "  ✅ [${ns}] cluster green — ready"
+                                                        break
+                                                    fi
+                                                    STALLED=\$((SECONDS - LAST_PROGRESS))
+                                                    echo "  [${ns}] status=\${STATUS}  initializing=\${INIT}  relocating=\${RELOC}  unassigned=\${UNASSIGNED}  active_recoveries=\${ACTIVE}  (stall \${STALLED}s/\${STALL_LIMIT}s)"
+                                                    if [ "\$ACTIVE" -lt "\$LAST_ACTIVE" ]; then
+                                                        LAST_PROGRESS=\$SECONDS
+                                                    fi
+                                                    LAST_ACTIVE=\$ACTIVE
+                                                    STALLED=\$((SECONDS - LAST_PROGRESS))
+                                                    if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
+                                                        if [ "\$RETRIED" = "0" ]; then
+                                                            echo "⚠️  [${ns}] shard recovery stalled for \${STALL_LIMIT}s — retrying failed shards"
+                                                            kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                                                curl -sk -u admin:admin -X POST \
+                                                                'https://localhost:9200/_cluster/reroute?retry_failed=true' > /dev/null || true
+                                                            RETRIED=1
+                                                            LAST_PROGRESS=\$SECONDS
+                                                            LAST_ACTIVE=9999
+                                                        else
+                                                            echo "❌ [${ns}] shard recovery stalled for \${STALL_LIMIT}s after retry — giving up"
+                                                            exit 1
+                                                        fi
+                                                    fi
+                                                    sleep 10
+                                                done
+                                            """
+                                        }
 
                                         // ── b) Run benchmark ───────────────────────────────
                                         // On the first run, --first-run is passed so run-pipeline.sh
                                         // reads first_run_steps (build + search). All subsequent runs
-                                        // omit the flag and read steps (search-only), reusing the PVC.
+                                        // omit the flag and use steps (search-only), reusing the PVC.
                                         // RESULTS_DEST + WORKER_POD are consumed by run-pipeline.sh's
                                         // incremental copy helper so each scenario is pulled to the
                                         // Jenkins workspace as soon as it finishes.
                                         sh """
                                             set +e
-                                            DEST="${RESULTS_DIR}/${runKey}/test-runs/${params.ENGINE}"
+                                            DEST="${RESULTS_DIR}/${runKey}/test-runs/${engine}"
                                             mkdir -p "\$DEST"
-                                            API_URL=${params.API_URL} \
+                                            API_URL=${apiUrl} \
                                             RESULTS_DEST="\$DEST" \
-                                            WORKER_POD="opensearch-benchmark-worker-${params.ENGINE}-0" \
+                                            OS_NAMESPACE="${ns}" \
+                                            WORKER_POD="opensearch-benchmark-worker-${engine}-0" \
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
                                                 ${hasFirstRunSteps && isFirstRun ? "--first-run" : ""} \
@@ -431,81 +541,94 @@ print(json.dumps(s))
                                                 ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
                                                 ${params.STATS_INTERVAL?.trim() ? "--stats-interval ${params.STATS_INTERVAL.trim()}" : ""} \
-                                                ${params.ENGINE} \
-                                                2>&1 | tee benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log
+                                                ${engine} \
+                                                2>&1 | tee benchmark-run-${engine}-${versionLabel}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
 
-                                            JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log | tail -1 || true)
+                                            JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-${engine}-${versionLabel}-${runSize}.log | tail -1 || true)
                                             if [ -n "\$JOB_ID" ]; then
-                                                echo "\$JOB_ID" > job_id_develop-${params.ENGINE}-${versionLabel}-${runSize}.txt
-                                                echo "[develop] Job ID captured: \$JOB_ID"
+                                                echo "\$JOB_ID" > job_id_${engine}-${versionLabel}-${runSize}.txt
+                                                echo "[${engine}] Job ID captured: \$JOB_ID"
                                             fi
 
                                             exit \$PIPE_RC
                                         """
-                            } finally {
-                                // ── c) Collect results ────────────────────────────
-                                // Scenario subdirs are already copied incrementally by
-                                // run-pipeline.sh during the run. This block captures the
-                                // run log and final job-status JSON, and does a catch-up
-                                // kubectl cp in case any copy was missed mid-run.
-                                sh """
-                                    mkdir -p ${RESULTS_DIR}/${runKey}
-                                    cp benchmark-run-develop-${params.ENGINE}-${versionLabel}-${runSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
+                                    } finally {
+                                        // ── c) Fetch & save results ────────────────────────
+                                        // Scenario subdirs are already copied incrementally by
+                                        // run-pipeline.sh during the run. This block captures the
+                                        // run log and final job-status JSON, and does a catch-up
+                                        // kubectl cp in case any copy was missed mid-run.
+                                        sh """
+                                            mkdir -p ${RESULTS_DIR}/${runKey}
+                                            cp benchmark-run-${engine}-${versionLabel}-${runSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
 
-                                    if [ -f job_id_develop-${params.ENGINE}-${versionLabel}-${runSize}.txt ]; then
-                                        JOB_ID=\$(cat job_id_develop-${params.ENGINE}-${versionLabel}-${runSize}.txt)
-                                        echo "=== develop @ ${versionLabel}/${runSize} (job: \$JOB_ID) ==="
+                                            if [ -f job_id_${engine}-${versionLabel}-${runSize}.txt ]; then
+                                                JOB_ID=\$(cat job_id_${engine}-${versionLabel}-${runSize}.txt)
+                                                echo "=== ${engine} @ ${versionLabel}/${runSize} (job: \$JOB_ID) ==="
 
-                                        curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${params.ENGINE}" \
-                                            | jq '.' > ${RESULTS_DIR}/${runKey}/job-status-develop.json
-                                        jq '{job_id, status, scenarios_completed, scenarios_total}' \
-                                            ${RESULTS_DIR}/${runKey}/job-status-develop.json
+                                                curl -s "${apiUrl}/api/v1/benchmark/\$JOB_ID?engine=${engine}" \
+                                                    | jq '.' > ${RESULTS_DIR}/${runKey}/job-status-${engine}.json
+                                                jq '{job_id, status, scenarios_completed, scenarios_total}' \
+                                                    ${RESULTS_DIR}/${runKey}/job-status-${engine}.json
 
-                                        DEST="${RESULTS_DIR}/${runKey}/test-runs/${params.ENGINE}"
-                                        mkdir -p "\$DEST"
-                                        kubectl cp -c worker benchmark-api-develop/opensearch-benchmark-worker-${params.ENGINE}-0:/results/\$JOB_ID/${params.ENGINE}/. "\$DEST/" >/dev/null 2>&1 \
-                                            || echo "WARNING: catch-up kubectl cp failed — worker pod may not be running"
+                                                DEST="${RESULTS_DIR}/${runKey}/test-runs/${engine}"
+                                                mkdir -p "\$DEST"
+                                                kubectl cp -c worker ${apiNs}/opensearch-benchmark-worker-${engine}-0:/results/\$JOB_ID/${engine}/. "\$DEST/" >/dev/null 2>&1 \
+                                                    || echo "WARNING: catch-up kubectl cp failed for ${engine} — worker pod may not be running"
 
-                                        echo "  View: ${params.API_URL}/results.html?job_id=\$JOB_ID"
-                                        echo "  Results dir: ${env.WORKSPACE}/${RESULTS_DIR}/${runKey}"
-                                    else
-                                        echo "WARNING: no job_id for ${versionLabel}/${runSize} — benchmark may not have submitted"
-                                    fi
+                                                echo "  View: ${apiUrl}/results.html?job_id=\$JOB_ID"
+                                                echo "  Results dir: ${BUILD_URL}artifact/${RESULTS_DIR}/${runKey}"
+                                            else
+                                                echo "WARNING: no job_id for ${engine} @ ${versionLabel}/${runSize} — benchmark may not have submitted"
+                                            fi
 
-                                    # Server logs and telemetry are collected per scenario by
-                                    # _collect_scenario_server_logs() in run-pipeline.sh as each
-                                    # scenario completes. They land in:
-                                    #   <RESULTS_DEST>/<scenario_key>/server-logs/
+                                            # ── Worker log ─────────────────────────────────
+                                            WORKER_LOG="${RESULTS_DIR}/${runKey}/server-logs/worker-${engine}.log"
+                                            mkdir -p "${RESULTS_DIR}/${runKey}/server-logs"
+                                            kubectl logs statefulset/opensearch-benchmark-worker-${engine} \
+                                                -n ${apiNs} --tail=5000 2>&1 > "\$WORKER_LOG" || true
+                                            echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
+                                        """
+                                    } // try/finally
+                                    } // stage
+                                } // runs.each
+                            } // catchError
+                        } // closure
+                    }
 
-                                    # ── Worker log ─────────────────────────────────
-                                    WORKER_LOG="${RESULTS_DIR}/${runKey}/server-logs/worker-${params.ENGINE}.log"
-                                    kubectl logs statefulset/opensearch-benchmark-worker-${params.ENGINE} \
-                                        -n benchmark-api-develop --tail=5000 2>&1 > "\$WORKER_LOG" || true
-                                    echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
-                                """
-                            }
+                    // Build the engine branch map.
+                    def engineBranches = engines.collectEntries { engine ->
+                        [(engine): makeEngineClosure(engine)]
+                    }
+
+                    if (currentBuild.currentResult == 'ABORTED') {
+                        echo "Build aborted — skipping engine runs"
+                    } else if (prodRun) {
+                        // PROD: run all engines in parallel — independent clusters, maximise throughput.
+                        parallel engineBranches
+                    } else {
+                        // DEVELOP: run engines sequentially — shared dev resources, avoid contention.
+                        engines.each { engine ->
+                            engineBranches[engine].call()
                         }
-                        } // stage
-                        isFirstRun = false
-                    } // runs.each
+                    }
                 }
             }
         }
 
-        // ── 7. Build Summary ───────────────────────────────────────────────────
+        // ── 6. Build Summary ───────────────────────────────────────────────────
         stage('Build Summary') {
             steps {
                 script {
+                    def engines  = getEngines()
+                    def apiUrl   = getApiUrl()
                     def pipeline = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
-                    def pipelineJson = readJSON file: "pipelines/${pipeline}.json"
-                    def rawVersions = pipelineJson.versions   ?: [params.OPENSEARCH_VERSION]
-                    def rawSizes    = pipelineJson.node_sizes ?: (pipelineJson.node_size ? [pipelineJson.node_size] : ['small'])
 
                     sh """
                         cat > ${RESULTS_DIR}/BUILD_SUMMARY.txt << EOF
 ========================================
-OpenSearch Benchmark Build Summary (develop)
+OpenSearch Benchmark Build Summary
 ========================================
 Build ID:  ${BUILD_ID}
 Build URL: ${BUILD_URL}
@@ -513,26 +636,27 @@ Date:      \$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
 Parameters:
   Pipeline:           ${pipeline}
-  Cluster:            ${OS_NAMESPACE}
-  API URL:            ${params.API_URL}
+  Engine Target:      ${params.ENGINE_TARGET}
+  Environment:        ${isProd() ? 'prod' : 'develop'}
+  API URL:            ${apiUrl}
   Scale Clusters:     ${params.SCALE_CLUSTERS}
   Redeploy Clusters:  ${params.REDEPLOY_CLUSTERS}
   OpenSearch Version: ${params.OPENSEARCH_VERSION}
+  Enable Profiling:   ${params.ENABLE_PROFILING}
 
-Results per run:
+Results per engine:
 EOF
                         for version_dir in ${RESULTS_DIR}/*/; do
                             version=\$(basename "\$version_dir")
-                            for size_dir in "\$version_dir"*/; do
-                                size=\$(basename "\$size_dir")
-                                echo "  --- OpenSearch \$version / \$size ---" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
-                                JOB_FILE="job_id_develop-${params.ENGINE}-\${version}-\${size}.txt"
+                            echo "  --- OpenSearch \$version ---" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
+                            for engine in ${engines.join(' ')}; do
+                                JOB_FILE="job_id_\${engine}-\${version}.txt"
                                 if [ -f "\$JOB_FILE" ]; then
                                     JOB_ID=\$(cat "\$JOB_FILE")
-                                    echo "    develop: ${params.API_URL}/results.html?job_id=\${JOB_ID}" \
+                                    echo "    \${engine}: ${apiUrl}/results.html?job_id=\${JOB_ID}" \
                                         >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
                                 else
-                                    echo "    develop: no job submitted" \
+                                    echo "    \${engine}: no job submitted" \
                                         >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
                                 fi
                             done
@@ -546,7 +670,7 @@ EOF
             }
         }
 
-        // ── 8. Archive ─────────────────────────────────────────────────────────
+        // ── 7. Archive Results ─────────────────────────────────────────────────
         stage('Archive Results') {
             steps {
                 archiveArtifacts artifacts: "${RESULTS_DIR}/**/*",
@@ -559,19 +683,18 @@ EOF
     post {
         always {
             script {
+                def engines  = getEngines()
+                def apiNs    = getApiNamespace()
+                def apiUrl   = getApiUrl()
+                def appLabel = isProd() ? 'opensearch-benchmark' : 'opensearch-benchmark-develop'
+
                 // Cancel any running cloud service jobs before scale-down kills the worker pods.
-                // Runs on ABORTED and FAILURE — both end with a scale-down that would orphan
-                // running jobs and leave them stuck in 'running' state indefinitely.
                 if (currentBuild.currentResult in ['ABORTED', 'FAILURE']) {
                     echo "Build ${currentBuild.currentResult} — cancelling any running cloud service jobs..."
 
-                    // Only send cancel requests if the API server pod is running.
-                    // If it's already down, the worker process is gone and there is nothing to cancel.
-                    // Note: on pod restart, init_db() cancels any orphaned 'running' jobs —
-                    // so skipping cancel here does not leave jobs permanently stuck in a running state.
                     def apiRunning = sh(
                         script: """
-                            PHASE=\$(kubectl get pods -n benchmark-api-develop -l app=opensearch-benchmark-develop,component=api-server \
+                            PHASE=\$(kubectl get pods -n ${apiNs} -l app=${appLabel},component=api-server \
                                 --no-headers 2>/dev/null | awk '{print \$3}' | head -1)
                             [ "\$PHASE" = "Running" ]
                         """,
@@ -579,39 +702,53 @@ EOF
                     ) == 0
 
                     if (apiRunning) {
-                        sh """
-                            for JOB_FILE in job_id_develop-*.txt; do
-                                [ -f "\$JOB_FILE" ] || continue
-                                JOB_ID=\$(cat "\$JOB_FILE")
-                                echo "Cancelling develop job \$JOB_ID..."
-                                curl -s -X POST "${params.API_URL}/api/v1/benchmark/\$JOB_ID/cancel?engine=${params.ENGINE}" || true
+                        engines.each { engine ->
+                            sh """
+                                for JOB_FILE in job_id_${engine}-*.txt; do
+                                    [ -f "\$JOB_FILE" ] || continue
+                                    JOB_ID=\$(cat "\$JOB_FILE")
+                                    echo "Cancelling ${engine} job \$JOB_ID..."
+                                    curl -s -X POST "${apiUrl}/api/v1/benchmark/\$JOB_ID/cancel?engine=${engine}" || true
 
-                                # Poll until the job reaches a terminal status (max 60s)
-                                echo "Waiting for job \$JOB_ID to stop..."
-                                for attempt in \$(seq 1 12); do
-                                    STATUS=\$(curl -s "${params.API_URL}/api/v1/benchmark/\$JOB_ID?engine=${params.ENGINE}" \
-                                        | jq -r '.status // "unknown"')
-                                    echo "  status: \$STATUS"
-                                    case "\$STATUS" in
-                                        completed|failed|partial|cancelled|error) break ;;
-                                    esac
-                                    sleep 5
+                                    echo "Waiting for ${engine} job \$JOB_ID to stop..."
+                                    for attempt in \$(seq 1 12); do
+                                        STATUS=\$(curl -s "${apiUrl}/api/v1/benchmark/\$JOB_ID?engine=${engine}" \
+                                            | jq -r '.status // "unknown"')
+                                        echo "  [${engine}] status: \$STATUS"
+                                        case "\$STATUS" in
+                                            completed|failed|partial|cancelled|error) break ;;
+                                        esac
+                                        sleep 5
+                                    done
                                 done
-                            done
-                        """
+                            """
+                        }
+                    } else {
+                        echo "API server pod is not running — skipping cancel"
                     }
                 }
 
                 if (params.SCALE_CLUSTERS && !params.SKIP_SCALE_DOWN) {
-                    echo "Scaling down develop worker and API server..."
+                    echo "Scaling down benchmark worker(s)..."
+                    engines.each { engine ->
+                        sh """
+                            kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                --replicas=0 -n ${apiNs} || true
+                        """
+                    }
+
+                    // The API server is shared by all workers in this namespace — always scale it down.
+                    echo "Scaling down API server..."
                     sh """
-                        kubectl scale statefulset opensearch-benchmark-worker-${params.ENGINE} \
-                            --replicas=0 -n benchmark-api-develop || true
                         kubectl scale deployment opensearch-benchmark-api-server \
-                            --replicas=0 -n benchmark-api-develop || true
+                            --replicas=0 -n ${apiNs} || true
                     """
-                    echo "Scaling down ${OS_NAMESPACE} cluster..."
-                    sh "gke-manifest/scale-down-clusters.sh ${OS_NAMESPACE} || true"
+
+                    echo "Scaling down OpenSearch cluster(s)..."
+                    engines.each { engine ->
+                        def ns = getNamespace(engine)
+                        sh "gke-manifest/scale-down-clusters.sh ${ns} || true"
+                    }
                 }
 
                 sh """
@@ -622,8 +759,8 @@ EOF
             }
         }
 
-        success { echo "Develop benchmark pipeline completed successfully." }
-        failure { echo "Develop benchmark pipeline failed. Check logs for details." }
+        success { echo "Benchmark pipeline completed successfully." }
+        failure { echo "Benchmark pipeline failed. Check logs for details." }
 
         cleanup {
             cleanWs(
@@ -636,6 +773,41 @@ EOF
             )
         }
     }
+}
+
+// ── Helper functions ───────────────────────────────────────────────────────────
+//
+// isProd()           → true when running on main, test-prod/*, or FORCE_PROD=true
+// getNamespace(eng)  → os-<eng>         (prod)  or os-develop-<eng>  (develop)
+// getApiNamespace()  → benchmark-api    (prod)  or benchmark-api-develop
+// getApiUrl()        → resolved API URL (param > branch default)
+// getEngines()       → list of engine strings derived from ENGINE_TARGET param
+
+def isProd() {
+    def rawBranch = env.BRANCH_NAME ?: env.GIT_BRANCH ?: scm.branches[0].name
+    def branch = rawBranch.contains('/') ? rawBranch.tokenize('/').last() : rawBranch
+    return params.FORCE_PROD || branch == 'main' || branch.startsWith('test-prod')
+}
+
+def getNamespace(String engine) {
+    return "${isProd() ? 'os' : 'os-develop'}-${engine}"
+}
+
+def getApiNamespace() {
+    return isProd() ? 'benchmark-api' : 'benchmark-api-develop'
+}
+
+def getApiUrl() {
+    def overrideUrl = params.API_URL?.trim()
+    if (overrideUrl) { return overrideUrl }
+    return isProd() ? 'http://34.132.114.18' : 'http://136.116.139.175'
+}
+
+def getEngines() {
+    if (params.ENGINE_TARGET == 'all') {
+        return ['jvector', 'faiss', 'lucene']
+    }
+    return [params.ENGINE_TARGET.replace('os-', '')]
 }
 
 // Made with Bob
