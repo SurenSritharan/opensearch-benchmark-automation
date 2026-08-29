@@ -1,23 +1,20 @@
 {
   "description": "Bulk-size sweep — varies target_index_bulk_size across [100, 500, 1000, 2500, 5000] using the two best ef/m combos from the index parameter sweep (ef=64/m=8, ef=128/m=16). Measures ingest throughput (docs/s) sensitivity to bulk_size.",
   "engine": "__ENGINE__",
-  "no_profiling": true,
-  "redeploy": true,
-  "delete_pvcs": true,
   "params": {
     "corpus_size": "1m"
   },
   "parameter_sweeps": [
-    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 100,  "target_index_name": "cohere-msmarco-1024-1m-ef64-m8-bulk100"  } },
-    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 500,  "target_index_name": "cohere-msmarco-1024-1m-ef64-m8-bulk500"  } },
-    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 1000, "target_index_name": "cohere-msmarco-1024-1m-ef64-m8-bulk1000" } },
-    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 2500, "target_index_name": "cohere-msmarco-1024-1m-ef64-m8-bulk2500" } },
-    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 5000, "target_index_name": "cohere-msmarco-1024-1m-ef64-m8-bulk5000" } },
-    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 100,  "target_index_name": "cohere-msmarco-1024-1m-ef128-m16-bulk100"  } },
-    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 500,  "target_index_name": "cohere-msmarco-1024-1m-ef128-m16-bulk500"  } },
-    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 1000, "target_index_name": "cohere-msmarco-1024-1m-ef128-m16-bulk1000" } },
-    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 2500, "target_index_name": "cohere-msmarco-1024-1m-ef128-m16-bulk2500" } },
-    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 5000, "target_index_name": "cohere-msmarco-1024-1m-ef128-m16-bulk5000" } }
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 100  } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 500  } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 1000 } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 2500 } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 5000 } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 100  } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 500  } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 1000 } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 2500 } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 5000 } }
   ],
   "steps": [
     { "dataset": "cohere-msmarco-1024", "scenario": "delete-index" },

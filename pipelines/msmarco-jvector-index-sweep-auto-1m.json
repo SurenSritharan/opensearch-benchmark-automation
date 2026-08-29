@@ -1,9 +1,6 @@
 {
   "description": "Indexing parameter sweep — 16 ef_construction × m combinations using optimised ingest procedure (replicas=0, no auto-throttle during ingest+merge, then re-enable replicas and refresh), followed by vector search to measure recall trade-off.",
   "engine": "__ENGINE__",
-  "no_profiling": true,
-  "redeploy": true,
-  "delete_pvcs": true,
   "params": {
     "corpus_size": "1m",
     "target_index_bulk_size": 5000
