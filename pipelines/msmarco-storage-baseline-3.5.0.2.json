@@ -14,7 +14,7 @@
       "dataset": "cohere-msmarco-1024",
       "scenario": "create-index",
       "params": {
-        "hnsw_ef_construction": 128,
+        "hnsw_ef_construction": 64,
         "hnsw_m": 16,
         "target_index_replica_shards": 0,
         "merge_scheduler_auto_throttle": false
