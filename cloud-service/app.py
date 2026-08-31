@@ -1078,12 +1078,13 @@ def trigger_batch_benchmark():
             
             logger.info(f"Test: dataset='{dataset}', scenario='{scenario_label}' -> procedure '{procedure_name}'")
         
-        # Create batch job ID with timestamp (no "batch-" prefix)
+        # Create batch job ID: timestamp + short UUID suffix to guarantee uniqueness
+        # across builds that submit within the same UTC second.
         timestamp = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
-        batch_id = timestamp
+        batch_id = f"{timestamp}-{uuid.uuid4().hex[:8]}"
         
-        # Create results directory structure: timestamp/engine/ (no dataset since we have multiple)
-        results_base = f"{timestamp}/{engine}"
+        # Create results directory structure: <batch_id>/engine/
+        results_base = f"{batch_id}/{engine}"
         
         # Get current queue position for this engine
         with db_lock:
