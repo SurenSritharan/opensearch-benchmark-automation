@@ -1,8 +1,8 @@
 {
-  "description": "Storage baseline — standard HNSW on OpenSearch 3.5.0.2 with no special features. Uses optimized ingest (replicas=0, no auto-throttle) with ef=128/m=16 for clean comparison.",
+  "description": "Storage baseline — standard HNSW on OpenSearch 3.5.0 with no special features. Uses optimized ingest (replicas=0, no auto-throttle) with ef=128/m=16 for clean comparison.",
   "engine": "__ENGINE__",
   "no_profiling": true,
-  "versions": ["3.5.0.2"],
+  "versions": ["3.5.0"],
   "node_sizes": ["small"],
   "params": {
     "corpus_size": "1m",
