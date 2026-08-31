@@ -1,0 +1,72 @@
+{
+  "description": "Storage feature comparison on a single version (OS 3.8.0) — isolates feature effect from version effect. Builds three indexes in sequence on the same cluster: (1) baseline float32, (2) derived_source=true, (3) NVQ 4x on_disk. All use ef_construction=64, m=16, replicas=0 during ingest, force-merge to 1 segment, then enable replicas before search.",
+  "engine": "__ENGINE__",
+  "no_profiling": true,
+  "versions": ["3.8.0"],
+  "node_sizes": ["small"],
+  "params": {
+    "corpus_size": "1m",
+    "target_index_bulk_size": 5000
+  },
+  "steps": [
+    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index",    "params": { "target_index_name": "cohere-msmarco-1024-1m-baseline" } },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-baseline",
+        "hnsw_ef_construction": 64,
+        "hnsw_m": 16,
+        "target_index_replica_shards": 0,
+        "merge_scheduler_auto_throttle": false
+      }
+    },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data", "params": { "target_index_name": "cohere-msmarco-1024-1m-baseline" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge",      "params": { "target_index_name": "cohere-msmarco-1024-1m-baseline", "client_timeout": 28800 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "enable-replicas",  "params": { "target_index_name": "cohere-msmarco-1024-1m-baseline" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index",    "params": { "target_index_name": "cohere-msmarco-1024-1m-baseline" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",    "params": { "target_index_name": "cohere-msmarco-1024-1m-baseline",       "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",    "params": { "target_index_name": "cohere-msmarco-1024-1m-baseline",       "query_k": 10,  "hnsw_ef_search": 256 } },
+
+    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index",    "params": { "target_index_name": "cohere-msmarco-1024-1m-derived-source" } },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-derived-source",
+        "hnsw_ef_construction": 64,
+        "hnsw_m": 16,
+        "target_index_replica_shards": 0,
+        "merge_scheduler_auto_throttle": false,
+        "derived_source_enabled": true
+      }
+    },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data", "params": { "target_index_name": "cohere-msmarco-1024-1m-derived-source" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge",      "params": { "target_index_name": "cohere-msmarco-1024-1m-derived-source", "client_timeout": 28800 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "enable-replicas",  "params": { "target_index_name": "cohere-msmarco-1024-1m-derived-source" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index",    "params": { "target_index_name": "cohere-msmarco-1024-1m-derived-source" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",    "params": { "target_index_name": "cohere-msmarco-1024-1m-derived-source", "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",    "params": { "target_index_name": "cohere-msmarco-1024-1m-derived-source", "query_k": 10,  "hnsw_ef_search": 256 } },
+
+    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index",    "params": { "target_index_name": "cohere-msmarco-1024-1m-nvq-4x" } },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-nvq-4x",
+        "hnsw_ef_construction": 64,
+        "hnsw_m": 16,
+        "target_index_replica_shards": 0,
+        "merge_scheduler_auto_throttle": false,
+        "mode": "on_disk",
+        "compression_level": "4x"
+      }
+    },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data", "params": { "target_index_name": "cohere-msmarco-1024-1m-nvq-4x" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge",      "params": { "target_index_name": "cohere-msmarco-1024-1m-nvq-4x", "client_timeout": 28800 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "enable-replicas",  "params": { "target_index_name": "cohere-msmarco-1024-1m-nvq-4x" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index",    "params": { "target_index_name": "cohere-msmarco-1024-1m-nvq-4x" } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",    "params": { "target_index_name": "cohere-msmarco-1024-1m-nvq-4x", "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",    "params": { "target_index_name": "cohere-msmarco-1024-1m-nvq-4x", "query_k": 10,  "hnsw_ef_search": 256 } }
+  ]
+}
