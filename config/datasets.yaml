@@ -57,8 +57,8 @@ datasets:
           target_index_replica_shards: 1
           target_index_dimension: 768
           target_index_space_type: "innerproduct"
-          hnsw_ef_construction: 256
-          hnsw_m: 32
+          hnsw_ef_construction: 64
+          hnsw_m: 16
           refresh_interval: "-1"
           max_merged_segment: "2gb"
         # Engine-specific parameters for index creation
@@ -189,8 +189,8 @@ datasets:
           target_index_dimension: 1024
           target_field_name: "vector"
           target_index_space_type: "cosinesimil"
-          hnsw_ef_construction: 256
-          hnsw_m: 32
+          hnsw_ef_construction: 64
+          hnsw_m: 16
           refresh_interval: "-1"
           max_merged_segment: "2gb"
         engine_params:
@@ -278,7 +278,7 @@ datasets:
           target_index_replica_shards: 0
           target_index_dimension: 1024
           target_index_space_type: "cosinesimil"
-          hnsw_ef_construction: 256
+          hnsw_ef_construction: 64
           hnsw_m: 16
           refresh_interval: "-1"
           max_merged_segment: "2gb"
@@ -293,7 +293,7 @@ datasets:
 
       - name: "bulk-ingest-data"
         params:
-          target_index_bulk_size: 1000
+          target_index_bulk_size: 500
           target_index_bulk_indexing_clients: 1
           num_queries: 1000
           detailed_results: false
@@ -377,7 +377,7 @@ datasets:
           target_index_primary_shards: 1
           target_index_replica_shards: 0
           target_index_space_type: "cosinesimil"
-          hnsw_ef_construction: 256
+          hnsw_ef_construction: 64
           hnsw_m: 16
           refresh_interval: "-1"
         engine_params:
@@ -391,7 +391,7 @@ datasets:
 
       - name: "bulk-ingest-data"
         params:
-          target_index_bulk_size: 1000
+          target_index_bulk_size: 500
           target_index_bulk_indexing_clients: 1
           num_queries: 1000
           detailed_results: false
