@@ -7,6 +7,11 @@ pipeline {
     agent any
 
     parameters {
+        text(
+            name: 'WAIT_FOR_JOBS',
+            defaultValue: 'ACL Pipeline',
+            description: 'Newline-separated list of Jenkins job names to wait for before starting. The pipeline will block until all listed jobs finish. Leave blank to skip.'
+        )
         choice(
             name: 'PIPELINE',
             choices: [
@@ -116,6 +121,44 @@ pipeline {
     }
 
     stages {
+
+        // ── 0. Wait for upstream jobs ──────────────────────────────────────────
+        // Block until every job listed in WAIT_FOR_JOBS is no longer building.
+        // Jobs are polled in parallel; each waits independently. Polls every 60 s;
+        // times out after 4 hours per job.
+        stage('Wait for Upstream Jobs') {
+            when {
+                expression { params.WAIT_FOR_JOBS?.trim() }
+            }
+            steps {
+                script {
+                    def jobs = params.WAIT_FOR_JOBS.split('\n').collect { it.trim() }.findAll { it }
+                    echo "Waiting for upstream job(s): ${jobs.join(', ')}"
+
+                    def waitBranches = jobs.collectEntries { jobName ->
+                        [(jobName): {
+                            def apiUrl = "${env.JENKINS_URL}job/${jobName.replace(' ', '%20')}/lastBuild/api/json"
+                            timeout(time: 4, unit: 'HOURS') {
+                                waitUntil(initialRecurrencePeriod: 60000) {
+                                    def building = sh(
+                                        script: """curl -sf --max-time 10 '${apiUrl}' | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('building') else 'false')" 2>/dev/null || echo 'false'""",
+                                        returnStdout: true
+                                    ).trim()
+                                    if (building == 'true') {
+                                        echo "'${jobName}' is currently running — waiting 60 s..."
+                                        return false
+                                    }
+                                    echo "'${jobName}' is not running — proceeding."
+                                    return true
+                                }
+                            }
+                        }]
+                    }
+
+                    parallel waitBranches
+                }
+            }
+        }
 
         // ── 1. Prepare ─────────────────────────────────────────────────────────
         // KUBECONFIG env var is set pipeline-wide so every kubectl call in every
