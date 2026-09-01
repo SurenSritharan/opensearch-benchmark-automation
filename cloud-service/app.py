@@ -1056,11 +1056,12 @@ def trigger_batch_benchmark():
             if error:
                 return jsonify({'error': f'Dataset "{dataset}": {error}'}), 400
             
-            # Extract scenario-specific params
-            scenario_params = {}
+            # Extract scenario-specific params: common_params → procedure params → per-test params
+            dataset_cfg = config_loader.get_dataset_config(dataset)
+            scenario_params = dataset_cfg.get('common_params', {}).copy()
             if matched_proc and isinstance(matched_proc, dict):
-                scenario_params = matched_proc.get('params', {}).copy()
-            
+                scenario_params.update(matched_proc.get('params', {}).copy())
+
             # Merge with per-test params (test params override scenario params)
             test_params = test.get('params', {})
             if test_params:
@@ -1077,12 +1078,13 @@ def trigger_batch_benchmark():
             
             logger.info(f"Test: dataset='{dataset}', scenario='{scenario_label}' -> procedure '{procedure_name}'")
         
-        # Create batch job ID with timestamp (no "batch-" prefix)
+        # Create batch job ID: timestamp + short UUID suffix to guarantee uniqueness
+        # across builds that submit within the same UTC second.
         timestamp = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
-        batch_id = timestamp
+        batch_id = f"{timestamp}-{uuid.uuid4().hex[:8]}"
         
-        # Create results directory structure: timestamp/engine/ (no dataset since we have multiple)
-        results_base = f"{timestamp}/{engine}"
+        # Create results directory structure: <batch_id>/engine/
+        results_base = f"{batch_id}/{engine}"
         
         # Get current queue position for this engine
         with db_lock:

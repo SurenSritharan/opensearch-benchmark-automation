@@ -87,7 +87,7 @@ spec:
             apt-get install -y -qq google-cloud-cli
             
             echo "Installing Python packages..."
-            pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn filelock \
+            pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors jinja2 pyyaml gunicorn filelock \
               faiss-cpu pyarrow huggingface_hub
             
             echo "Setting up directories..."
@@ -116,8 +116,11 @@ spec:
               cp -r /workspace-tmp/.git /workspace/ 2>/dev/null || true
               rm -rf /workspace-tmp
             else
-              echo "Workspace already exists, pulling latest ${AUTOMATION_BRANCH} changes..."
+              echo "Workspace already exists, ensuring origin remote and pulling latest ${AUTOMATION_BRANCH} changes..."
               cd /workspace
+              git remote set-url origin https://github.com/SurenSritharan/opensearch-benchmark-automation.git
+              git reset --hard
+              git clean -fd
               git pull origin ${AUTOMATION_BRANCH} || echo "Git pull failed, using existing version"
             fi
             

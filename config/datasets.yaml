@@ -57,8 +57,8 @@ datasets:
           target_index_replica_shards: 1
           target_index_dimension: 768
           target_index_space_type: "innerproduct"
-          hnsw_ef_construction: 256
-          hnsw_m: 32
+          hnsw_ef_construction: 64
+          hnsw_m: 16
           refresh_interval: "-1"
           max_merged_segment: "2gb"
         # Engine-specific parameters for index creation
@@ -189,8 +189,8 @@ datasets:
           target_index_dimension: 1024
           target_field_name: "vector"
           target_index_space_type: "cosinesimil"
-          hnsw_ef_construction: 256
-          hnsw_m: 32
+          hnsw_ef_construction: 64
+          hnsw_m: 16
           refresh_interval: "-1"
           max_merged_segment: "2gb"
         engine_params:
@@ -275,7 +275,7 @@ datasets:
           target_index_replica_shards: 0
           target_index_dimension: 1024
           target_index_space_type: "cosinesimil"
-          hnsw_ef_construction: 256
+          hnsw_ef_construction: 64
           hnsw_m: 16
           refresh_interval: "-1"
           max_merged_segment: "2gb"
@@ -290,7 +290,7 @@ datasets:
 
       - name: "bulk-ingest-data"
         params:
-          target_index_bulk_size: 1000
+          target_index_bulk_size: 500
           target_index_bulk_indexing_clients: 1
           num_queries: 1000
           detailed_results: false
@@ -374,7 +374,7 @@ datasets:
           target_index_primary_shards: 1
           target_index_replica_shards: 0
           target_index_space_type: "cosinesimil"
-          hnsw_ef_construction: 256
+          hnsw_ef_construction: 64
           hnsw_m: 16
           refresh_interval: "-1"
         engine_params:
@@ -388,7 +388,7 @@ datasets:
 
       - name: "bulk-ingest-data"
         params:
-          target_index_bulk_size: 1000
+          target_index_bulk_size: 500
           target_index_bulk_indexing_clients: 1
           num_queries: 1000
           detailed_results: false
@@ -429,6 +429,80 @@ datasets:
           search_clients: 1
           search_pipeline: "hybrid-search-pipeline"
           hybrid_text_field: "text"
+          detailed_results: true
+
+  openai-large-5m:
+    dimension: 1536
+    format: parquet
+    space_type: "cosinesimil"
+    description: "OpenAI 1536-dimensional embeddings — 5M vectors from VectorDBBench, streamed from HuggingFace parquet files — ground truth computed on-the-fly by workload.py"
+    workload: "parquet"
+
+    supported_corpus_sizes: ["5m"]
+
+    # No gcs_cache_files — data is streamed from HuggingFace at runtime.
+
+    common_params:
+      target_index_name: "openai-large-5m"
+      target_index_dimension: 1536
+      target_field_name: "emb"
+      hf_repo_id: "makneeee/openai_large_5m"
+      hf_dataset_dir: "datasets/makneeee/openai_large_5m/parquet"
+
+    engine_params:
+      faiss:
+        engine: "faiss"
+      lucene:
+        engine: "lucene"
+      jvector:
+        engine: "jvector"
+
+    test_procedures:
+      - name: "delete-index"
+        params: {}
+
+      - name: "create-index"
+        params:
+          target_index_body: "indices/index.json"
+          target_index_primary_shards: 1
+          target_index_replica_shards: 0
+          hnsw_ef_construction: 256
+          hnsw_m: 16
+          refresh_interval: "-1"
+        engine_params:
+          faiss:
+            method_name: "hnsw"
+          lucene:
+            method_name: "hnsw"
+          jvector:
+            method_name: "disk_ann"
+            mode: "on_disk"
+
+      - name: "bulk-ingest-data"
+        params:
+          target_index_bulk_size: 1000
+          target_index_bulk_indexing_clients: 1
+          num_queries: 1000
+          detailed_results: false
+        engine_params:
+          jvector:
+            target_index_bulk_size: 2000
+            target_index_bulk_indexing_clients: 1
+
+      - name: "refresh-index"
+        params: {}
+
+      - name: "force-merge"
+        params:
+          target_index_max_num_segments: 1
+
+      - name: "vector-search"
+        params:
+          warmup_time_period: 60
+          time_period: 300
+          hnsw_ef_search: 128
+          query_k: 10
+          search_clients: 1
           detailed_results: true
 
 # Made with Bob
