@@ -1,9 +1,23 @@
 pipeline {
-    // Unified Jenkinsfile — works on both main and develop (and feature branches).
+    // Unified Jenkinsfile — works on main, develop, and any feature/pipeline branch.
     //
     // Branch → environment mapping (resolved at runtime by getNamespace()):
-    //   main / test-prod/*      → os-<engine>         in benchmark-api
-    //   any other branch        → os-develop-<engine>  in benchmark-api-develop
+    //   main / test-prod/*  → os-<engine>          in benchmark-api
+    //   any other branch    → os-develop-<engine>   in benchmark-api-develop
+    //
+    // Namespace convention:
+    //   os-<engine>              prod standard   (e.g. os-jvector, os-faiss, os-lucene)
+    //   os-develop-<engine>      develop         (e.g. os-develop-jvector)
+    //   os-<engine>-<pipeline>   prod isolated   (e.g. os-jvector-acl)
+    //
+    // The namespace must exist in GKE and have a RoleBinding in jenkins-agent-rbac.yaml.
+    //
+    // Adding a new isolated pipeline (e.g. ACL):
+    //   1. Create GKE namespace: kubectl create namespace os-jvector-acl
+    //   2. Add RoleBinding in jenkins-agent-rbac.yaml and re-apply it
+    //   3. Create a separate Jenkins job pointing at this Jenkinsfile (own disableConcurrentBuilds)
+    //   4. Set ENGINE_TARGET = jvector-acl in that job's default parameters
+    //   No changes to this Jenkinsfile required.
     //
     // Set FORCE_PROD=true to force a develop-branch build to target the prod clusters.
     //
@@ -18,12 +32,32 @@ pipeline {
     parameters {
         text(
             name: 'WAIT_FOR_JOBS',
-            defaultValue: 'ACL Pipeline',
+            defaultValue: '',
             description: 'Newline-separated list of Jenkins job names to wait for before starting. The pipeline will block until all listed jobs finish. Leave blank to skip.'
         )
         choice(
             name: 'PIPELINE',
             choices: [
+                // ── ACL benchmark sweep (run all variants in one job) ──────
+                'acl-sweep-1m',
+                'acl-sweep-5m',
+                'acl-sweep-10m',
+                // ── ACL individual variant pipelines ──────────────────────
+                'acl-ultrastrict',
+                'acl-ultrastrict-narrow',
+                'acl-ultrastrict-micro',
+                'acl-ultrastrict-fixed',
+                'acl-e1-baseline',
+                'acl-e2-tenant-only',
+                'acl-e3-static-groups',
+                'acl-m1-tenant-group',
+                'acl-m2-full-identity',
+                'acl-m3-identity-classification',
+                'acl-c1-dual-validation',
+                'acl-c3-large-users-list',
+                'acl-c5-multi-tenant',
+                'acl-c8-no-classification',
+                // ── Standard non-ACL pipelines ────────────────────────────
                 'complete',
                 'search-all',
                 'search-compare',
@@ -54,10 +88,10 @@ pipeline {
             defaultValue: '',
             description: 'Optional: name of any pipeline in pipelines/ (overrides the choice above). Must exist as pipelines/<name>.json.'
         )
-        choice(
+        string(
             name: 'ENGINE_TARGET',
-            choices: ['all', 'jvector', 'faiss', 'lucene'],
-            description: 'Which engine cluster(s) to run. "all" targets all three. On develop, engines run sequentially; on main they run in parallel.'
+            defaultValue: 'all',
+            description: 'Comma-separated engine slug(s) to run, or "all" to target every standard engine (jvector, faiss, lucene). Use any slug that has a matching os-<slug> namespace, e.g. "jvector-acl" for the ACL pipeline, or "jvector,faiss" for a subset.'
         )
         booleanParam(
             name: 'FORCE_PROD',
@@ -568,6 +602,32 @@ print(json.dumps(s))
 
                                     stage("${engine} / ${versionLabel} / ${runSize} — Run Benchmark") {
                                     try {
+                                        // ── a2) ACL Setup ──────────────────────────────────
+                                        // Only runs when the selected pipeline starts with "acl-".
+                                        // Bootstraps the ingest pipeline, index template, DLS roles,
+                                        // and benchmark users before the first benchmark step fires.
+                                        // Idempotent — every call is a PUT, safe to re-run on redeploy.
+                                        //
+                                        // Worker readiness wait is required: cluster-green only confirms
+                                        // OpenSearch is ready, not the worker pod. acl-setup.sh routes
+                                        // all curl calls through kubectl exec on the worker pod — if the
+                                        // pod is still starting its git pull the TCP connection to the
+                                        // OpenSearch service is refused (exit 7).
+                                        script {
+                                            if (pipeline.startsWith('acl-')) {
+                                                sh """
+                                                    echo "=== [${engine}] Waiting for worker pod to be Ready before ACL setup ==="
+                                                    kubectl wait --for=condition=ready pod \
+                                                        opensearch-benchmark-worker-${engine}-0 \
+                                                        -n ${apiNs} --timeout=300s
+                                                    echo "=== [${engine}] ACL Setup for ${ns} ==="
+                                                    gke-manifest/acl-setup.sh ${ns}
+                                                """
+                                            } else {
+                                                echo "[${engine}] Non-ACL pipeline — skipping ACL setup"
+                                            }
+                                        }
+
                                         // On the first run, --first-run is passed so run-pipeline.sh
                                         // reads first_run_steps (build + search). All subsequent runs
                                         // omit the flag and use steps (search-only), reusing the PVC.
@@ -602,6 +662,21 @@ print(json.dumps(s))
 
                                             exit \$PIPE_RC
                                         """
+
+                                        // ── b2) Post-ingest ACL verification ───────────────
+                                        // Only for ACL pipelines. Confirms after all benchmark
+                                        // steps complete that:
+                                        //   [A] index default_pipeline = acl_guard
+                                        //   [B] 10 random docs have ACL fields populated
+                                        //   [C] DLS is restrictive (ACL user sees fewer docs than admin)
+                                        script {
+                                            if (pipeline.startsWith('acl-')) {
+                                                sh """
+                                                    echo "=== [${engine}] Post-ingest ACL verification ==="
+                                                    gke-manifest/acl-setup.sh ${ns} verify
+                                                """
+                                            }
+                                        }
                                     } finally {
                                         // ── c) Fetch & save results ────────────────────────
                                         // Scenario subdirs are already copied incrementally by
@@ -864,13 +939,15 @@ def getApiUrl() {
 }
 
 def getEngines() {
-    if (params.ENGINE_TARGET == 'all') {
-        // On develop, 'all' defaults to jvector only — the shared dev node can only
-        // run one engine at a time. Explicit ENGINE_TARGET selection still works for
-        // all three engines.
+    def target = params.ENGINE_TARGET?.trim() ?: 'all'
+    if (target == 'all') {
+        // "all" means the three standard engines.
+        // On develop, run only jvector by default — the shared dev node handles one
+        // engine at a time. An explicit comma-separated list still works for any engine.
         return isProd() ? ['jvector', 'faiss', 'lucene'] : ['jvector']
     }
-    return [params.ENGINE_TARGET]
+    // Accept a comma-separated list of engine slugs: "jvector,faiss" or "acl-jvector"
+    return target.split(',').collect { it.trim() }.findAll { it }
 }
 
 // Made with Bob

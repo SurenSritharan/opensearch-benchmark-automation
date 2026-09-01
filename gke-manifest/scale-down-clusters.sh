@@ -1,11 +1,16 @@
 #!/bin/bash
 
-# Scale down OpenSearch clusters to save resources
-# This script reduces StatefulSet replicas to 0 while preserving data in PVCs
-# Usage: ./scale-down-clusters.sh [namespace]
-# Example: ./scale-down-clusters.sh os-develop-jvector   (develop)
-#          ./scale-down-clusters.sh os-jvector            (prod)
-#          ./scale-down-clusters.sh all
+# Scale down OpenSearch clusters to save resources.
+# This script reduces StatefulSet replicas to 0 while preserving data in PVCs.
+#
+# Namespace convention:  os-<engine>          (prod)
+#                        os-develop-<engine>  (develop / feature pipelines)
+#
+# Usage: ./scale-down-clusters.sh <namespace|all>
+# Example: ./scale-down-clusters.sh os-jvector
+#          ./scale-down-clusters.sh os-develop-jvector
+#          ./scale-down-clusters.sh os-acl-jvector
+#          ./scale-down-clusters.sh all   ← scales down every os-* namespace found in GKE
 
 set -e
 
@@ -94,37 +99,39 @@ scale_down_namespace() {
 if [ -z "$NAMESPACE" ]; then
     echo "Usage: $0 <namespace|all>"
     echo ""
-    echo "Available options:"
-    echo "  os-jvector          - Scale down JVector cluster (prod)"
-    echo "  os-faiss            - Scale down FAISS cluster (prod)"
-    echo "  os-lucene           - Scale down Lucene cluster (prod)"
-    echo "  os-develop-jvector  - Scale down JVector cluster (develop)"
-    echo "  os-develop-faiss    - Scale down FAISS cluster (develop)"
-    echo "  os-develop-lucene   - Scale down Lucene cluster (develop)"
-    echo "  all                 - Scale down all clusters (develop)"
+    echo "  <namespace>  Any os-<engine> or os-develop-<engine> namespace, e.g.:"
+    echo "                 os-jvector, os-faiss, os-lucene"
+    echo "                 os-acl-jvector, os-develop-jvector"
+    echo "  all          Scale down every os-* namespace currently present in GKE"
+    echo "               (do NOT use while a pipeline is running)"
     echo ""
     exit 1
 fi
 
 if [ "$NAMESPACE" == "all" ]; then
-    echo -e "${YELLOW}⚠️  WARNING: scaling down ALL namespaces (prod + develop).${NC}"
+    echo -e "${YELLOW}⚠️  WARNING: scaling down ALL os-* namespaces found in GKE.${NC}"
     echo -e "${YELLOW}   Do not use 'all' while a benchmark pipeline job is running — it will${NC}"
     echo -e "${YELLOW}   tear down clusters that are actively in use by the other job.${NC}"
     echo ""
 
-    for ns in os-jvector os-faiss os-lucene os-develop-jvector os-develop-faiss os-develop-lucene; do
-        scale_down_namespace $ns
-    done
-    
+    # Discover every namespace matching os-* dynamically — no hardcoded list.
+    while IFS= read -r ns; do
+        scale_down_namespace "$ns"
+    done < <(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}' \
+                 | tr ' ' '\n' \
+                 | grep -E '^os(-develop)?-[a-z][a-z0-9-]+$' \
+                 | sort)
+
 else
-    # Accept both prod (os-<engine>) and develop (os-develop-<engine>) namespaces.
-    if [[ ! "$NAMESPACE" =~ ^os(-develop)?-(jvector|faiss|lucene)$ ]]; then
+    # Validate pattern: os-<engine> or os-develop-<engine>
+    if [[ ! "$NAMESPACE" =~ ^os(-develop)?-[a-z][a-z0-9-]+$ ]]; then
         echo -e "${RED}❌ Error: Invalid namespace '$NAMESPACE'."
-        echo "   Expected one of: os-jvector, os-faiss, os-lucene, os-develop-jvector, os-develop-faiss, os-develop-lucene, all${NC}"
+        echo "   Expected format: os-<engine>  or  os-develop-<engine>"
+        echo "   where <engine> is a slug like jvector, faiss, lucene, acl-jvector${NC}"
         exit 1
     fi
-    
-    scale_down_namespace $NAMESPACE
+
+    scale_down_namespace "$NAMESPACE"
 fi
 
 echo ""
