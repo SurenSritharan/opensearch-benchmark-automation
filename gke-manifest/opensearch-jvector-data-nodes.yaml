@@ -126,10 +126,14 @@ spec:
                     operator: In
                     values:
                       - opensearch-data
-              # namespaceSelector: {} means "all namespaces" — ensures data pods from
-              # different engine namespaces (os-faiss, os-lucene, os-jvector) also
-              # repel each other across namespace boundaries.
-              namespaceSelector: {}
+              # Scope anti-affinity to this namespace only. namespaceSelector: {}
+              # (all namespaces) locks out a node per opensearch-data pod cluster-wide,
+              # exhausting the server-pool when all three engine namespaces are up
+              # simultaneously (3 engines × 3 pods = 9 nodes blocked). ${NAMESPACE} is
+              # substituted by sed at deploy time, keeping one-pod-per-node within this
+              # engine's namespace without interfering with other engines.
+              namespaces:
+                - ${NAMESPACE}
               topologyKey: kubernetes.io/hostname
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
