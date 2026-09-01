@@ -1,0 +1,14 @@
+{
+  "description": "Smoke test — doc values off on Cohere Wiki Parquet at 50k. Validates that disabling vector doc_values reduces index footprint and doesn't hurt recall. Run on develop before promoting to a larger run.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "50k" },
+  "steps": [
+    { "dataset": "cohere-wiki-parquet", "scenario": "delete-index" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "create-index",  "params": { "disable_doc_values": true } },
+    { "dataset": "cohere-wiki-parquet", "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "force-merge" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-parquet", "scenario": "vector-search", "params": { "query_k": 10 } }
+  ]
+}
