@@ -316,7 +316,7 @@ spec:
                     --cert /usr/share/opensearch/config/certs/admin.pem \
                     --key /usr/share/opensearch/config/certs/admin-key.pem \
                     https://localhost:9200/_cluster/health?local=true
-            failureThreshold: 30
+            failureThreshold: 60
             periodSeconds: 10
             timeoutSeconds: 5
           readinessProbe:
