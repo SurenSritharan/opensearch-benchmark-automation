@@ -1,3 +1,19 @@
+# PodDisruptionBudget — prevents the GKE cluster autoscaler from evicting the
+# cluster-manager pod during a scale-down. Without this the autoscaler reclaims
+# idle nodes and the manager is rescheduled mid-run, causing a PVC reattach
+# delay and a brief cluster-manager outage.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: opensearch-cluster-manager-pdb
+  namespace: ${NAMESPACE}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: opensearch-cluster-manager
+---
+
 apiVersion: v1
 kind: ConfigMap
 metadata:

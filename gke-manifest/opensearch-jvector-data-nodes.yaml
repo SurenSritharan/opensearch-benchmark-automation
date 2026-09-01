@@ -1,3 +1,19 @@
+# PodDisruptionBudget — prevents the GKE cluster autoscaler from evicting data
+# pods during a scale-down. minAvailable: 3 ensures all data nodes stay up for
+# the duration of a benchmark, preventing any shard reallocation which
+# would skew results and cause recovery delays.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: opensearch-data-pdb
+  namespace: ${NAMESPACE}
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: opensearch-data
+---
+
 apiVersion: v1
 kind: ConfigMap
 metadata:
