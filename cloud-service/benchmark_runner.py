@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import requests
-from config_loader import ConfigLoader
+from config_loader import ConfigLoader, get_os_namespace
 from k8s_metrics_collector import K8sMetricsCollector
 
 
@@ -243,7 +243,7 @@ class BenchmarkRunner:
 
     # ── 2. Pre-flight ─────────────────────────────────────────────────────────
 
-    def _check_cluster_health(self, target_host: str, retries: int = 6, retry_delay: int = 10) -> bool:
+    def _check_cluster_health(self, target_host: str, retries: int = 30, retry_delay: int = 20) -> bool:
         """Check if OpenSearch cluster is healthy and ready.
 
         Retries up to `retries` times with `retry_delay` seconds between
@@ -286,7 +286,7 @@ class BenchmarkRunner:
         sweep_idx: int,
     ) -> None:
         """Initialise and start the K8s metrics collector in a background thread."""
-        namespace = f"os-{engine}"
+        namespace = get_os_namespace(engine)
         logger.info(f"📊 Initializing metrics collection for namespace: {namespace}")
         try:
             self.metrics_collector = K8sMetricsCollector(
@@ -715,7 +715,7 @@ class BenchmarkRunner:
         thread wakes early when OSB finishes before duration elapses, then still
         collects whatever was captured. No shared mutable state, no locks needed.
         """
-        namespace = f"os-{engine}"
+        namespace = get_os_namespace(engine)
         logger.info(f"🔍 [profiling] Starting async-profiler on {namespace} (duration: up to {duration}s)")
         self._profiler_stop.clear()
         try:

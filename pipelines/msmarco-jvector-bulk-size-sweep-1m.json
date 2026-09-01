@@ -1,0 +1,29 @@
+{
+  "description": "Bulk-size sweep — varies target_index_bulk_size across [100, 500, 1000, 2500, 5000] using the two best ef/m combos from the index parameter sweep (ef=64/m=8, ef=128/m=16). Measures ingest throughput (docs/s) sensitivity to bulk_size.",
+  "engine": "__ENGINE__",
+  "params": {
+    "corpus_size": "1m"
+  },
+  "parameter_sweeps": [
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 100  } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 500  } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 1000 } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 2500 } },
+    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 5000 } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 100  } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 500  } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 1000 } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 2500 } },
+    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 5000 } }
+  ],
+  "steps": [
+    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "create-index", "params": { "target_index_replica_shards": 0, "merge_scheduler_auto_throttle": false } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "enable-replicas" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 10,  "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 100, "hnsw_ef_search": 256 } }
+  ]
+}

@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-benchmark-worker-${ENGINE}
-  namespace: benchmark-api
+  namespace: ${NAMESPACE}
   labels:
     app: opensearch-benchmark
     component: worker
@@ -22,7 +22,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: opensearch-benchmark-worker-${ENGINE}
-  namespace: benchmark-api
+  namespace: ${NAMESPACE}
   labels:
     app: opensearch-benchmark
     component: worker
@@ -108,20 +108,20 @@ spec:
               git pull origin main || echo "Git pull failed, using existing version"
             fi
             
-            echo "Setting up workspace (main branch)..."
+            echo "Setting up workspace (${AUTOMATION_BRANCH} branch)..."
             if [ ! -d "/workspace/.git" ]; then
-              echo "Cloning benchmark automation project (main branch, first time)..."
-              git clone --depth 1 --branch main https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
+              echo "Cloning benchmark automation project (${AUTOMATION_BRANCH} branch, first time)..."
+              git clone --depth 1 --branch ${AUTOMATION_BRANCH} https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
               cp -r /workspace-tmp/* /workspace/ 2>/dev/null || true
               cp -r /workspace-tmp/.git /workspace/ 2>/dev/null || true
               rm -rf /workspace-tmp
             else
-              echo "Workspace already exists, ensuring origin remote and pulling latest main changes..."
+              echo "Workspace already exists, ensuring origin remote and pulling latest ${AUTOMATION_BRANCH} changes..."
               cd /workspace
               git remote set-url origin https://github.com/SurenSritharan/opensearch-benchmark-automation.git
               git reset --hard
               git clean -fd
-              git pull origin main || echo "Git pull failed, using existing version"
+              git pull origin ${AUTOMATION_BRANCH} || echo "Git pull failed, using existing version"
             fi
             
             echo "Setting up worker service..."
@@ -141,6 +141,8 @@ spec:
           value: "${ENGINE}"
         - name: WORKER_MODE
           value: "combined"
+        - name: OS_NAMESPACE
+          value: "${OS_NAMESPACE}"
         - name: BENCHMARK_HOME
           value: "/datasets/opensearch-benchmark"
         - name: PYTHONUNBUFFERED
@@ -195,7 +197,7 @@ spec:
       volumes:
       - name: worker-storage
         persistentVolumeClaim:
-          claimName: benchmark-worker-storage-${ENGINE}
+          claimName: ${WORKER_STORAGE_CLAIM}
       - name: certs
         secret:
           secretName: opensearch-shared-certs

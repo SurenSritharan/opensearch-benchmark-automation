@@ -75,6 +75,12 @@ done
 
 ENGINE="${1:?Usage: $0 --pipeline <name> [--log-level <level>] <engine>}"
 API_URL="${API_URL:-http://34.132.114.18}"
+# OS_NAMESPACE   — OpenSearch cluster namespace (e.g. os-jvector or os-develop-jvector).
+#                  Injected by the Jenkinsfile; falls back to os-<engine>.
+# API_NAMESPACE  — Benchmark API namespace where worker pods run.
+#                  Injected by the Jenkinsfile; falls back to benchmark-api.
+OS_NAMESPACE="${OS_NAMESPACE:-os-${ENGINE}}"
+API_NAMESPACE="${API_NAMESPACE:-benchmark-api}"
 
 # ── Validate ───────────────────────────────────────────────────────────────────
 case "$ENGINE" in
@@ -322,7 +328,7 @@ _start_stats_sampler() {
   [ "${STATS_INTERVAL:-0}" -gt 0 ] 2>/dev/null || return 0
   [ -z "${RESULTS_DEST:-}" ] && return 0
 
-  local ns="os-${ENGINE}"
+  local ns="${OS_NAMESPACE}"
   local os_host="opensearch-cluster.${ns}.svc.cluster.local:9200"
   local worker_pod="opensearch-benchmark-worker-${ENGINE}-0"
   local outfile="${RESULTS_DEST}/server-stats-timeseries.ndjson"
@@ -337,7 +343,7 @@ _start_stats_sampler() {
       # Fetch _nodes/stats via the worker pod; suppress errors so a transient
       # cluster hiccup does not kill the sampler subprocess.
       local raw
-      raw=$(kubectl exec -n benchmark-api "$worker_pod" -c worker -- \
+      raw=$(kubectl exec -n "${API_NAMESPACE}" "$worker_pod" -c worker -- \
         curl -sk -u admin:admin \
         "https://${os_host}/_nodes/stats/jvm,os,indices,thread_pool,fs" \
         2>/dev/null || true)
@@ -410,7 +416,7 @@ _copy_scenario_results() {
   local src_path="/results/${JOB_ID}/${ENGINE}/${scenario_key}"
   local dest="${RESULTS_DEST}/${scenario_key}"
   mkdir -p "$dest"
-  kubectl cp -c worker "benchmark-api/${WORKER_POD}:${src_path}/." "$dest/" >/dev/null 2>&1 || \
+  kubectl cp -c worker "${API_NAMESPACE}/${WORKER_POD}:${src_path}/." "$dest/" >/dev/null 2>&1 || \
     echo "  WARNING: kubectl cp failed for ${scenario_key} (pod may not be reachable)"
 }
 
@@ -481,7 +487,7 @@ _collect_scenario_server_logs() {
     local endpoint filename
     endpoint=$(echo "$entry" | awk '{print $1}')
     filename=$(echo "$entry" | awk '{print $2}')
-    kubectl exec -n benchmark-api \
+    kubectl exec -n "${API_NAMESPACE}" \
       "opensearch-benchmark-worker-${ENGINE}-0" -c worker -- \
       curl -sk -u admin:admin "https://${os_host}${endpoint}" \
       > "${tel_dir}/${filename}" 2>/dev/null || true
