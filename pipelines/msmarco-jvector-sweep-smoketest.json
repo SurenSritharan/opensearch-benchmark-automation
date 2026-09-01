@@ -1,0 +1,47 @@
+{
+  "description": "Single-combo smoke test for the optimised ingest procedure (ef=128, m=16). Validates the 6-step no-replica flow before running the full 16-combo sweep.",
+  "engine": "__ENGINE__",
+  "no_profiling": true,
+  "params": {
+    "corpus_size": "1m",
+    "target_index_bulk_size": 5000
+  },
+  "steps": [
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "delete-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "target_index_name": "cohere-msmarco-1024-1m-ef128-m16",
+        "hnsw_ef_construction": 128,
+        "hnsw_m": 16,
+        "target_index_replica_shards": 0,
+        "merge_scheduler_auto_throttle": false
+      }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "bulk-ingest-data",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "force-merge",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "enable-replicas",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m16" }
+    },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "refresh-index",
+      "params": { "target_index_name": "cohere-msmarco-1024-1m-ef128-m16" }
+    }
+  ]
+}

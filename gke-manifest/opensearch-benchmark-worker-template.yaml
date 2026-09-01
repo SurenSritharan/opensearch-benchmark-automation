@@ -2,15 +2,15 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-benchmark-worker-${ENGINE}
-  namespace: benchmark-api-develop
+  namespace: ${NAMESPACE}
   labels:
-    app: opensearch-benchmark-develop
+    app: opensearch-benchmark
     component: worker
     engine: ${ENGINE}
 spec:
   clusterIP: None
   selector:
-    app: opensearch-benchmark-develop
+    app: opensearch-benchmark
     component: worker
     engine: ${ENGINE}
   ports:
@@ -22,9 +22,9 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: opensearch-benchmark-worker-${ENGINE}
-  namespace: benchmark-api-develop
+  namespace: ${NAMESPACE}
   labels:
-    app: opensearch-benchmark-develop
+    app: opensearch-benchmark
     component: worker
     engine: ${ENGINE}
 spec:
@@ -32,13 +32,13 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: opensearch-benchmark-develop
+      app: opensearch-benchmark
       component: worker
       engine: ${ENGINE}
   template:
     metadata:
       labels:
-        app: opensearch-benchmark-develop
+        app: opensearch-benchmark
         component: worker
         engine: ${ENGINE}
     spec:
@@ -87,7 +87,8 @@ spec:
             apt-get install -y -qq google-cloud-cli
             
             echo "Installing Python packages..."
-            pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors pyyaml gunicorn filelock
+            pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors jinja2 pyyaml gunicorn filelock \
+              faiss-cpu pyarrow huggingface_hub
             
             echo "Setting up directories..."
             mkdir -p /datasets/opensearch-benchmark /results /opt/benchmark-src /app
@@ -102,20 +103,25 @@ spec:
               git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-workloads.git /datasets/opensearch-benchmark-workloads
             else
               cd /datasets/opensearch-benchmark-workloads
+              git reset --hard
+              git clean -fd
               git pull origin main || echo "Git pull failed, using existing version"
             fi
             
-            echo "Setting up workspace (develop branch)..."
+            echo "Setting up workspace (${AUTOMATION_BRANCH} branch)..."
             if [ ! -d "/workspace/.git" ]; then
-              echo "Cloning benchmark automation project (develop branch, first time)..."
-              git clone --depth 1 --branch develop https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
+              echo "Cloning benchmark automation project (${AUTOMATION_BRANCH} branch, first time)..."
+              git clone --depth 1 --branch ${AUTOMATION_BRANCH} https://github.com/SurenSritharan/opensearch-benchmark-automation.git /workspace-tmp
               cp -r /workspace-tmp/* /workspace/ 2>/dev/null || true
               cp -r /workspace-tmp/.git /workspace/ 2>/dev/null || true
               rm -rf /workspace-tmp
             else
-              echo "Workspace already exists, pulling latest develop changes..."
+              echo "Workspace already exists, ensuring origin remote and pulling latest ${AUTOMATION_BRANCH} changes..."
               cd /workspace
-              git pull origin develop || echo "Git pull failed, using existing version"
+              git remote set-url origin https://github.com/SurenSritharan/opensearch-benchmark-automation.git
+              git reset --hard
+              git clean -fd
+              git pull origin ${AUTOMATION_BRANCH} || echo "Git pull failed, using existing version"
             fi
             
             echo "Setting up worker service..."
@@ -135,6 +141,8 @@ spec:
           value: "${ENGINE}"
         - name: WORKER_MODE
           value: "combined"
+        - name: OS_NAMESPACE
+          value: "${OS_NAMESPACE}"
         - name: BENCHMARK_HOME
           value: "/datasets/opensearch-benchmark"
         - name: PYTHONUNBUFFERED
@@ -172,20 +180,24 @@ spec:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 60
+          initialDelaySeconds: 120
           periodSeconds: 60
+          timeoutSeconds: 30
+          failureThreshold: 5
         
         readinessProbe:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 30
+          initialDelaySeconds: 60
           periodSeconds: 30
+          timeoutSeconds: 30
+          failureThreshold: 3
       
       volumes:
       - name: worker-storage
         persistentVolumeClaim:
-          claimName: benchmark-worker-storage-${ENGINE}
+          claimName: ${WORKER_STORAGE_CLAIM}
       - name: certs
         secret:
           secretName: opensearch-shared-certs

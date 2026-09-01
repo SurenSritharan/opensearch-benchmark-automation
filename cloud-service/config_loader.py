@@ -1,14 +1,29 @@
 #!/usr/bin/env python3
 """Configuration loader for cloud-native benchmark service"""
+import os
+import re
 import yaml
 import subprocess
 import copy
 import shutil
+import jinja2
+from jinja2 import meta
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def get_os_namespace(engine: str) -> str:
+    """Return the OpenSearch cluster namespace for *engine*.
+
+    Reads OS_NAMESPACE from the environment when set (injected by the
+    Jenkinsfile so prod and develop pipelines resolve to the right namespace
+    without code changes).  Falls back to os-<engine> so the module works
+    outside Jenkins too.
+    """
+    return os.environ.get('OS_NAMESPACE', f'os-{engine}')
 
 
 def get_num_vectors(corpus_size) -> int:
@@ -262,22 +277,109 @@ class ConfigLoader:
     
     def get_target_host(self, engine: str) -> str:
         """Get the OpenSearch cluster endpoint for an engine"""
-        namespace = f"os-develop-{engine}"
+        namespace = get_os_namespace(engine)
         return f"opensearch-cluster.{namespace}.svc.cluster.local:9200"
     
+    def get_valid_workload_params(
+        self,
+        dataset_name: str,
+        scenario: Optional[str] = None,
+        runtime_params: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Set[str]]:
+        """Dynamically discover all Jinja parameter names accepted by the workload and scenario."""
+        dataset_config = self.get_dataset_config(dataset_name)
+        if not dataset_config:
+            return None
+
+        workload = dataset_config.get("workload", "vectorsearch")
+        workload_dir = self.workloads_dir / workload
+        if not workload_dir.exists():
+            return None
+
+        env = jinja2.Environment(loader=jinja2.FileSystemLoader(str(workload_dir)))
+        valid_params: Set[str] = set()
+        scanned_files: Set[Path] = set()
+
+        def scan_file(file_path: Path):
+            resolved_path = file_path.resolve()
+            if not resolved_path.exists() or not resolved_path.is_file() or resolved_path in scanned_files:
+                return
+            scanned_files.add(resolved_path)
+
+            try:
+                content = resolved_path.read_text(encoding="utf-8")
+                ast = env.parse(content)
+
+                # 1. Standard variables and native includes
+                valid_params.update(meta.find_undeclared_variables(ast))
+                for template_name in meta.find_referenced_templates(ast):
+                    if template_name:
+                        scan_file(workload_dir / template_name)
+
+                # 2. AST Walk for custom benchmark.collect() calls
+                for call_node in ast.find_all(jinja2.nodes.Call):
+                    if isinstance(call_node.node, jinja2.nodes.Getattr):
+                        is_collect = (
+                            call_node.node.attr == "collect" and
+                            isinstance(call_node.node.node, jinja2.nodes.Name) and
+                            call_node.node.node.name == "benchmark"
+                        )
+                        if is_collect:
+                            for kwarg in call_node.kwargs:
+                                if kwarg.key == "parts" and isinstance(kwarg.value, jinja2.nodes.Const):
+                                    part_pattern = kwarg.value.value
+                                    for sub_file in file_path.parent.glob(part_pattern):
+                                        scan_file(sub_file)
+
+                # 3. AST Walk for default filters containing JSON files (e.g. default('indices/index.json'))
+                for filter_node in ast.find_all(jinja2.nodes.Filter):
+                    if filter_node.name == "default":
+                        for arg in filter_node.args:
+                            if isinstance(arg, jinja2.nodes.Const) and isinstance(arg.value, str):
+                                if arg.value.endswith((".json", ".j2")):
+                                    scan_file(workload_dir / arg.value)
+
+            except Exception as e:
+                logger.debug(f"Could not parse Jinja template {resolved_path}: {e}")
+
+        # Start recursive scanning
+        scan_file(workload_dir / "workload.json")
+
+        if scenario:
+            scan_file(workload_dir / "test_procedures" / f"{scenario}.json")
+
+        if runtime_params:
+            for val in runtime_params.values():
+                if isinstance(val, str) and val.endswith((".json", ".j2")):
+                    scan_file(workload_dir / val)
+
+        # Filter out Jinja built-ins, standard framework context objects, and undeclared loop variables
+        ignored_globals = set(env.globals.keys()) | {"benchmark"}
+        return {p for p in valid_params if not p.startswith("_") and p not in ignored_globals}
+
     def resolve_workload_params(
         self,
         dataset_name: str,
         base_params: Optional[Dict[str, Any]] = None,
-        runtime_params: Optional[Dict[str, Any]] = None
+        runtime_params: Optional[Dict[str, Any]] = None,
+        scenario: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Merge and resolve workload params in one place."""
+        """Merge and resolve workload params, filtering out variables not accepted by the workload/scenario."""
         dataset_config = self.get_dataset_config(dataset_name)
         merged_params = (base_params or {}).copy()
         if runtime_params:
             merged_params.update(runtime_params)
 
         resolved_params = self._resolve_template_vars(merged_params, dataset_config)
+
+        valid_params = self.get_valid_workload_params(dataset_name, scenario, resolved_params)
+        if valid_params is not None:
+            filtered = {k: v for k, v in resolved_params.items() if k in valid_params}
+            dropped = set(resolved_params.keys()) - set(filtered.keys())
+            if dropped:
+                logger.info(f"Dynamically stripped unused params for scenario '{scenario}': {sorted(dropped)}")
+            return filtered
+
         return resolved_params
 
     def download_dataset_files(self, dataset_name: str, params: Optional[Dict[str, Any]] = None) -> bool:

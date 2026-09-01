@@ -9,11 +9,15 @@ CERT_DIR="${SCRIPT_DIR}/certs"
 mkdir -p "${CERT_DIR}"
 echo "📁 Target directory set to: ${CERT_DIR}"
 
-# 1. Generate root CA
-echo "📝 Generating root CA..."
-openssl genrsa -out "${CERT_DIR}/root-ca-key.pem" 2048
-openssl req -new -x509 -sha256 -key "${CERT_DIR}/root-ca-key.pem" -out "${CERT_DIR}/root-ca.pem" -days 365 \
-    -subj "/C=US/ST=CA/L=San Francisco/O=OpenSearch/OU=Benchmark/CN=root-ca"
+# 1. Generate root CA (reuse if already exists so all namespaces share the same CA)
+if [ -f "${CERT_DIR}/root-ca.pem" ] && [ -f "${CERT_DIR}/root-ca-key.pem" ]; then
+    echo "♻️  Reusing existing root CA (delete ${CERT_DIR}/root-ca*.pem to force regeneration)"
+else
+    echo "📝 Generating root CA..."
+    openssl genrsa -out "${CERT_DIR}/root-ca-key.pem" 2048
+    openssl req -new -x509 -sha256 -key "${CERT_DIR}/root-ca-key.pem" -out "${CERT_DIR}/root-ca.pem" -days 365 \
+        -subj "/C=US/ST=CA/L=San Francisco/O=OpenSearch/OU=Benchmark/CN=root-ca"
+fi
 
 # 2. Create OpenSSL config for Node
 cat > "${CERT_DIR}/node-cert.conf" <<EOF
@@ -38,9 +42,10 @@ subjectAltName = @alt_names
 [alt_names]
 DNS.1 = localhost
 DNS.2 = *.svc.cluster.local
-DNS.3 = opensearch-cluster-manager
-DNS.4 = opensearch-data
-DNS.5 = opensearch-benchmark-client
+DNS.3 = *.*.svc.cluster.local
+DNS.4 = opensearch-cluster-manager
+DNS.5 = opensearch-data
+DNS.6 = opensearch-benchmark-client
 IP.1 = 127.0.0.1
 EOF
 
@@ -48,8 +53,24 @@ EOF
 echo "📝 Generating node certificate..."
 openssl genrsa -out "${CERT_DIR}/esnode-key.pem" 2048
 openssl req -new -key "${CERT_DIR}/esnode-key.pem" -out "${CERT_DIR}/esnode.csr" -config "${CERT_DIR}/node-cert.conf"
+# Write a standalone extensions file — works on OpenSSL 1.0.2+ unlike -copy_extensions
+cat > "${CERT_DIR}/esnode-ext.conf" <<EOF
+[v3_req]
+keyUsage = critical, digitalSignature, keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+DNS.2 = *.svc.cluster.local
+DNS.3 = *.*.svc.cluster.local
+DNS.4 = opensearch-cluster-manager
+DNS.5 = opensearch-data
+DNS.6 = opensearch-benchmark-client
+IP.1 = 127.0.0.1
+EOF
 openssl x509 -req -in "${CERT_DIR}/esnode.csr" -CA "${CERT_DIR}/root-ca.pem" -CAkey "${CERT_DIR}/root-ca-key.pem" \
-    -CAcreateserial -out "${CERT_DIR}/esnode.pem" -days 365 -extensions v3_req -extfile "${CERT_DIR}/node-cert.conf"
+    -CAcreateserial -out "${CERT_DIR}/esnode.pem" -days 365 -extfile "${CERT_DIR}/esnode-ext.conf" -extensions v3_req
 
 # 4. Create OpenSSL config for Admin
 cat > "${CERT_DIR}/admin-cert.conf" <<EOF
@@ -76,9 +97,9 @@ echo "📝 Generating admin certificate..."
 openssl genrsa -out "${CERT_DIR}/admin-key.pem" 2048
 openssl req -new -key "${CERT_DIR}/admin-key.pem" -out "${CERT_DIR}/admin.csr" -config "${CERT_DIR}/admin-cert.conf"
 openssl x509 -req -in "${CERT_DIR}/admin.csr" -CA "${CERT_DIR}/root-ca.pem" -CAkey "${CERT_DIR}/root-ca-key.pem" \
-    -CAcreateserial -out "${CERT_DIR}/admin.pem" -days 365 -extensions v3_req -extfile "${CERT_DIR}/admin-cert.conf"
+    -CAcreateserial -out "${CERT_DIR}/admin.pem" -days 365 -copy_extensions copy
 
 # 6. Clean up temporary CSR and config files
-rm -f "${CERT_DIR}/esnode.csr" "${CERT_DIR}/admin.csr" "${CERT_DIR}/node-cert.conf" "${CERT_DIR}/admin-cert.conf" "${CERT_DIR}/root-ca.srl"
+rm -f "${CERT_DIR}/esnode.csr" "${CERT_DIR}/admin.csr" "${CERT_DIR}/esnode-ext.conf" "${CERT_DIR}/node-cert.conf" "${CERT_DIR}/admin-cert.conf" "${CERT_DIR}/root-ca.srl"
 
 echo "✅ All certificates successfully generated inside: ${CERT_DIR}"

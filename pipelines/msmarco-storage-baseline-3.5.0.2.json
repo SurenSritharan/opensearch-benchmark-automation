@@ -1,0 +1,30 @@
+{
+  "description": "Storage baseline — standard HNSW on OpenSearch 3.5.0 with no special features. Uses optimized ingest (replicas=0, no auto-throttle) with ef=128/m=16 for clean comparison.",
+  "engine": "__ENGINE__",
+  "no_profiling": true,
+  "versions": ["3.5.0"],
+  "node_sizes": ["small"],
+  "params": {
+    "corpus_size": "1m",
+    "target_index_bulk_size": 5000
+  },
+  "steps": [
+    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index" },
+    {
+      "dataset": "cohere-msmarco-1024",
+      "scenario": "create-index",
+      "params": {
+        "hnsw_ef_construction": 64,
+        "hnsw_m": 16,
+        "target_index_replica_shards": 0,
+        "merge_scheduler_auto_throttle": false
+      }
+    },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge", "params": { "client_timeout": 28800 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "enable-replicas" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search", "params": { "query_k": 10,  "hnsw_ef_search": 256 } }
+  ]
+}

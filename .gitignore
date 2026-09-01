@@ -7,11 +7,14 @@
 
 # IDE files
 .idea/
+.claude/
+.bob/
 
 # Temporary files
 *.log
 *.tmp
 
+/venv
 
 # Python bytecode
 *.pyc
@@ -19,3 +22,7 @@
 # Python cache
 lib/__pycache__
 tmp*
+
+results/
+
+/.bob

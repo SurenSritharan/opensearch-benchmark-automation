@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: opensearch-cluster-manager-config
-  namespace: os-develop-jvector
+  namespace: ${NAMESPACE}
 data:
   opensearch.yml: |
     cluster.name: opensearch-cluster
@@ -11,7 +11,7 @@ data:
     node.roles: [cluster_manager]
     
     discovery.seed_hosts:
-      - opensearch-cluster-manager-0.opensearch-cluster-manager.os-develop-jvector.svc.cluster.local
+      - opensearch-cluster-manager-0.opensearch-cluster-manager.${NAMESPACE}.svc.cluster.local
       
     cluster.initial_cluster_manager_nodes:
       - opensearch-cluster-manager-0
@@ -51,7 +51,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: opensearch-cluster-manager
-  namespace: os-develop-jvector
+  namespace: ${NAMESPACE}
   labels:
     app: opensearch-cluster-manager
 spec:
@@ -67,7 +67,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: opensearch-cluster-manager
-  namespace: os-develop-jvector
+  namespace: ${NAMESPACE}
 spec:
   serviceName: opensearch-cluster-manager
   replicas: 1
@@ -83,6 +83,21 @@ spec:
       nodeSelector:
         cloud.google.com/gke-nodepool: server-pool
       
+      # Keep the cluster-manager off any node that is running a data pod.
+      # During jvector force-merge the data pods saturate node RAM; without this
+      # the cluster-manager is collateral OOMKill by the Linux kernel OOM killer.
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - opensearch-data
+              namespaceSelector: {}
+              topologyKey: kubernetes.io/hostname
+
       initContainers:
         - name: install-jvector-plugin
           image: opensearchproject/opensearch:${OPENSEARCH_VERSION}

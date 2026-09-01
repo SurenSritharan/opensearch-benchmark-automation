@@ -1,0 +1,26 @@
+{
+  "description": "JVector DiskANN min_batch_size_for_quantization sweep — wiki + msmarco ingest + search (1M, 5M, 10M). Batch size at 1:20 ratio of total vectors: 1M→50K, 5M→250K, 10M→500K.",
+  "engine": "jvector",
+  "node_sizes": ["medium"],
+  "parameter_sweeps": [
+    { "params": { "corpus_size": "1m",  "min_batch_size_for_quantization": 50000  } },
+    { "params": { "corpus_size": "5m",  "min_batch_size_for_quantization": 250000 } },
+    { "params": { "corpus_size": "10m", "min_batch_size_for_quantization": 500000 } }
+  ],
+  "steps": [
+    { "dataset": "cohere-wiki-en-768",  "scenario": "delete-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "create-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "force-merge" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",   "params": { "query_k": 100 } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",   "params": { "query_k": 64  } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",   "params": { "query_k": 10  } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "create-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data", "params": { "target_index_bulk_size": 5000 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",   "params": { "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",   "params": { "query_k": 64,  "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",   "params": { "query_k": 10,  "hnsw_ef_search": 256 } }
+  ]
+}
