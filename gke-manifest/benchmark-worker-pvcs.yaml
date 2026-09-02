@@ -61,5 +61,22 @@ spec:
   resources:
     requests:
       storage: 400Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: benchmark-worker-storage-jvector-acl
+  namespace: benchmark-api
+  labels:
+    app: opensearch-benchmark
+    component: worker
+    engine: jvector-acl
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-rwo
+  resources:
+    requests:
+      storage: 400Gi
 
 # Made with Bob

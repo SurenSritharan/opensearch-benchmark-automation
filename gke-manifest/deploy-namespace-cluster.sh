@@ -1,10 +1,26 @@
 #!/bin/bash
 
-# Deploy separated cluster architecture to a specific namespace
-# Usage: ./deploy-namespace-cluster.sh <namespace> [--version VERSION] [--force] [--delete-pvcs]
-# Example: ./deploy-namespace-cluster.sh os-faiss
-# Example: ./deploy-namespace-cluster.sh os-faiss --version 3.7.0
-# Example: ./deploy-namespace-cluster.sh os-faiss --delete-pvcs  # Fresh start, deletes all data
+# Deploy separated cluster architecture to a specific namespace.
+#
+# Namespace convention:
+#   os-<engine>              prod standard   (e.g. os-jvector, os-faiss, os-lucene)
+#   os-develop-<engine>      develop         (e.g. os-develop-jvector)
+#   os-<engine>-<pipeline>   prod isolated   (e.g. os-jvector-acl)
+#
+# The engine slug drives manifest selection:
+#   contains "jvector"  → opensearch-jvector-cluster-manager.yaml + opensearch-jvector-data-nodes.yaml
+#   anything else       → opensearch-standard-cluster-manager.yaml + opensearch-standard-data-nodes.yaml
+#
+# Adding a new pipeline (e.g. ACL):
+#   1. Pick a namespace:  os-jvector-acl  (prod)
+#   2. kubectl create namespace os-jvector-acl   (cluster-admin one-time)
+#   3. Add a RoleBinding in jenkins-agent-rbac.yaml for that namespace
+#   4. Run this script — no other changes needed
+#
+# Usage: ./deploy-namespace-cluster.sh <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs]
+# Example: ./deploy-namespace-cluster.sh os-jvector-acl
+# Example: ./deploy-namespace-cluster.sh os-jvector-acl --version 3.7.0
+# Example: ./deploy-namespace-cluster.sh os-jvector-acl --delete-pvcs
 
 set -e
 
@@ -19,10 +35,13 @@ NODE_SIZE="small"
 
 if [ -z "$NAMESPACE" ]; then
     echo "Usage: $0 <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs]"
-    echo "Available namespaces: os-jvector, os-faiss, os-lucene"
+    echo ""
+    echo "Namespace format:  os-<engine>  or  os-develop-<engine>"
+    echo "  <engine> is any slug, e.g. jvector, faiss, lucene, acl-jvector"
+    echo "  The namespace must already exist in GKE (kubectl create namespace ...)."
     echo ""
     echo "Options:"
-    echo "  --version VER              OpenSearch version to deploy (default: 3.6.0)"
+    echo "  --version VER              OpenSearch version to deploy (default: 3.7.0)"
     echo "  --node-size small|medium|large  Data node resource profile (default: small)"
     echo "  --force                    Skip confirmation prompts"
     echo "  --delete-pvcs              Delete PVCs (WARNING: destroys all indexed data and results)"
@@ -73,9 +92,13 @@ case "$NODE_SIZE" in
         ;;
 esac
 
-# Validate namespace — accept both prod (os-<engine>) and develop (os-develop-<engine>)
-if [[ ! "$NAMESPACE" =~ ^os-(develop-)?(jvector|faiss|lucene)$ ]]; then
-    echo "Error: Invalid namespace. Must be one of: os-jvector, os-faiss, os-lucene, os-develop-jvector, os-develop-faiss, os-develop-lucene"
+# Validate namespace pattern: os-<engine>  or  os-develop-<engine>
+# <engine> is any non-empty slug (letters, digits, hyphens) — no hardcoded engine list.
+# Existence in GKE is the real gate (checked below); the pattern just guards against typos.
+if [[ ! "$NAMESPACE" =~ ^os(-develop)?-[a-z][a-z0-9-]+$ ]]; then
+    echo "Error: Invalid namespace '$NAMESPACE'."
+    echo "       Expected format: os-<engine>  or  os-develop-<engine>"
+    echo "       where <engine> is a slug like jvector, faiss, lucene, acl-jvector"
     exit 1
 fi
 
@@ -198,7 +221,8 @@ else
     echo "✅ Shared certificates already exist in $NAMESPACE"
 fi
 
-# Deploy based on namespace type
+# Deploy based on namespace type — any namespace containing "jvector" uses the
+# JVector manifest (custom plugin); all others use the standard manifest.
 if [[ "$NAMESPACE" =~ jvector ]]; then
     MANAGER_MANIFEST="$SCRIPT_DIR/opensearch-jvector-cluster-manager.yaml"
     DATA_MANIFEST="$SCRIPT_DIR/opensearch-jvector-data-nodes.yaml"
@@ -222,6 +246,9 @@ if [[ "$NAMESPACE" =~ jvector ]]; then
         -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
         "$DATA_MANIFEST" | kubectl apply -n $NAMESPACE -f -
 
+    echo "4. Waiting for data nodes to be ready..."
+    kubectl rollout status statefulset/opensearch-data -n $NAMESPACE --timeout=600s
+
 else
     # For os-faiss and os-lucene, use the standard manifests
     echo ""
@@ -243,6 +270,9 @@ else
         -e "s/\${NODE_MEM}/$NODE_MEM/g" \
         -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
         "$SCRIPT_DIR/opensearch-standard-data-nodes.yaml" | kubectl apply -n $NAMESPACE -f -
+
+    echo "4. Waiting for data nodes to be ready..."
+    kubectl rollout status statefulset/opensearch-data -n $NAMESPACE --timeout=600s
 fi
 
 echo ""

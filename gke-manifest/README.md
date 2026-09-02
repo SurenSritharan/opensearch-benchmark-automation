@@ -6,6 +6,45 @@ This deployment uses **two separate StatefulSets** for optimal performance testi
 - 1 dedicated Cluster Manager node
 - 3 Data + Ingest nodes
 
+## GKE Server-Pool Sizing
+
+Each engine namespace requires **4 GKE nodes** from the `server-pool`:
+- 3 nodes — one per data pod (anti-affinity scoped to the namespace)
+- 1 node — cluster-manager, which repels all data pods **cluster-wide** (OOM protection during force-merge)
+
+Cluster-managers from different namespaces can share a node with each other.
+
+### Prod (`os-*`)
+
+Prod engines run **in parallel** — all clusters are up simultaneously.
+
+| Scenario | Data pods | Manager pods | Nodes needed |
+|---|---|---|---|
+| Single prod engine | 3 | 1 | **4** |
+| All 3 prod engines | 9 | 2–3 | **12** |
+| All 3 prod engines + ACL (`os-jvector-acl`) | 12 | 3–4 | **16** |
+| All prod + ACL + one develop engine simultaneously | 15 | 4–5 | **18** |
+
+**Recommended `server-pool` size: 18 nodes.**
+
+This covers all 4 prod namespaces running in parallel plus one develop namespace scaled up at the same time (e.g. a developer testing while a prod run is in progress). With 16 nodes, a develop scale-up while prod is fully loaded would stall on the autoscaler (2–5 min delay).
+
+### Develop (`os-develop-*`)
+
+Develop engines run **sequentially** — only one engine cluster is up at a time. ACL runs on prod only (`os-jvector-acl`). The 18-node budget above already includes headroom for one develop namespace alongside full prod.
+
+### Resizing (cluster-admin only)
+
+Resizing requires `container.clusters.update` IAM — not available to the Jenkins SA. Run manually:
+
+```bash
+gcloud container clusters resize opensearch-benchmarking \
+  --node-pool server-pool \
+  --num-nodes 18 \
+  --zone us-central1-b \
+  --project astra-opensearch-dev-0
+```
+
 ## Architecture
 
 ```

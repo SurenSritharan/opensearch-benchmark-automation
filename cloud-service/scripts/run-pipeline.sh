@@ -84,8 +84,8 @@ API_NAMESPACE="${API_NAMESPACE:-benchmark-api}"
 
 # ── Validate ───────────────────────────────────────────────────────────────────
 case "$ENGINE" in
-  jvector|faiss|lucene) ;;
-  *) echo "ERROR: engine must be jvector, faiss, or lucene (got: $ENGINE)"; exit 1 ;;
+  jvector|jvector-acl|faiss|lucene) ;;
+  *) echo "ERROR: engine must be jvector, jvector-acl, faiss, or lucene (got: $ENGINE)"; exit 1 ;;
 esac
 
 if [ -z "$PIPELINE_FILE" ]; then
@@ -206,18 +206,22 @@ while IFS= read -r pipeline_sweep; do
         fi
       fi
 
-      # Build label from dataset (strip "cohere-"), corpus_size, and procedure
-      dataset_short="${dataset#cohere-}"
-      label="${dataset_short}-${corpus_size}-${procedure}"
+      # Build label from corpus_size and procedure only.
+      # The server prepends the full dataset name when forming the path_key, so
+      # including dataset_short here would produce "cohere-wiki-parquet-wiki-parquet-…".
+      label="${corpus_size}-${procedure}"
       # Append query_k to search labels so k=10 and k=100 are distinct
       query_k=$(echo "$merged_params" | jq -r '.query_k // ""')
       [ -n "$query_k" ] && label="${label}-k${query_k}"
 
       # Deduplicate: if this label has appeared before, append an occurrence counter.
       # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.
-      _LABEL_SEEN["$label"]=$(( ${_LABEL_SEEN["$label"]:-0} + 1 ))
-      if [ "${_LABEL_SEEN["$label"]}" -gt 1 ]; then
-        label="${label}-${_LABEL_SEEN["$label"]}"
+      # Key on dataset+label (mirrors the server's path_key) so two different datasets
+      # with the same corpus_size+procedure don't collide (e.g. both having "50k-refresh-index").
+      _dedup_key="${dataset}-${label}"
+      _LABEL_SEEN["$_dedup_key"]=$(( ${_LABEL_SEEN["$_dedup_key"]:-0} + 1 ))
+      if [ "${_LABEL_SEEN["$_dedup_key"]}" -gt 1 ]; then
+        label="${label}-${_LABEL_SEEN["$_dedup_key"]}"
       fi
 
       test_entry=$(jq -n \
@@ -399,6 +403,23 @@ PREV_LABEL=""
 PREV_FAILURES=""
 # Tracks scenario keys already processed so we never re-collect on subsequent deltas.
 declare -A _COLLECTED
+# Timestamp of the last successful poll that returned a known job status.
+# Used to detect a sustained worker-unreachable window and fail fast rather
+# than silently looping forever (e.g. after a worker pod restart wipes the DB).
+_LAST_KNOWN_STATUS_AT=$(date +%s)
+# How many consecutive seconds of "unknown/0" (worker unreachable or job gone)
+# before we give up.  10 minutes is generous for a pod restart.
+_UNKNOWN_TIMEOUT=600
+# How often (in seconds) to cross-check the engine queue while the job appears
+# "running".  If the queue shows no running/queued jobs but the job-status
+# endpoint still says "running", the worker was restarted and the job is a ghost.
+# Require _QUEUE_ZERO_THRESHOLD consecutive zero-queue observations before
+# failing — a single zero can be a transient blip (between-scenario gap,
+# worker mid-restart, fan-out timeout dropping a worker from the list).
+_QUEUE_CHECK_INTERVAL=60
+_LAST_QUEUE_CHECK_AT=0
+_QUEUE_ZERO_COUNT=0
+_QUEUE_ZERO_THRESHOLD=2
 
 # ── Incremental result copy helper ────────────────────────────────────────────
 # Called whenever a scenario transitions to a terminal state.
@@ -416,8 +437,9 @@ _copy_scenario_results() {
   local src_path="/results/${JOB_ID}/${ENGINE}/${scenario_key}"
   local dest="${RESULTS_DEST}/${scenario_key}"
   mkdir -p "$dest"
-  kubectl cp -c worker "${API_NAMESPACE}/${WORKER_POD}:${src_path}/." "$dest/" >/dev/null 2>&1 || \
-    echo "  WARNING: kubectl cp failed for ${scenario_key} (pod may not be reachable)"
+  local cp_err
+  cp_err=$(kubectl cp -c worker "${API_NAMESPACE}/${WORKER_POD}:${src_path}/." "$dest/" 2>&1) || \
+    echo "  WARNING: kubectl cp failed for ${scenario_key}: ${cp_err}"
 }
 
 # ── Per-scenario server log collector ─────────────────────────────────────────
@@ -522,7 +544,7 @@ while true; do
     (.current_scenario // "") as $cur |
     (.scenarios // []) as $scens |
     ( if $cur == "" then ""
-      else ( $scens[] | select( (.dataset + "-" + .label) == $cur ) | .label ) // $cur
+      else ( $scens[] | select( (.dataset + "-" + .label) == $cur ) | (.dataset + "-" + .label) ) // $cur
       end ) as $label |
     ([ .scenario_status // {} | to_entries[] | select(.value | test("completed|failed|partial_failure|error|cancelled")) ] | length) as $done |
     ([ .scenarios // [] | .[] ] | length) as $total |
@@ -534,10 +556,26 @@ while true; do
 
   # Suppress transient "unknown 0/0" that appears when the worker pod is
   # restarting and the proxy temporarily returns an empty/error response.
+  # But don't wait forever: if the worker stays unreachable long enough that
+  # no job status has been seen for _UNKNOWN_TIMEOUT seconds, the worker has
+  # been replaced or the job has been lost — fail immediately so Jenkins
+  # doesn't spin forever with no output.
   if [ "$job_status" = "unknown" ] && [ "$total" = "0" ]; then
+    _now=$(date +%s)
+    _stalled=$(( _now - _LAST_KNOWN_STATUS_AT ))
+    if [ "$_stalled" -ge "$_UNKNOWN_TIMEOUT" ]; then
+      echo ""
+      echo "ERROR: Worker has been unreachable for ${_stalled}s (limit: ${_UNKNOWN_TIMEOUT}s)."
+      echo "       The worker pod may have been restarted and the job is no longer in its DB."
+      echo "       Check the worker logs and re-submit if needed."
+      exit 1
+    fi
+    echo "$now  (worker unreachable — retrying... ${_stalled}s/${_UNKNOWN_TIMEOUT}s)"
     sleep 4
     continue
   fi
+  # Worker responded with a real status — reset the unreachable stall clock.
+  _LAST_KNOWN_STATUS_AT=$(date +%s)
 
   terminal=false
   case "$job_status" in completed|failed|error|partial|cancelled) terminal=true ;; esac
@@ -561,12 +599,47 @@ while true; do
 
   if [ "$label" != "$PREV_LABEL" ] || [ "$job_status" != "$PREV_STATUS" ]; then
     if [ -n "$label" ]; then
-      printf "%s  %-9s  %2d/%d  (running: %s)\n" "$now" "$job_status" "$display" "$total" "$label"
+      printf "%s  %-9s  %2d/%d  (running: %s)\n" "$now" "$job_status" "${display:-0}" "${total:-0}" "$label"
     else
-      printf "%s  %-9s  %2d/%d\n" "$now" "$job_status" "$completed" "$total"
+      printf "%s  %-9s  %2d/%d\n" "$now" "$job_status" "${completed:-0}" "${total:-0}"
     fi
     PREV_STATUS="$job_status"
     PREV_LABEL="$label"
+  fi
+
+  # Cross-check: while the job status says "running", periodically query the
+  # engine queue.  If the queue has no running or queued jobs but we are still
+  # polling "running", the worker was restarted (init_db cancelled the job in
+  # its own DB but the API server is proxying a cached/stale response, or the
+  # job simply disappeared).  Require _QUEUE_ZERO_THRESHOLD consecutive zero
+  # readings before failing to ride out transient blips (between-scenario gap,
+  # worker mid-restart, fan-out timeout dropping a worker from the list).
+  if [ "$job_status" = "running" ] && ! $terminal; then
+    _now=$(date +%s)
+    if [ $(( _now - _LAST_QUEUE_CHECK_AT )) -ge "$_QUEUE_CHECK_INTERVAL" ]; then
+      _LAST_QUEUE_CHECK_AT=$_now
+      _queue_resp=$(curl -s --max-time 15 "${API_URL}/api/v1/benchmark?engine=${ENGINE}" || true)
+      if echo "$_queue_resp" | jq '.' > /dev/null 2>&1; then
+        _active=$(echo "$_queue_resp" | jq -r \
+          '[.jobs[] | select(.status == "running" or .status == "queued")] | length' \
+          2>/dev/null || echo "-1")
+        if [ "$_active" = "0" ]; then
+          _QUEUE_ZERO_COUNT=$(( _QUEUE_ZERO_COUNT + 1 ))
+          echo "$now  (queue check: no active jobs seen — ${_QUEUE_ZERO_COUNT}/${_QUEUE_ZERO_THRESHOLD} consecutive)"
+          if [ "$_QUEUE_ZERO_COUNT" -ge "$_QUEUE_ZERO_THRESHOLD" ]; then
+            echo ""
+            echo "ERROR: Job ${JOB_ID} reports status 'running' but the engine queue"
+            echo "       has shown no running or queued jobs for ${_QUEUE_ZERO_THRESHOLD} consecutive checks."
+            echo "       The worker was likely restarted and the job no longer exists in its database."
+            echo "       Check the worker logs and re-submit if needed."
+            exit 1
+          fi
+        else
+          # Queue has active jobs — reset the consecutive-zero counter.
+          _QUEUE_ZERO_COUNT=0
+        fi
+      fi
+    fi
   fi
 
   # Copy results and collect server logs for each newly-completed scenario.
@@ -592,9 +665,8 @@ while true; do
     # scenario_status (e.g. cancelled mid-flight at the job level before the
     # server had a chance to mark the in-progress scenario as cancelled).
     if [ -n "$label" ] && [ -n "${RESULTS_DEST:-}" ]; then
-      # Reconstruct the scenario key the same way the server builds it:
-      # dataset + "-" + label  (label already has the corpus+procedure suffix)
-      # We try the raw current_scenario value from the API first.
+      # Try the raw current_scenario value from the API first; fall back to
+      # reconstructing it as engine+label if the API returns empty.
       cur_key=$(echo "$resp" | jq -r '.current_scenario // ""')
       [ -z "$cur_key" ] && cur_key="${ENGINE}-${label}"
       if [ -n "$cur_key" ] && [ "${_COLLECTED[$cur_key]+set}" != "set" ]; then

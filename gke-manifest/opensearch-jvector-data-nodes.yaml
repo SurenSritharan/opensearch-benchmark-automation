@@ -1,3 +1,19 @@
+# PodDisruptionBudget — prevents the GKE cluster autoscaler from evicting data
+# pods during a scale-down. minAvailable: 3 ensures all data nodes stay up for
+# the duration of a benchmark, preventing any shard reallocation which
+# would skew results and cause recovery delays.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: opensearch-data-pdb
+  namespace: ${NAMESPACE}
+spec:
+  minAvailable: 3
+  selector:
+    matchLabels:
+      app: opensearch-data
+---
+
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -70,6 +86,7 @@ metadata:
     app: opensearch-data
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   selector:
     app: opensearch-data
   ports:
@@ -126,10 +143,14 @@ spec:
                     operator: In
                     values:
                       - opensearch-data
-              # namespaceSelector: {} means "all namespaces" — ensures data pods from
-              # different engine namespaces (os-faiss, os-lucene, os-jvector) also
-              # repel each other across namespace boundaries.
-              namespaceSelector: {}
+              # Scope anti-affinity to this namespace only. namespaceSelector: {}
+              # (all namespaces) locks out a node per opensearch-data pod cluster-wide,
+              # exhausting the server-pool when all three engine namespaces are up
+              # simultaneously (3 engines × 3 pods = 9 nodes blocked). ${NAMESPACE} is
+              # substituted by sed at deploy time, keeping one-pod-per-node within this
+              # engine's namespace without interfering with other engines.
+              namespaces:
+                - ${NAMESPACE}
               topologyKey: kubernetes.io/hostname
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
@@ -228,6 +249,26 @@ spec:
             privileged: true
             runAsUser: 0
             runAsNonRoot: false
+
+        # Wait until CoreDNS has an A-record for the cluster-manager before
+        # OpenSearch starts. Only the manager is checked — waiting for data peer
+        # hostnames causes a deadlock when podManagementPolicy: Parallel starts
+        # all three data pods simultaneously (each pod waits for peers that won't
+        # have DNS records until they themselves finish initializing).
+        # OpenSearch handles peer-to-peer transport discovery on its own.
+        - name: dns-ready
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              HOST="opensearch-cluster-manager-0.opensearch-cluster-manager.${NAMESPACE}.svc.cluster.local"
+              echo "Waiting for DNS: $HOST"
+              until nslookup "$HOST" > /dev/null 2>&1; do
+                sleep 2
+              done
+              echo "Resolved: $HOST. Starting OpenSearch."
       
       securityContext:
         fsGroup: 1000
@@ -290,7 +331,7 @@ spec:
                     --cert /usr/share/opensearch/config/certs/admin.pem \
                     --key /usr/share/opensearch/config/certs/admin-key.pem \
                     https://localhost:9200/_cluster/health?local=true
-            failureThreshold: 30
+            failureThreshold: 60
             periodSeconds: 10
             timeoutSeconds: 5
           readinessProbe:

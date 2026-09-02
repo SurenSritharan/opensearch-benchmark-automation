@@ -3,6 +3,16 @@
 # (gke-kubeconfig) stored in Jenkins credentials. The pipeline uses this
 # kubeconfig to run kubectl commands against GKE from the Jenkins server.
 #
+# Namespace convention:
+#   os-<engine>              prod standard   (e.g. os-jvector, os-faiss)
+#   os-develop-<engine>      develop         (e.g. os-develop-jvector)
+#   os-<engine>-<pipeline>   prod isolated   (e.g. os-jvector-acl)
+#
+# Adding a new pipeline namespace (e.g. os-jvector-acl):
+#   1. kubectl create namespace os-jvector-acl   (cluster-admin one-time)
+#   2. Add a RoleBinding block below following the same pattern
+#   3. kubectl apply -f gke-manifest/jenkins-agent-rbac.yaml
+#
 # Apply with:
 #   kubectl apply -f gke-manifest/jenkins-agent-rbac.yaml
 
@@ -27,7 +37,23 @@ roleRef:
   name: edit
   apiGroup: rbac.authorization.k8s.io
 ---
-# os-jvector namespace — scale statefulsets, read pods/events
+# benchmark-api-develop namespace — same as benchmark-api but for the develop environment
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: benchmark-api-develop
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+# ── Prod engine namespaces ─────────────────────────────────────────────────────
+# os-jvector
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -42,7 +68,7 @@ roleRef:
   name: edit
   apiGroup: rbac.authorization.k8s.io
 ---
-# os-faiss namespace
+# os-faiss
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -57,7 +83,7 @@ roleRef:
   name: edit
   apiGroup: rbac.authorization.k8s.io
 ---
-# os-lucene namespace
+# os-lucene
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -72,6 +98,62 @@ roleRef:
   name: edit
   apiGroup: rbac.authorization.k8s.io
 ---
+# os-jvector-acl — isolated namespace for the ACL pipeline (jvector engine only)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: os-jvector-acl
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+# ── Develop engine namespaces ──────────────────────────────────────────────────
+# os-develop-jvector
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: os-develop-jvector
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+# os-develop-faiss
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: os-develop-faiss
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
+roleRef:
+  kind: ClusterRole
+  name: edit
+  apiGroup: rbac.authorization.k8s.io
+---
+# os-develop-lucene
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins-agent
+  namespace: os-develop-lucene
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+  namespace: benchmark-api
 roleRef:
   kind: ClusterRole
   name: edit

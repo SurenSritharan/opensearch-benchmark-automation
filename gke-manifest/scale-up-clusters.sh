@@ -1,11 +1,16 @@
 #!/bin/bash
 
-# Scale up OpenSearch clusters from scaled-down state
-# This script restores StatefulSet replicas to their original counts
-# Usage: ./scale-up-clusters.sh [namespace]
-# Example: ./scale-up-clusters.sh os-develop-jvector   (develop)
-#          ./scale-up-clusters.sh os-jvector            (prod)
-#          ./scale-up-clusters.sh all
+# Scale up OpenSearch clusters from scaled-down state.
+# This script restores StatefulSet replicas to their original counts.
+#
+# Namespace convention:  os-<engine>          (prod)
+#                        os-develop-<engine>  (develop / feature pipelines)
+#
+# Usage: ./scale-up-clusters.sh <namespace|all>
+# Example: ./scale-up-clusters.sh os-jvector
+#          ./scale-up-clusters.sh os-develop-jvector
+#          ./scale-up-clusters.sh os-acl-jvector
+#          ./scale-up-clusters.sh all   ← scales every os-* namespace found in GKE
 
 set -e
 
@@ -71,37 +76,39 @@ scale_up_namespace() {
 if [ -z "$NAMESPACE" ]; then
     echo "Usage: $0 <namespace|all>"
     echo ""
-    echo "Available options:"
-    echo "  os-jvector          - Scale up JVector cluster (prod)"
-    echo "  os-faiss            - Scale up FAISS cluster (prod)"
-    echo "  os-lucene           - Scale up Lucene cluster (prod)"
-    echo "  os-develop-jvector  - Scale up JVector cluster (develop)"
-    echo "  os-develop-faiss    - Scale up FAISS cluster (develop)"
-    echo "  os-develop-lucene   - Scale up Lucene cluster (develop)"
-    echo "  all                 - Scale up all clusters"
+    echo "  <namespace>  Any os-<engine> or os-develop-<engine> namespace, e.g.:"
+    echo "                 os-jvector, os-faiss, os-lucene"
+    echo "                 os-acl-jvector, os-develop-jvector"
+    echo "  all          Scale up every os-* namespace currently present in GKE"
+    echo "               (manual recovery only — pipelines scale up only what they need)"
     echo ""
     exit 1
 fi
 
 if [ "$NAMESPACE" == "all" ]; then
-    echo -e "${YELLOW}⚠️  WARNING: scaling up ALL namespaces (prod + develop).${NC}"
+    echo -e "${YELLOW}⚠️  WARNING: scaling up ALL os-* namespaces found in GKE.${NC}"
     echo -e "${YELLOW}   Intended for manual recovery only — the pipeline scales up${NC}"
     echo -e "${YELLOW}   only the namespaces it needs, never all at once.${NC}"
     echo ""
 
-    for ns in os-jvector os-faiss os-lucene os-develop-jvector os-develop-faiss os-develop-lucene; do
-        scale_up_namespace $ns
-    done
-    
+    # Discover every namespace matching os-* dynamically — no hardcoded list.
+    while IFS= read -r ns; do
+        scale_up_namespace "$ns"
+    done < <(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}' \
+                 | tr ' ' '\n' \
+                 | grep -E '^os(-develop)?-[a-z][a-z0-9-]+$' \
+                 | sort)
+
 else
-    # Accept both prod (os-<engine>) and develop (os-develop-<engine>) namespaces.
-    if [[ ! "$NAMESPACE" =~ ^os(-develop)?-(jvector|faiss|lucene)$ ]]; then
+    # Validate pattern: os-<engine> or os-develop-<engine>
+    if [[ ! "$NAMESPACE" =~ ^os(-develop)?-[a-z][a-z0-9-]+$ ]]; then
         echo -e "${RED}❌ Error: Invalid namespace '$NAMESPACE'."
-        echo "   Expected one of: os-jvector, os-faiss, os-lucene, os-develop-jvector, os-develop-faiss, os-develop-lucene, all${NC}"
+        echo "   Expected format: os-<engine>  or  os-develop-<engine>"
+        echo "   where <engine> is a slug like jvector, faiss, lucene, acl-jvector${NC}"
         exit 1
     fi
-    
-    scale_up_namespace $NAMESPACE
+
+    scale_up_namespace "$NAMESPACE"
 fi
 
 echo ""
@@ -110,7 +117,7 @@ echo -e "${GREEN}Scale Up Complete${NC}"
 echo "=========================================="
 echo ""
 echo "💡 Monitor cluster status:"
-echo "   kubectl get pods -n $NAMESPACE -w"
+echo "   kubectl get pods -n ${NAMESPACE:-<namespace>} -w"
 echo ""
 echo "💡 Check cluster health:"
 echo "   kubectl exec -n $NAMESPACE opensearch-data-0 -- curl -k -u admin:admin https://localhost:9200/_cluster/health?pretty"

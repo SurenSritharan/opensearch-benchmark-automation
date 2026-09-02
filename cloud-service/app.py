@@ -34,8 +34,12 @@ config_loader = ConfigLoader(workspace_dir=_workspace_dir)
 benchmark_runner = BenchmarkRunner(config_loader, results_dir=str(RESULTS_DIR))
 
 # WORKER_ENGINES must be resolved first — it gates init_db() and all queue logic.
-# API server sets WORKER_ENGINES=none    — proxies requests, never touches the DB.
-# Worker pods set WORKER_ENGINES=jvector (or faiss, or lucene) — one engine each.
+# API server sets WORKER_ENGINES=none     — proxies requests, never touches the DB.
+# Worker pods set WORKER_ENGINES=<name>   — the routing name for this pod. This is the
+#   value stored in the jobs table's engine column and used to route API requests to the
+#   right pod. It does NOT need to be a core engine name (jvector/faiss/lucene) — e.g.
+#   "jvector-acl" is a valid name for a jvector pod configured with ACL. _base_engine()
+#   maps it back to "jvector" only for dataset config / workload param lookups.
 _WORKER_ENGINES_RAW = os.environ.get('WORKER_ENGINES', 'none').strip().lower()
 _ALLOWED_ENGINES = set(
     e.strip() for e in _WORKER_ENGINES_RAW.split(',')
@@ -191,7 +195,21 @@ _WORKER_URL_TEMPLATE = os.environ.get(
     'WORKER_URL_TEMPLATE',
     'http://opensearch-benchmark-worker-{engine}-0.opensearch-benchmark-worker-{engine}.benchmark-api.svc.cluster.local:8080'
 )
-_KNOWN_ENGINES = ['jvector', 'faiss', 'lucene']
+# _KNOWN_ENGINES includes all worker pod variants — used by _engine_from_job_id
+# to probe pods in parallel. "jvector-acl" is a separate pod from "jvector" and
+# must be listed here so the API server can discover jobs submitted to it.
+_KNOWN_ENGINES = ['jvector', 'jvector-acl', 'faiss', 'lucene']
+
+def _base_engine(engine: str) -> str:
+    """Return the base engine name used for dataset config and workload param lookups.
+
+    "jvector-acl" runs the same workloads as "jvector" — only the cluster namespace
+    and pod differ.  Strip any suffix after the first '-' segment that is not a core
+    engine name so config_loader lookups always find an entry in datasets.yaml.
+    """
+    _CORE = {'jvector', 'faiss', 'lucene'}
+    base = engine.split('-')[0]
+    return base if base in _CORE else engine
 
 def _worker_url(engine: str) -> str:
     return _WORKER_URL_TEMPLATE.format(engine=engine)
@@ -701,8 +719,29 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             global_params = options.get('workload_params', {}) or {}
             scenario_params = scenario.get('params', {}) or {}
             workload_params = {**global_params, **scenario_params}
-            
-            logger.info(f"Batch job {job_id}, test {label}: merged params = {workload_params}")
+
+            # Inject per-step credentials into workload_params so benchmark_runner
+            # can pop them in _get_run_contexts().
+            # step_username/step_password come from the step's own params block and
+            # override the global job-level username/password for this step only.
+            # When absent the runner falls back to the job-level creds (or admin/admin).
+            step_username = scenario.get('step_username', '')
+            step_password = scenario.get('step_password', '')
+            if step_username:
+                workload_params['step_username'] = step_username
+                logger.info(
+                    f"[ACL] process_batch_job: job={job_id} step='{label}' "
+                    f"step_username={step_username!r} injected into workload_params"
+                )
+            else:
+                logger.info(
+                    f"[ACL] process_batch_job: job={job_id} step='{label}' "
+                    f"no step_username found on scenario dict — falling back to admin"
+                )
+            if step_password:
+                workload_params['step_password'] = step_password
+
+            logger.info(f"Batch job {job_id}, test {label}: merged params keys = {list(workload_params.keys())}")
             
             # Per-step profile flag overrides the job-level enable_profiling.
             # A step with "profile": true is profiled even when the job flag is off,
@@ -1051,8 +1090,9 @@ def trigger_batch_benchmark():
 
             matched_proc = next((p for p in procedures if (p.get('name') if isinstance(p, dict) else p) == procedure_name), None)
             
-            # Validate engine is available for this dataset
-            error = benchmark_runner.validate_benchmark_request(dataset, engine, procedure_name)
+            # Validate engine is available for this dataset.
+            # Use _base_engine() so "jvector-acl" resolves to "jvector" for config lookups.
+            error = benchmark_runner.validate_benchmark_request(dataset, _base_engine(engine), procedure_name)
             if error:
                 return jsonify({'error': f'Dataset "{dataset}": {error}'}), 400
             
@@ -1067,13 +1107,33 @@ def trigger_batch_benchmark():
             if test_params:
                 scenario_params.update(test_params)
                 logger.info(f"Applying custom params for {dataset}/{scenario_label}: {test_params}")
-            
+
+            # Per-step credentials: hoisted to dedicated top-level fields by run-pipeline.sh
+            # (keys: step_username / step_password — NOT username/password).
+            # Must be stored on the scenario dict under the same names so that
+            # process_batch_job can read them with scenario.get('step_username').
+            # Fall back to empty string — benchmark_runner defaults to admin/admin.
+            step_username = test.get('step_username', '')
+            step_password = test.get('step_password', '')
+            if step_username:
+                logger.info(
+                    f"[ACL] trigger_batch_benchmark: test '{scenario_label}' "
+                    f"has step_username={step_username!r} — will use per-step credentials"
+                )
+            else:
+                logger.info(
+                    f"[ACL] trigger_batch_benchmark: test '{scenario_label}' "
+                    f"has no step_username — will fall back to job-level or admin credentials"
+                )
+
             scenarios.append({
                 'dataset': dataset,
                 'label': scenario_label,
                 'procedure_name': procedure_name,
                 'params': scenario_params,
                 'profile': test.get('profile'),  # per-step profiling
+                'step_username': step_username,   # stored as step_username (not username)
+                'step_password': step_password,   # stored as step_password (not password)
             })
             
             logger.info(f"Test: dataset='{dataset}', scenario='{scenario_label}' -> procedure '{procedure_name}'")
@@ -1187,8 +1247,9 @@ def trigger_benchmark():
 
         logger.info(f"Using procedure '{procedure_name}'")
         
-        # Validate request using the actual procedure name
-        error = benchmark_runner.validate_benchmark_request(dataset, engine, procedure_name)
+        # Validate request using the actual procedure name.
+        # Use _base_engine() so "jvector-acl" resolves to "jvector" for config lookups.
+        error = benchmark_runner.validate_benchmark_request(dataset, _base_engine(engine), procedure_name)
         if error:
             return jsonify({'error': error}), 400
         
