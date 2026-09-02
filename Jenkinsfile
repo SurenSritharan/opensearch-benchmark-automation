@@ -537,6 +537,9 @@ print(json.dumps(s))
                                             sh """
                                                 set -e
 
+                                                WORKER_POD="opensearch-benchmark-worker-${engine}-0"
+                                                WORKER_NS="${apiNs}"
+
                                                 if [ "${multiRun}" = "true" ] || [ "${redeploy}" = "true" ]; then
                                                     echo "Deploying ${ns} (version ${version}, size ${runSize})..."
                                                     gke-manifest/deploy-namespace-cluster.sh ${ns} ${runExtraArgs}
@@ -613,7 +616,8 @@ print(json.dumps(s))
 
                                                     ACTIVE=\$(kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
                                                         curl -s --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
-                                                        "https://\$OS_HOST/_cat/recovery?h=stage&active_only=true" 2>/dev/null | grep -c . || echo 0)
+                                                        "https://\$OS_HOST/_cat/recovery?h=stage&active_only=true" 2>/dev/null \
+                                                        | grep -c . 2>/dev/null; true)
 
                                                     if [ "\$STATUS" = "green" ] && [ "\$INIT" -eq 0 ]; then
                                                         echo "  ✅ [${ns}] cluster green — ready"
