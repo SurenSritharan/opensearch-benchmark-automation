@@ -219,8 +219,8 @@ class BenchmarkRunner:
             )
 
         # Procedure config: scenario-level params + engine-specific overrides
-        # Use wp (the credential-stripped copy) for all remaining param work so
-        # the original workload_params dict is never mutated by this method.
+        # workload_params has already had credentials popped above; use it directly.
+        wp               = workload_params or {}
         runtime_sweeps   = wp.pop('parameter_sweeps', None)
         procedure_config = next(
             (p for p in self.config.get_test_procedures(dataset)
