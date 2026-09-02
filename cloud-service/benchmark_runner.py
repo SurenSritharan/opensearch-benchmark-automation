@@ -18,6 +18,18 @@ import requests
 from config_loader import ConfigLoader, get_os_namespace
 from k8s_metrics_collector import K8sMetricsCollector
 
+_CORE_ENGINES = {'jvector', 'faiss', 'lucene'}
+
+def _base_engine(engine: str) -> str:
+    """Return the base engine name for dataset config / workload param lookups.
+
+    "jvector-acl" is a separate worker pod but uses the same workload configs as
+    "jvector".  Stripping the suffix here means datasets.yaml never needs an
+    explicit "jvector-acl" section.
+    """
+    base = engine.split('-')[0]
+    return base if base in _CORE_ENGINES else engine
+
 
 @dataclass
 class RunContext:
@@ -167,9 +179,10 @@ class BenchmarkRunner:
             base_params.update(common_params)
             logger.info(f"Loaded common params: {list(common_params.keys())}")
         engine_params_config = dataset_config.get('engine_params', {})
-        if engine_params_config and engine in engine_params_config:
-            base_params.update(engine_params_config[engine])
-            logger.info(f"Loaded engine params for {engine}: {list(engine_params_config[engine].keys())}")
+        cfg_engine = _base_engine(engine)
+        if engine_params_config and cfg_engine in engine_params_config:
+            base_params.update(engine_params_config[cfg_engine])
+            logger.info(f"Loaded engine params for {engine} (config key: {cfg_engine}): {list(engine_params_config[cfg_engine].keys())}")
 
         # Extract runner-only keys before they can bleed into workload params sent to OSB.
         # username/password are popped to prevent mutation leaking into subsequent calls.
@@ -211,9 +224,10 @@ class BenchmarkRunner:
             if procedure_base_params:
                 logger.info(f"Loaded procedure base params: {list(procedure_base_params.keys())}")
             proc_engine_params = procedure_config.get('engine_params', {})
-            if proc_engine_params and engine in proc_engine_params:
-                procedure_base_params.update(proc_engine_params[engine])
-                logger.info(f"Loaded procedure engine params for {engine}: {list(proc_engine_params[engine].keys())}")
+            cfg_engine = _base_engine(engine)
+            if proc_engine_params and cfg_engine in proc_engine_params:
+                procedure_base_params.update(proc_engine_params[cfg_engine])
+                logger.info(f"Loaded procedure engine params for {engine} (config key: {cfg_engine}): {list(proc_engine_params[cfg_engine].keys())}")
 
         # Raw sweeps from config or runtime request
         raw_sweeps = runtime_sweeps if runtime_sweeps is not None else (
@@ -1083,11 +1097,12 @@ class BenchmarkRunner:
         if not dataset_config:
             return f"Dataset '{dataset}' not found in configuration"
         
-        # Check if engine is supported for this dataset
+        # Check if engine is supported for this dataset.
+        # Use the base engine name so "jvector-acl" matches the "jvector" entry in datasets.yaml.
         engine_params = dataset_config.get('engine_params', {})
         param_files = dataset_config.get('param_files', {})
-        
-        if engine not in engine_params and engine not in param_files:
+        cfg_engine = _base_engine(engine)
+        if cfg_engine not in engine_params and cfg_engine not in param_files:
             available_engines = list(engine_params.keys()) if engine_params else list(param_files.keys())
             available = ', '.join(available_engines)
             return f"Engine '{engine}' not supported for dataset '{dataset}'. Available: {available}"

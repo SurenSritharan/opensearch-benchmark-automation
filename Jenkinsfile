@@ -378,7 +378,9 @@ print(json.dumps(s))
                     def rawAutomationBranch = prodRun ? 'main' : (env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main')
                     def automationBranch = rawAutomationBranch.contains('/') ? rawAutomationBranch.tokenize('/').last() : rawAutomationBranch
 
-                    // Cancel any running/queued jobs from a previous build.
+                    // Cancel any running/queued jobs from a previous build of this same job.
+                    // Each engine name is unique end-to-end (jvector, jvector-acl, faiss, lucene)
+                    // so this loop is always safe to run concurrently across different pipelines.
                     sh """
                         for engine in ${engines.join(' ')}; do
                             JOBS=\$(curl -s "${apiUrl}/api/v1/benchmark?engine=\$engine" \
@@ -680,7 +682,7 @@ print(json.dumps(s))
                                                 ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
                                                 ${params.STATS_INTERVAL?.trim() ? "--stats-interval ${params.STATS_INTERVAL.trim()}" : ""} \
-                                                ${engine.split('-')[0]} \
+                                                ${engine} \
                                                 2>&1 | tee benchmark-run-${engine}-${versionLabel}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
 

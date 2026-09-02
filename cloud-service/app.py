@@ -34,8 +34,8 @@ config_loader = ConfigLoader(workspace_dir=_workspace_dir)
 benchmark_runner = BenchmarkRunner(config_loader, results_dir=str(RESULTS_DIR))
 
 # WORKER_ENGINES must be resolved first — it gates init_db() and all queue logic.
-# API server sets WORKER_ENGINES=none    — proxies requests, never touches the DB.
-# Worker pods set WORKER_ENGINES=jvector (or faiss, or lucene) — one engine each.
+# API server sets WORKER_ENGINES=none          — proxies requests, never touches the DB.
+# Worker pods set WORKER_ENGINES=<engine>      — one engine each (jvector, jvector-acl, faiss, lucene).
 _WORKER_ENGINES_RAW = os.environ.get('WORKER_ENGINES', 'none').strip().lower()
 _ALLOWED_ENGINES = set(
     e.strip() for e in _WORKER_ENGINES_RAW.split(',')
@@ -191,7 +191,21 @@ _WORKER_URL_TEMPLATE = os.environ.get(
     'WORKER_URL_TEMPLATE',
     'http://opensearch-benchmark-worker-{engine}-0.opensearch-benchmark-worker-{engine}.benchmark-api.svc.cluster.local:8080'
 )
-_KNOWN_ENGINES = ['jvector', 'faiss', 'lucene']
+# _KNOWN_ENGINES includes all worker pod variants — used by _engine_from_job_id
+# to probe pods in parallel. "jvector-acl" is a separate pod from "jvector" and
+# must be listed here so the API server can discover jobs submitted to it.
+_KNOWN_ENGINES = ['jvector', 'jvector-acl', 'faiss', 'lucene']
+
+def _base_engine(engine: str) -> str:
+    """Return the base engine name used for dataset config and workload param lookups.
+
+    "jvector-acl" runs the same workloads as "jvector" — only the cluster namespace
+    and pod differ.  Strip any suffix after the first '-' segment that is not a core
+    engine name so config_loader lookups always find an entry in datasets.yaml.
+    """
+    _CORE = {'jvector', 'faiss', 'lucene'}
+    base = engine.split('-')[0]
+    return base if base in _CORE else engine
 
 def _worker_url(engine: str) -> str:
     return _WORKER_URL_TEMPLATE.format(engine=engine)
@@ -1073,8 +1087,9 @@ def trigger_batch_benchmark():
 
             matched_proc = next((p for p in procedures if (p.get('name') if isinstance(p, dict) else p) == procedure_name), None)
             
-            # Validate engine is available for this dataset
-            error = benchmark_runner.validate_benchmark_request(dataset, engine, procedure_name)
+            # Validate engine is available for this dataset.
+            # Use _base_engine() so "jvector-acl" resolves to "jvector" for config lookups.
+            error = benchmark_runner.validate_benchmark_request(dataset, _base_engine(engine), procedure_name)
             if error:
                 return jsonify({'error': f'Dataset "{dataset}": {error}'}), 400
             
@@ -1229,8 +1244,9 @@ def trigger_benchmark():
 
         logger.info(f"Using procedure '{procedure_name}'")
         
-        # Validate request using the actual procedure name
-        error = benchmark_runner.validate_benchmark_request(dataset, engine, procedure_name)
+        # Validate request using the actual procedure name.
+        # Use _base_engine() so "jvector-acl" resolves to "jvector" for config lookups.
+        error = benchmark_runner.validate_benchmark_request(dataset, _base_engine(engine), procedure_name)
         if error:
             return jsonify({'error': error}), 400
         

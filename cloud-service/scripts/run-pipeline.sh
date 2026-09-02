@@ -84,8 +84,8 @@ API_NAMESPACE="${API_NAMESPACE:-benchmark-api}"
 
 # ── Validate ───────────────────────────────────────────────────────────────────
 case "$ENGINE" in
-  jvector|faiss|lucene) ;;
-  *) echo "ERROR: engine must be jvector, faiss, or lucene (got: $ENGINE)"; exit 1 ;;
+  jvector|jvector-acl|faiss|lucene) ;;
+  *) echo "ERROR: engine must be jvector, jvector-acl, faiss, or lucene (got: $ENGINE)"; exit 1 ;;
 esac
 
 if [ -z "$PIPELINE_FILE" ]; then
