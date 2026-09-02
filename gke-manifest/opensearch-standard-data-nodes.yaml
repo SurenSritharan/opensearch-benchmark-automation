@@ -87,6 +87,7 @@ metadata:
     app: opensearch-data
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   selector:
     app: opensearch-data
   ports:

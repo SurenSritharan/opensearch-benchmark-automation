@@ -88,10 +88,10 @@ pipeline {
             defaultValue: '',
             description: 'Optional: name of any pipeline in pipelines/ (overrides the choice above). Must exist as pipelines/<name>.json.'
         )
-        string(
+        choice(
             name: 'ENGINE_TARGET',
-            defaultValue: 'all',
-            description: 'Comma-separated engine slug(s) to run, or "all" to target every standard engine (jvector, faiss, lucene). Use any slug that has a matching os-<slug> namespace, e.g. "jvector-acl" for the ACL pipeline, or "jvector,faiss" for a subset.'
+            choices: ['all', 'jvector', 'faiss', 'lucene'],
+            description: 'Engine to run. ACL pipelines always target jvector-acl automatically — this selector is ignored for acl-* pipelines.'
         )
         booleanParam(
             name: 'FORCE_PROD',
@@ -256,14 +256,19 @@ pipeline {
                     def srcNs = getNamespace(getEngines()[0])
                     sh """
                         echo "Copying opensearch-shared-certs from ${srcNs} → ${apiNs}..."
-                        kubectl get secret opensearch-shared-certs -n ${srcNs} -o json | \
-                            python3 -c "
+                        if ! kubectl get secret opensearch-shared-certs -n ${srcNs} -o name >/dev/null 2>&1; then
+                            echo "⚠️  opensearch-shared-certs not found in ${srcNs} — skipping cert copy."
+                            echo "   Run deploy-namespace-cluster.sh ${srcNs} first to generate certs."
+                        else
+                            SECRET_JSON=\$(kubectl get secret opensearch-shared-certs -n ${srcNs} -o json)
+                            echo "\$SECRET_JSON" | python3 -c "
 import sys, json
 s = json.load(sys.stdin)
 s['metadata'] = {'name': s['metadata']['name'], 'namespace': '${apiNs}'}
 print(json.dumps(s))
 " | kubectl apply -f -
-                        echo "✅ Certs copied into ${apiNs}"
+                            echo "✅ Certs copied into ${apiNs}"
+                        fi
                     """
                 }
             }
@@ -949,14 +954,17 @@ def getApiUrl() {
 }
 
 def getEngines() {
+    // ACL pipelines always run on jvector-acl — ENGINE_TARGET is ignored.
+    def pipeline = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
+    if (pipeline?.startsWith('acl-')) {
+        return ['jvector-acl']
+    }
     def target = params.ENGINE_TARGET?.trim() ?: 'all'
     if (target == 'all') {
-        // "all" means the three standard engines.
         // On develop, run only jvector by default — the shared dev node handles one
-        // engine at a time. An explicit comma-separated list still works for any engine.
+        // engine at a time.
         return isProd() ? ['jvector', 'faiss', 'lucene'] : ['jvector']
     }
-    // Accept a comma-separated list of engine slugs: "jvector,faiss" or "acl-jvector"
     return target.split(',').collect { it.trim() }.findAll { it }
 }
 

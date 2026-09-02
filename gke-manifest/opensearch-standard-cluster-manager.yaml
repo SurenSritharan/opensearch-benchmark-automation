@@ -72,6 +72,7 @@ metadata:
     app: opensearch-cluster-manager
 spec:
   clusterIP: None
+  publishNotReadyAddresses: true
   selector:
     app: opensearch-cluster-manager
   ports:
@@ -99,7 +100,10 @@ spec:
       nodeSelector:
         cloud.google.com/gke-nodepool: server-pool
       
-      # Keep the cluster-manager off any node that is running a data pod.
+      # Keep the cluster-manager off any node that is running a data pod in this
+      # namespace. Scoped to ${NAMESPACE} only — using namespaceSelector: {} (all
+      # namespaces) would block a node per data pod cluster-wide, exhausting the
+      # server-pool when multiple engine namespaces are up simultaneously.
       # During force-merge the data pods saturate node RAM; without this
       # the cluster-manager is collateral OOMKill by the Linux kernel OOM killer.
       affinity:
@@ -111,7 +115,8 @@ spec:
                     operator: In
                     values:
                       - opensearch-data
-              namespaceSelector: {}
+              namespaces:
+                - ${NAMESPACE}
               topologyKey: kubernetes.io/hostname
 
       initContainers:
