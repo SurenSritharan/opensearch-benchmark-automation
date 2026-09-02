@@ -903,11 +903,33 @@ EOF
                         """
                     }
 
-                    echo "Scaling down API server..."
-                    sh """
-                        kubectl scale deployment opensearch-benchmark-api-server \
-                            --replicas=0 -n ${apiNs} || true
-                    """
+                    // Only scale down the API server if no other worker pods are still
+                    // running in the same namespace. This allows two jobs (e.g. the main
+                    // pipeline and an ACL pipeline both using FORCE_PROD / benchmark-api)
+                    // to run concurrently — the first to finish won't kill the API server
+                    // while the second job's worker is still active.
+                    def otherWorkersRunning = sh(
+                        script: """
+                            OTHER=\$(kubectl get pods -n ${apiNs} \
+                                -l app=opensearch-benchmark,component=worker \
+                                --field-selector=status.phase=Running \
+                                --no-headers 2>/dev/null \
+                                | grep -v -E '${engines.collect { "worker-${it}-" }.join('|')}' \
+                                | wc -l)
+                            echo \$OTHER
+                        """,
+                        returnStdout: true
+                    ).trim().toInteger()
+
+                    if (otherWorkersRunning > 0) {
+                        echo "Skipping API server scale-down — ${otherWorkersRunning} other worker pod(s) still active in ${apiNs}."
+                    } else {
+                        echo "Scaling down API server..."
+                        sh """
+                            kubectl scale deployment opensearch-benchmark-api-server \
+                                --replicas=0 -n ${apiNs} || true
+                        """
+                    }
 
                     echo "Scaling down OpenSearch cluster(s)..."
                     engines.each { engine ->
