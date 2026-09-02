@@ -618,9 +618,9 @@ while true; do
 
   if [ "$label" != "$PREV_LABEL" ] || [ "$job_status" != "$PREV_STATUS" ]; then
     if [ -n "$label" ]; then
-      printf "%s  %-9s  %2d/%d  (running: %s)\n" "$now" "$job_status" "$display" "$total" "$label"
+      printf "%s  %-9s  %2d/%d  (running: %s)\n" "$now" "$job_status" "${display:-0}" "${total:-0}" "$label"
     else
-      printf "%s  %-9s  %2d/%d\n" "$now" "$job_status" "$completed" "$total"
+      printf "%s  %-9s  %2d/%d\n" "$now" "$job_status" "${completed:-0}" "${total:-0}"
     fi
     PREV_STATUS="$job_status"
     PREV_LABEL="$label"
