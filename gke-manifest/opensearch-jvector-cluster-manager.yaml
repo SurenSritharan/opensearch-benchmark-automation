@@ -99,7 +99,10 @@ spec:
       nodeSelector:
         cloud.google.com/gke-nodepool: server-pool
       
-      # Keep the cluster-manager off any node that is running a data pod.
+      # Keep the cluster-manager off any node that is running a data pod in this
+      # namespace. Scoped to ${NAMESPACE} only — using namespaceSelector: {} (all
+      # namespaces) would block a node per data pod cluster-wide, exhausting the
+      # server-pool when multiple engine namespaces are up simultaneously.
       # During jvector force-merge the data pods saturate node RAM; without this
       # the cluster-manager is collateral OOMKill by the Linux kernel OOM killer.
       affinity:
@@ -111,7 +114,8 @@ spec:
                     operator: In
                     values:
                       - opensearch-data
-              namespaceSelector: {}
+              namespaces:
+                - ${NAMESPACE}
               topologyKey: kubernetes.io/hostname
 
       initContainers:
@@ -143,23 +147,6 @@ spec:
             runAsUser: 0
             runAsNonRoot: false
 
-        # Wait until CoreDNS has an A-record for this node's own headless hostname
-        # before OpenSearch starts. The headless service record may not be registered
-        # immediately after the pod IP is assigned.
-        - name: dns-ready
-          image: busybox:1.36
-          command:
-            - sh
-            - -c
-            - |
-              set -e
-              HOST="opensearch-cluster-manager-0.opensearch-cluster-manager.${NAMESPACE}.svc.cluster.local"
-              echo "Waiting for DNS: $HOST"
-              until nslookup "$HOST" > /dev/null 2>&1; do
-                sleep 2
-              done
-              echo "Resolved: $HOST. Starting OpenSearch."
-      
       securityContext:
         fsGroup: 1000
         runAsUser: 1000
