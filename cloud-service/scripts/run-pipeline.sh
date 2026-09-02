@@ -399,6 +399,23 @@ PREV_LABEL=""
 PREV_FAILURES=""
 # Tracks scenario keys already processed so we never re-collect on subsequent deltas.
 declare -A _COLLECTED
+# Timestamp of the last successful poll that returned a known job status.
+# Used to detect a sustained worker-unreachable window and fail fast rather
+# than silently looping forever (e.g. after a worker pod restart wipes the DB).
+_LAST_KNOWN_STATUS_AT=$(date +%s)
+# How many consecutive seconds of "unknown/0" (worker unreachable or job gone)
+# before we give up.  10 minutes is generous for a pod restart.
+_UNKNOWN_TIMEOUT=600
+# How often (in seconds) to cross-check the engine queue while the job appears
+# "running".  If the queue shows no running/queued jobs but the job-status
+# endpoint still says "running", the worker was restarted and the job is a ghost.
+# Require _QUEUE_ZERO_THRESHOLD consecutive zero-queue observations before
+# failing — a single zero can be a transient blip (between-scenario gap,
+# worker mid-restart, fan-out timeout dropping a worker from the list).
+_QUEUE_CHECK_INTERVAL=60
+_LAST_QUEUE_CHECK_AT=0
+_QUEUE_ZERO_COUNT=0
+_QUEUE_ZERO_THRESHOLD=2
 
 # ── Incremental result copy helper ────────────────────────────────────────────
 # Called whenever a scenario transitions to a terminal state.
@@ -534,10 +551,26 @@ while true; do
 
   # Suppress transient "unknown 0/0" that appears when the worker pod is
   # restarting and the proxy temporarily returns an empty/error response.
+  # But don't wait forever: if the worker stays unreachable long enough that
+  # no job status has been seen for _UNKNOWN_TIMEOUT seconds, the worker has
+  # been replaced or the job has been lost — fail immediately so Jenkins
+  # doesn't spin forever with no output.
   if [ "$job_status" = "unknown" ] && [ "$total" = "0" ]; then
+    _now=$(date +%s)
+    _stalled=$(( _now - _LAST_KNOWN_STATUS_AT ))
+    if [ "$_stalled" -ge "$_UNKNOWN_TIMEOUT" ]; then
+      echo ""
+      echo "ERROR: Worker has been unreachable for ${_stalled}s (limit: ${_UNKNOWN_TIMEOUT}s)."
+      echo "       The worker pod may have been restarted and the job is no longer in its DB."
+      echo "       Check the worker logs and re-submit if needed."
+      exit 1
+    fi
+    echo "$now  (worker unreachable — retrying... ${_stalled}s/${_UNKNOWN_TIMEOUT}s)"
     sleep 4
     continue
   fi
+  # Worker responded with a real status — reset the unreachable stall clock.
+  _LAST_KNOWN_STATUS_AT=$(date +%s)
 
   terminal=false
   case "$job_status" in completed|failed|error|partial|cancelled) terminal=true ;; esac
@@ -567,6 +600,41 @@ while true; do
     fi
     PREV_STATUS="$job_status"
     PREV_LABEL="$label"
+  fi
+
+  # Cross-check: while the job status says "running", periodically query the
+  # engine queue.  If the queue has no running or queued jobs but we are still
+  # polling "running", the worker was restarted (init_db cancelled the job in
+  # its own DB but the API server is proxying a cached/stale response, or the
+  # job simply disappeared).  Require _QUEUE_ZERO_THRESHOLD consecutive zero
+  # readings before failing to ride out transient blips (between-scenario gap,
+  # worker mid-restart, fan-out timeout dropping a worker from the list).
+  if [ "$job_status" = "running" ] && ! $terminal; then
+    _now=$(date +%s)
+    if [ $(( _now - _LAST_QUEUE_CHECK_AT )) -ge "$_QUEUE_CHECK_INTERVAL" ]; then
+      _LAST_QUEUE_CHECK_AT=$_now
+      _queue_resp=$(curl -s --max-time 15 "${API_URL}/api/v1/benchmark?engine=${ENGINE}" || true)
+      if echo "$_queue_resp" | jq '.' > /dev/null 2>&1; then
+        _active=$(echo "$_queue_resp" | jq -r \
+          '[.jobs[] | select(.status == "running" or .status == "queued")] | length' \
+          2>/dev/null || echo "-1")
+        if [ "$_active" = "0" ]; then
+          _QUEUE_ZERO_COUNT=$(( _QUEUE_ZERO_COUNT + 1 ))
+          echo "$now  (queue check: no active jobs seen — ${_QUEUE_ZERO_COUNT}/${_QUEUE_ZERO_THRESHOLD} consecutive)"
+          if [ "$_QUEUE_ZERO_COUNT" -ge "$_QUEUE_ZERO_THRESHOLD" ]; then
+            echo ""
+            echo "ERROR: Job ${JOB_ID} reports status 'running' but the engine queue"
+            echo "       has shown no running or queued jobs for ${_QUEUE_ZERO_THRESHOLD} consecutive checks."
+            echo "       The worker was likely restarted and the job no longer exists in its database."
+            echo "       Check the worker logs and re-submit if needed."
+            exit 1
+          fi
+        else
+          # Queue has active jobs — reset the consecutive-zero counter.
+          _QUEUE_ZERO_COUNT=0
+        fi
+      fi
+    fi
   fi
 
   # Copy results and collect server logs for each newly-completed scenario.
