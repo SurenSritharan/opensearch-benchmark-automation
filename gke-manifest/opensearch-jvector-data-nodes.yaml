@@ -249,10 +249,12 @@ spec:
             runAsUser: 0
             runAsNonRoot: false
 
-        # Wait until CoreDNS has A-records for every seed host before OpenSearch
-        # starts its transport-layer discovery. Without this, Parallel pod startup
-        # causes NXDOMAIN failures for peers that haven't registered yet, leading
-        # to split-brain or delayed cluster formation.
+        # Wait until CoreDNS has an A-record for the cluster-manager before
+        # OpenSearch starts. Only the manager is checked — waiting for data peer
+        # hostnames causes a deadlock when podManagementPolicy: Parallel starts
+        # all three data pods simultaneously (each pod waits for peers that won't
+        # have DNS records until they themselves finish initializing).
+        # OpenSearch handles peer-to-peer transport discovery on its own.
         - name: dns-ready
           image: busybox:1.36
           command:
@@ -260,20 +262,12 @@ spec:
             - -c
             - |
               set -e
-              HOSTS="
-                opensearch-cluster-manager-0.opensearch-cluster-manager.${NAMESPACE}.svc.cluster.local
-                opensearch-data-0.opensearch-data.${NAMESPACE}.svc.cluster.local
-                opensearch-data-1.opensearch-data.${NAMESPACE}.svc.cluster.local
-                opensearch-data-2.opensearch-data.${NAMESPACE}.svc.cluster.local
-              "
-              for HOST in $HOSTS; do
-                echo "Waiting for DNS: $HOST"
-                until nslookup "$HOST" > /dev/null 2>&1; do
-                  sleep 2
-                done
-                echo "Resolved: $HOST"
+              HOST="opensearch-cluster-manager-0.opensearch-cluster-manager.${NAMESPACE}.svc.cluster.local"
+              echo "Waiting for DNS: $HOST"
+              until nslookup "$HOST" > /dev/null 2>&1; do
+                sleep 2
               done
-              echo "All seed hosts resolved. Starting OpenSearch."
+              echo "Resolved: $HOST. Starting OpenSearch."
       
       securityContext:
         fsGroup: 1000
