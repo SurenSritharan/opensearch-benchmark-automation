@@ -1,0 +1,25 @@
+{
+  "description": "Doc-values-off comparison — same as complete-1m but with vector doc_values disabled. Compare against complete-1m baseline to measure index size and merge time improvement.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "steps": [
+    { "dataset": "cohere-wiki-en-768",  "scenario": "delete-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "create-index",      "params": { "disable_doc_values": true } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "force-merge" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "refresh-index" },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",   "params": { "query_k": 100 } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",   "params": { "query_k": 64 } },
+    { "dataset": "cohere-wiki-en-768",  "scenario": "vector-search",   "params": { "query_k": 10 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "delete-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "create-index",      "params": { "disable_doc_values": true } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "bulk-ingest-data","params": { "target_index_bulk_size": 5000 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "force-merge" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "refresh-index" },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",   "params": { "query_k": 100, "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",   "params": { "query_k": 64,  "hnsw_ef_search": 256 } },
+    { "dataset": "cohere-msmarco-1024", "scenario": "vector-search",   "params": { "query_k": 10,  "hnsw_ef_search": 256 } }
+  ]
+}
