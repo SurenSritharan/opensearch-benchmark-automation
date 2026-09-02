@@ -680,7 +680,7 @@ print(json.dumps(s))
                                                 ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
                                                 ${params.STATS_INTERVAL?.trim() ? "--stats-interval ${params.STATS_INTERVAL.trim()}" : ""} \
-                                                ${engine} \
+                                                ${engine.split('-')[0]} \
                                                 2>&1 | tee benchmark-run-${engine}-${versionLabel}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
 
