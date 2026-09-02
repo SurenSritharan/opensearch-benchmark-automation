@@ -594,14 +594,16 @@ print(json.dumps(s))
                                                 while true; do
                                                     { set +x; } 2>/dev/null
                                                     HEALTH=\$(kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
-                                                        curl -sk -u admin:admin \
+                                                        curl -s \
+                                                        --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
                                                         "https://\$OS_HOST/_cluster/health" 2>/dev/null || true)
                                                     STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || echo "unknown")
                                                     INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 0)
                                                     RELOC=\$(echo "\$HEALTH" | grep -oP '(?<="relocating_shards":)\\d+' || echo 0)
                                                     UNASSIGNED=\$(echo "\$HEALTH" | grep -oP '(?<="unassigned_shards":)\\d+' || echo 0)
                                                     ACTIVE=\$(kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
-                                                        curl -sk -u admin:admin \
+                                                        curl -s \
+                                                        --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
                                                         "https://\$OS_HOST/_cat/recovery?h=stage&active_only=true" \
                                                         2>/dev/null | grep -c . || true)
                                                     set -x
@@ -619,9 +621,10 @@ print(json.dumps(s))
                                                     if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
                                                         if [ "\$RETRIED" = "0" ]; then
                                                             echo "⚠️  [${ns}] shard recovery stalled for \${STALL_LIMIT}s — retrying failed shards"
-                                                            kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
-                                                                curl -sk -u admin:admin -X POST \
-                                                                'https://localhost:9200/_cluster/reroute?retry_failed=true' > /dev/null || true
+                                                            kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
+                                                                curl -s -X POST \
+                                                                --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
+                                                                "https://\$OS_HOST/_cluster/reroute?retry_failed=true" > /dev/null || true
                                                             RETRIED=1
                                                             LAST_PROGRESS=\$SECONDS
                                                             LAST_ACTIVE=9999
