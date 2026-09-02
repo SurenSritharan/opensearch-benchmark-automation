@@ -535,11 +535,13 @@ print(json.dumps(s))
                                         // ── a) Scale up or deploy this engine's cluster ────
                                         if (params.SCALE_CLUSTERS) {
                                             sh """
+                                                set -e
+
                                                 if [ "${multiRun}" = "true" ] || [ "${redeploy}" = "true" ]; then
                                                     echo "Deploying ${ns} (version ${version}, size ${runSize})..."
                                                     gke-manifest/deploy-namespace-cluster.sh ${ns} ${runExtraArgs}
                                                 else
-                                                    STS_COUNT=\$(kubectl get statefulset -n ${ns} --no-headers 2>/dev/null | wc -l)
+                                                    STS_COUNT=\$(kubectl get statefulset -n ${ns} --no-headers 2>/dev/null | wc -l | tr -d ' ')
                                                     if [ "\$STS_COUNT" -gt 0 ]; then
                                                         echo "Scaling up existing cluster in ${ns}..."
                                                         gke-manifest/scale-up-clusters.sh ${ns}
@@ -550,29 +552,29 @@ print(json.dumps(s))
                                                 fi
 
                                                 # Wait for manager pod
-                                                kubectl rollout status statefulset/opensearch-cluster-manager \
-                                                    -n ${ns} --timeout=600s
+                                                kubectl rollout status statefulset/opensearch-cluster-manager -n ${ns} --timeout=600s
 
                                                 # Wait for all data pods to be Running
                                                 echo "Waiting for opensearch-data pods to be Running in ${ns}..."
                                                 RUNNING=0
-                                                LAST_PROGRESS=\$SECONDS
+                                                LAST_PROGRESS=\${SECONDS}
                                                 STALL_LIMIT=900
+
                                                 while true; do
-                                                    NEW_RUNNING=\$(kubectl get pods -n ${ns} -l app=opensearch-data \
-                                                        --field-selector=status.phase=Running \
-                                                        --no-headers 2>/dev/null | wc -l)
-                                                    TOTAL=\$(kubectl get pods -n ${ns} -l app=opensearch-data \
-                                                        --no-headers 2>/dev/null | wc -l)
+                                                    NEW_RUNNING=\$(kubectl get pods -n ${ns} -l app=opensearch-data --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
+                                                    TOTAL=\$(kubectl get pods -n ${ns} -l app=opensearch-data --no-headers 2>/dev/null | wc -l | tr -d ' ')
+
                                                     echo "  [${ns}] data pods Running: \${NEW_RUNNING}/\${TOTAL}"
                                                     if [ "\$NEW_RUNNING" -ge 3 ] && [ "\$TOTAL" -ge 3 ]; then
                                                         echo "  ✅ [${ns}] all data pods Running"
                                                         break
                                                     fi
+
                                                     if [ "\$NEW_RUNNING" -gt "\$RUNNING" ]; then
                                                         RUNNING=\$NEW_RUNNING
-                                                        LAST_PROGRESS=\$SECONDS
+                                                        LAST_PROGRESS=\${SECONDS}
                                                     fi
+
                                                     STALLED=\$((SECONDS - LAST_PROGRESS))
                                                     if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
                                                         echo "❌ [${ns}] data pods stalled at \${RUNNING}/3 for \${STALL_LIMIT}s — giving up"
@@ -587,46 +589,54 @@ print(json.dumps(s))
                                                 # so a passing health check guarantees the runner can connect.
                                                 OS_HOST="opensearch-cluster.${ns}.svc.cluster.local:9200"
                                                 echo "Waiting for ${ns} cluster health (green + 0 initializing shards)..."
-                                                LAST_PROGRESS=\$SECONDS
+                                                LAST_PROGRESS=\${SECONDS}
                                                 LAST_ACTIVE=9999
                                                 STALL_LIMIT=7200
                                                 RETRIED=0
+
                                                 while true; do
-                                                    { set +x; } 2>/dev/null
                                                     HEALTH=\$(kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
-                                                        curl -s \
-                                                        --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
-                                                        "https://\$OS_HOST/_cluster/health" 2>/dev/null || true)
-                                                    STATUS=\$(echo "\$HEALTH" | sed 's/.*"status":"\([^"]*\)".*/\1/' | grep -v '^\{' || echo "unknown")
-                                                    INIT=\$(echo "\$HEALTH" | sed 's/.*"initializing_shards":\([0-9]*\).*/\1/' | grep -E '^[0-9]+$' || echo 0)
-                                                    RELOC=\$(echo "\$HEALTH" | sed 's/.*"relocating_shards":\([0-9]*\).*/\1/' | grep -E '^[0-9]+$' || echo 0)
-                                                    UNASSIGNED=\$(echo "\$HEALTH" | sed 's/.*"unassigned_shards":\([0-9]*\).*/\1/' | grep -E '^[0-9]+$' || echo 0)
+                                                        curl -s --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
+                                                        "https://\$OS_HOST/_cluster/health" 2>/dev/null || echo "{}")
+
+                                                    STATUS=\$(echo "\$HEALTH" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+                                                    [ -z "\$STATUS" ] && STATUS="unknown"
+
+                                                    INIT=\$(echo "\$HEALTH" | grep -o '"initializing_shards":[0-9]*' | cut -d':' -f2)
+                                                    [ -z "\$INIT" ] && INIT=0
+
+                                                    RELOC=\$(echo "\$HEALTH" | grep -o '"relocating_shards":[0-9]*' | cut -d':' -f2)
+                                                    [ -z "\$RELOC" ] && RELOC=0
+
+                                                    UNASSIGNED=\$(echo "\$HEALTH" | grep -o '"unassigned_shards":[0-9]*' | cut -d':' -f2)
+                                                    [ -z "\$UNASSIGNED" ] && UNASSIGNED=0
+
                                                     ACTIVE=\$(kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
-                                                        curl -s \
-                                                        --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
-                                                        "https://\$OS_HOST/_cat/recovery?h=stage&active_only=true" \
-                                                        2>/dev/null | grep -c . || true)
-                                                    set -x
-                                                    if [ "\$STATUS" = "green" ] && [ "\$INIT" = "0" ]; then
+                                                        curl -s --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
+                                                        "https://\$OS_HOST/_cat/recovery?h=stage&active_only=true" 2>/dev/null | grep -c . || echo 0)
+
+                                                    if [ "\$STATUS" = "green" ] && [ "\$INIT" -eq 0 ]; then
                                                         echo "  ✅ [${ns}] cluster green — ready"
                                                         break
                                                     fi
+
                                                     STALLED=\$((SECONDS - LAST_PROGRESS))
                                                     echo "  [${ns}] status=\${STATUS}  initializing=\${INIT}  relocating=\${RELOC}  unassigned=\${UNASSIGNED}  active_recoveries=\${ACTIVE}  (stall \${STALLED}s/\${STALL_LIMIT}s)"
+
                                                     if [ "\$ACTIVE" -lt "\$LAST_ACTIVE" ]; then
-                                                        LAST_PROGRESS=\$SECONDS
+                                                        LAST_PROGRESS=\${SECONDS}
                                                     fi
                                                     LAST_ACTIVE=\$ACTIVE
+
                                                     STALLED=\$((SECONDS - LAST_PROGRESS))
                                                     if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
-                                                        if [ "\$RETRIED" = "0" ]; then
+                                                        if [ "\$RETRIED" -eq 0 ]; then
                                                             echo "⚠️  [${ns}] shard recovery stalled for \${STALL_LIMIT}s — retrying failed shards"
                                                             kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
-                                                                curl -s -X POST \
-                                                                --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
+                                                                curl -s -X POST --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
                                                                 "https://\$OS_HOST/_cluster/reroute?retry_failed=true" > /dev/null || true
                                                             RETRIED=1
-                                                            LAST_PROGRESS=\$SECONDS
+                                                            LAST_PROGRESS=\${SECONDS}
                                                             LAST_ACTIVE=9999
                                                         else
                                                             echo "❌ [${ns}] shard recovery stalled for \${STALL_LIMIT}s after retry — giving up"
