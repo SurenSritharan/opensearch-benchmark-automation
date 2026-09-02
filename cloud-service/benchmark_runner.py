@@ -189,7 +189,16 @@ class BenchmarkRunner:
         # client_timeout uses .get() — it is already blocked from ctx.params by _RUNNER_ONLY_KEYS.
         username       = (workload_params or {}).pop('username',       'admin')
         password       = (workload_params or {}).pop('password',       'admin')
+        step_u         = (workload_params or {}).pop('step_username',  '')
+        step_p         = (workload_params or {}).pop('step_password',  '')
         client_timeout = (workload_params or {}).get('client_timeout', 600)
+
+        # Per-step credentials override the job-level credentials when present.
+        # global_u retains the original job-level username for credential-source logging below.
+        global_u = username
+        if step_u:
+            username = step_u
+            password = step_p or password
 
         # ACL tracking — log exactly which credential source won so it is visible
         # in the worker log for every step.
