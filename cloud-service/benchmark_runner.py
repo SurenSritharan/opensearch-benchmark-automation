@@ -882,27 +882,73 @@ class BenchmarkRunner:
                         f"user={ctx.username!r}: {e}"
                     )
 
+            # Fetch search_query_after_security via POST /{index}/_search?profile=true
+            # as the step user so DLS is active. Falls back to None on any error.
+            search_query_after_security = None
+            if index:
+                try:
+                    target_field = params.get('target_field_name', 'target_field')
+                    dimension    = int((ctx.dataset_config or {}).get('dimension', 768))
+                    probe_body   = {
+                        "query": {
+                            "knn": {
+                                target_field: {
+                                    "vector": [0.0] * dimension,
+                                    "k": 1,
+                                }
+                            }
+                        },
+                        "size": 1,
+                        "profile": True,
+                    }
+                    url  = f"https://{ctx.target_host}/{index}/_search"
+                    resp = requests.post(
+                        url,
+                        auth=(ctx.username, ctx.password),
+                        verify=False,
+                        timeout=30,
+                        json=probe_body,
+                    )
+                    if resp.status_code == 200:
+                        shards = resp.json().get('profile', {}).get('shards', [])
+                        if shards:
+                            searches = shards[0].get('searches', [])
+                            if searches:
+                                search_query_after_security = searches[0].get('query')
+                    else:
+                        logger.warning(
+                            f"[run_context] profile _search returned HTTP {resp.status_code} "
+                            f"for index={index!r} user={ctx.username!r}"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"[run_context] Could not fetch post-security query "
+                        f"for index={index!r} user={ctx.username!r}: {e}"
+                    )
+
             space_type = (
                 params.get('target_index_space_type')
                 or (ctx.dataset_config or {}).get('space_type', '')
             )
 
             test_run_data['run_context'] = {
-                'username':          ctx.username,
-                'index':             index,
-                'engine':            params.get('engine', ''),
-                'space_type':        space_type,
-                'query_k':           params.get('query_k'),
-                'hnsw_ef_search':    params.get('hnsw_ef_search'),
-                'search_clients':    params.get('search_clients'),
-                'num_vectors':       params.get('num_vectors'),
-                'visible_doc_count': visible_doc_count,
-                'target_host':       ctx.target_host,
+                'username':                    ctx.username,
+                'index':                       index,
+                'engine':                      params.get('engine', ''),
+                'space_type':                  space_type,
+                'query_k':                     params.get('query_k'),
+                'hnsw_ef_search':              params.get('hnsw_ef_search'),
+                'search_clients':              params.get('search_clients'),
+                'num_vectors':                 params.get('num_vectors'),
+                'visible_doc_count':           visible_doc_count,
+                'search_query_after_security': search_query_after_security,
+                'target_host':                 ctx.target_host,
             }
 
             logger.info(
                 f"[run_context] user={ctx.username!r} index={index!r} "
-                f"visible_doc_count={visible_doc_count}"
+                f"visible_doc_count={visible_doc_count} "
+                f"after_security={'captured' if search_query_after_security is not None else 'null'}"
             )
 
         except Exception as e:
