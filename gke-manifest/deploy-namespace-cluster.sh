@@ -169,7 +169,32 @@ echo ""
 echo "Checking for certificates in $NAMESPACE namespace..."
 if ! kubectl get secret opensearch-shared-certs -n $NAMESPACE &> /dev/null; then
     echo "Generating new certificates for $NAMESPACE namespace..."
-    
+
+    # Seed the root CA from any existing namespace so all namespaces share
+    # the same CA. On a fresh Jenkins workspace the certs/ directory is empty,
+    # which would cause generate-certs.sh to create a new CA — breaking TLS
+    # trust with every already-running cluster.
+    CERT_DIR="$SCRIPT_DIR/certs"
+    if [ ! -f "$CERT_DIR/root-ca.pem" ] || [ ! -f "$CERT_DIR/root-ca-key.pem" ]; then
+        echo "No local root CA found — seeding from cluster..."
+        SEED_NS=$(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}' \
+            | tr ' ' '\n' \
+            | grep -E '^os-' \
+            | while read ns; do
+                kubectl get secret opensearch-shared-certs -n "$ns" &>/dev/null && echo "$ns" && break
+              done)
+        if [ -n "$SEED_NS" ]; then
+            mkdir -p "$CERT_DIR"
+            kubectl get secret opensearch-shared-certs -n "$SEED_NS" \
+                -o jsonpath='{.data.root-ca\.pem}'     | base64 -d > "$CERT_DIR/root-ca.pem"
+            kubectl get secret opensearch-shared-certs -n "$SEED_NS" \
+                -o jsonpath='{.data.root-ca-key\.pem}' | base64 -d > "$CERT_DIR/root-ca-key.pem"
+            echo "  ✅ Seeded root CA from $SEED_NS"
+        else
+            echo "  ℹ️  No existing namespace with certs found — generating a new root CA"
+        fi
+    fi
+
     # Run generate-certs.sh from the same directory
     if [ -f "$SCRIPT_DIR/generate-certs.sh" ]; then
         "$SCRIPT_DIR/generate-certs.sh"

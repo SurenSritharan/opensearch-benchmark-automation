@@ -249,6 +249,12 @@ pipeline {
         //    Copy it into the API namespace so worker pods can mount it.
         //    All engine namespaces share the same CA — copy from the first targeted engine.
         //    Always runs — certs must be current regardless of whether clusters are scaled.
+        //
+        //    IMPORTANT: certs are always read from the live cluster secret, never from
+        //    the Jenkins workspace filesystem. Reading from disk is unsafe when two jobs
+        //    (e.g. main pipeline + ACL pipeline) run concurrently — each job's workspace
+        //    may have been initialised with a different root CA, causing TLS handshake
+        //    failures on already-running clusters (unknown_ca alert).
         stage('Copy Certs') {
             steps {
                 script {
@@ -256,18 +262,35 @@ pipeline {
                     def srcNs = getNamespace(getEngines()[0])
                     sh """
                         echo "Copying opensearch-shared-certs from ${srcNs} → ${apiNs}..."
-                        if ! kubectl get secret opensearch-shared-certs -n ${srcNs} -o name >/dev/null 2>&1; then
-                            echo "⚠️  opensearch-shared-certs not found in ${srcNs} — skipping cert copy."
+
+                        # Resolve the source namespace: prefer the first targeted engine namespace,
+                        # but fall back to any os-* namespace that already has the secret.
+                        # This handles the case where the target cluster is being deployed for the
+                        # first time and its secret does not exist yet.
+                        RESOLVED_SRC="${srcNs}"
+                        if ! kubectl get secret opensearch-shared-certs -n "${srcNs}" -o name >/dev/null 2>&1; then
+                            echo "  Secret not found in ${srcNs} — searching for an existing os-* namespace..."
+                            RESOLVED_SRC=\$(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}' \
+                                | tr ' ' '\\n' \
+                                | grep -E '^os-' \
+                                | while read ns; do
+                                    kubectl get secret opensearch-shared-certs -n "\$ns" &>/dev/null && echo "\$ns" && break
+                                  done)
+                        fi
+
+                        if [ -z "\$RESOLVED_SRC" ]; then
+                            echo "⚠️  opensearch-shared-certs not found in any os-* namespace — skipping cert copy."
                             echo "   Run deploy-namespace-cluster.sh ${srcNs} first to generate certs."
                         else
-                            SECRET_JSON=\$(kubectl get secret opensearch-shared-certs -n ${srcNs} -o json)
-                            echo "\$SECRET_JSON" | python3 -c "
+                            echo "  Source namespace: \$RESOLVED_SRC"
+                            kubectl get secret opensearch-shared-certs -n "\$RESOLVED_SRC" -o json \
+                                | python3 -c "
 import sys, json
 s = json.load(sys.stdin)
 s['metadata'] = {'name': s['metadata']['name'], 'namespace': '${apiNs}'}
 print(json.dumps(s))
 " | kubectl apply -f -
-                            echo "✅ Certs copied into ${apiNs}"
+                            echo "✅ Certs copied into ${apiNs} (sourced from cluster:\$RESOLVED_SRC)"
                         fi
                     """
                 }
