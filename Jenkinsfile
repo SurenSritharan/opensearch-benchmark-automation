@@ -806,6 +806,7 @@ Date:      \$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 Parameters:
   Pipeline:           ${pipeline}
   Engine Target:      ${params.ENGINE_TARGET}
+  Engines (resolved): ${engines.join(', ')}
   Environment:        ${isProd() ? 'prod' : 'develop'}
   API URL:            ${apiUrl}
   Scale Clusters:     ${params.SCALE_CLUSTERS}

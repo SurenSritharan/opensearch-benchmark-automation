@@ -34,8 +34,12 @@ config_loader = ConfigLoader(workspace_dir=_workspace_dir)
 benchmark_runner = BenchmarkRunner(config_loader, results_dir=str(RESULTS_DIR))
 
 # WORKER_ENGINES must be resolved first — it gates init_db() and all queue logic.
-# API server sets WORKER_ENGINES=none          — proxies requests, never touches the DB.
-# Worker pods set WORKER_ENGINES=<engine>      — one engine each (jvector, jvector-acl, faiss, lucene).
+# API server sets WORKER_ENGINES=none     — proxies requests, never touches the DB.
+# Worker pods set WORKER_ENGINES=<name>   — the routing name for this pod. This is the
+#   value stored in the jobs table's engine column and used to route API requests to the
+#   right pod. It does NOT need to be a core engine name (jvector/faiss/lucene) — e.g.
+#   "jvector-acl" is a valid name for a jvector pod configured with ACL. _base_engine()
+#   maps it back to "jvector" only for dataset config / workload param lookups.
 _WORKER_ENGINES_RAW = os.environ.get('WORKER_ENGINES', 'none').strip().lower()
 _ALLOWED_ENGINES = set(
     e.strip() for e in _WORKER_ENGINES_RAW.split(',')
