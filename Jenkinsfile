@@ -289,11 +289,24 @@ print(json.dumps(s))
                         export NAMESPACE="${apiNs}"
                         MANIFEST=\$(envsubst < gke-manifest/opensearch-benchmark-api-server.yaml)
 
-                        # Deployment spec.selector is immutable — delete and recreate if the
-                        # dry-run shows it would be rejected.
+                        # Check if the API server is already running and the manifest is unchanged.
+                        # If so, skip the bounce — restarting it would interrupt any concurrent job
+                        # sharing the same benchmark-api namespace (e.g. a main run while an ACL
+                        # job starts up).
+                        ALREADY_AVAILABLE=false
                         if kubectl get deployment opensearch-benchmark-api-server \
                                 -n ${apiNs} >/dev/null 2>&1; then
-                            if ! echo "\$MANIFEST" | kubectl apply --dry-run=server -f - >/dev/null 2>&1; then
+                            # Spec unchanged and already available — no restart needed.
+                            if echo "\$MANIFEST" | kubectl apply --dry-run=server -f - >/dev/null 2>&1; then
+                                READY=\$(kubectl get deployment opensearch-benchmark-api-server \
+                                    -n ${apiNs} \
+                                    -o jsonpath='{.status.availableReplicas}' 2>/dev/null || echo 0)
+                                if [ "\${READY:-0}" -ge 1 ]; then
+                                    echo "API server already running and manifest unchanged — skipping restart."
+                                    ALREADY_AVAILABLE=true
+                                fi
+                            else
+                                # Deployment spec.selector is immutable — delete and recreate.
                                 echo "Deployment spec changed — deleting and recreating opensearch-benchmark-api-server..."
                                 kubectl delete deployment opensearch-benchmark-api-server \
                                     -n ${apiNs}
@@ -303,16 +316,18 @@ print(json.dumps(s))
                             fi
                         fi
 
-                        echo "\$MANIFEST" | kubectl apply -f -
-                        kubectl scale deployment opensearch-benchmark-api-server \
-                            --replicas=0 -n ${apiNs}
-                        kubectl wait --for=delete pod \
-                            -l app=opensearch-benchmark,component=api-server \
-                            -n ${apiNs} --timeout=120s || true
-                        kubectl scale deployment opensearch-benchmark-api-server \
-                            --replicas=1 -n ${apiNs}
-                        kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
-                            -n ${apiNs} --timeout=600s
+                        if [ "\$ALREADY_AVAILABLE" = "false" ]; then
+                            echo "\$MANIFEST" | kubectl apply -f -
+                            kubectl scale deployment opensearch-benchmark-api-server \
+                                --replicas=0 -n ${apiNs}
+                            kubectl wait --for=delete pod \
+                                -l app=opensearch-benchmark,component=api-server \
+                                -n ${apiNs} --timeout=120s || true
+                            kubectl scale deployment opensearch-benchmark-api-server \
+                                --replicas=1 -n ${apiNs}
+                            kubectl wait --for=condition=available deployment/opensearch-benchmark-api-server \
+                                -n ${apiNs} --timeout=600s
+                        fi
                     """
                 }
             }
