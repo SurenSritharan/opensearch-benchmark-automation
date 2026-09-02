@@ -246,6 +246,9 @@ if [[ "$NAMESPACE" =~ jvector ]]; then
         -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
         "$DATA_MANIFEST" | kubectl apply -n $NAMESPACE -f -
 
+    echo "4. Waiting for data nodes to be ready..."
+    kubectl rollout status statefulset/opensearch-data -n $NAMESPACE --timeout=600s
+
 else
     # For os-faiss and os-lucene, use the standard manifests
     echo ""
@@ -267,6 +270,9 @@ else
         -e "s/\${NODE_MEM}/$NODE_MEM/g" \
         -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
         "$SCRIPT_DIR/opensearch-standard-data-nodes.yaml" | kubectl apply -n $NAMESPACE -f -
+
+    echo "4. Waiting for data nodes to be ready..."
+    kubectl rollout status statefulset/opensearch-data -n $NAMESPACE --timeout=600s
 fi
 
 echo ""
