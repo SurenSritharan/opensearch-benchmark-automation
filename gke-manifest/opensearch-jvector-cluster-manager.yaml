@@ -107,6 +107,14 @@ spec:
       # During jvector force-merge the data pods saturate node RAM; without this
       # the cluster-manager is collateral OOMKill by the Linux kernel OOM killer.
       affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: topology.kubernetes.io/zone
+                    operator: In
+                    values:
+                      - us-central1-a
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             - labelSelector:
