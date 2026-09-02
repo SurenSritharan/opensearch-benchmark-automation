@@ -535,8 +535,6 @@ print(json.dumps(s))
                                         // ── a) Scale up or deploy this engine's cluster ────
                                         if (params.SCALE_CLUSTERS) {
                                             sh """
-                                                set -e
-
                                                 WORKER_POD="opensearch-benchmark-worker-${engine}-0"
                                                 WORKER_NS="${apiNs}"
 
@@ -617,7 +615,7 @@ print(json.dumps(s))
                                                     ACTIVE=\$(kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
                                                         curl -s --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
                                                         "https://\$OS_HOST/_cat/recovery?h=stage&active_only=true" 2>/dev/null \
-                                                        | grep -c . 2>/dev/null; true)
+                                                        | grep -c .) || ACTIVE=0
 
                                                     if [ "\$STATUS" = "green" ] && [ "\$INIT" -eq 0 ]; then
                                                         echo "  ✅ [${ns}] cluster green — ready"
