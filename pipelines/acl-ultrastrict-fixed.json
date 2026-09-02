@@ -1,0 +1,10 @@
+{
+  "description": "DLS ultrastrict-fixed persona — user-ultrastrict-fixed sees exactly 5,000 docs (id < 5000) with security_classification=restricted. Fixed count regardless of corpus size. Index must exist from a prior build run.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "log_level": "info",
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-ultrastrict-fixed-k10-ef128",  "params": { "query_k": 10,  "hnsw_ef_search": 128, "step_username": "user-ultrastrict-fixed", "step_password": "BenchmarkACL-2024!" } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "dls-ultrastrict-fixed-k100-ef128", "params": { "query_k": 100, "hnsw_ef_search": 128, "step_username": "user-ultrastrict-fixed", "step_password": "BenchmarkACL-2024!" } }
+  ]
+}

@@ -526,6 +526,26 @@ ENDPOINTS
 
 _start_stats_sampler
 
+# ── Incremental result copy helper ────────────────────────────────────────────
+# Called whenever a scenario transitions to a terminal state.
+# Copies only that scenario's subdirectory from the worker pod to the Jenkins
+# workspace so results are preserved as each step finishes rather than all-at-
+# once at the end (where a pod restart or scale-down could lose everything).
+#
+# Requires two env vars set by the Jenkinsfile before invoking run-pipeline.sh:
+#   RESULTS_DEST   local destination directory  (e.g. results/12/3.7.0/small/test-runs/jvector)
+#   WORKER_POD     pod name                      (e.g. opensearch-benchmark-worker-jvector-0)
+_copy_scenario_results() {
+  local scenario_key="$1"   # e.g. cohere-wiki-en-768-wiki-en-768-5m-bulk-ingest-data
+  [ -z "${RESULTS_DEST:-}" ] || [ -z "${WORKER_POD:-}" ] && return 0
+
+  local src_path="/results/${JOB_ID}/${ENGINE}/${scenario_key}"
+  local dest="${RESULTS_DEST}/${scenario_key}"
+  mkdir -p "$dest"
+  kubectl cp -c worker "benchmark-api/${WORKER_POD}:${src_path}/." "$dest/" >/dev/null 2>&1 || \
+    echo "  WARNING: kubectl cp failed for ${scenario_key} (pod may not be reachable)"
+}
+
 while true; do
   now="[$(date '+%Y-%m-%d %H:%M:%S')]"
   resp=$(curl -s --max-time 30 "${API_URL}/api/v1/benchmark/${JOB_ID}?engine=${ENGINE}" || true)
