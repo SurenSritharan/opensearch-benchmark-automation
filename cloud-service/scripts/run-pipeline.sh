@@ -206,18 +206,22 @@ while IFS= read -r pipeline_sweep; do
         fi
       fi
 
-      # Build label from dataset (strip "cohere-"), corpus_size, and procedure
-      dataset_short="${dataset#cohere-}"
-      label="${dataset_short}-${corpus_size}-${procedure}"
+      # Build label from corpus_size and procedure only.
+      # The server prepends the full dataset name when forming the path_key, so
+      # including dataset_short here would produce "cohere-wiki-parquet-wiki-parquet-…".
+      label="${corpus_size}-${procedure}"
       # Append query_k to search labels so k=10 and k=100 are distinct
       query_k=$(echo "$merged_params" | jq -r '.query_k // ""')
       [ -n "$query_k" ] && label="${label}-k${query_k}"
 
       # Deduplicate: if this label has appeared before, append an occurrence counter.
       # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.
-      _LABEL_SEEN["$label"]=$(( ${_LABEL_SEEN["$label"]:-0} + 1 ))
-      if [ "${_LABEL_SEEN["$label"]}" -gt 1 ]; then
-        label="${label}-${_LABEL_SEEN["$label"]}"
+      # Key on dataset+label (mirrors the server's path_key) so two different datasets
+      # with the same corpus_size+procedure don't collide (e.g. both having "50k-refresh-index").
+      _dedup_key="${dataset}-${label}"
+      _LABEL_SEEN["$_dedup_key"]=$(( ${_LABEL_SEEN["$_dedup_key"]:-0} + 1 ))
+      if [ "${_LABEL_SEEN["$_dedup_key"]}" -gt 1 ]; then
+        label="${label}-${_LABEL_SEEN["$_dedup_key"]}"
       fi
 
       test_entry=$(jq -n \
@@ -680,9 +684,8 @@ while true; do
     # scenario_status (e.g. cancelled mid-flight at the job level before the
     # server had a chance to mark the in-progress scenario as cancelled).
     if [ -n "$label" ] && [ -n "${RESULTS_DEST:-}" ]; then
-      # Reconstruct the scenario key the same way the server builds it:
-      # dataset + "-" + label  (label already has the corpus+procedure suffix)
-      # We try the raw current_scenario value from the API first.
+      # Try the raw current_scenario value from the API first; fall back to
+      # reconstructing it as engine+label if the API returns empty.
       cur_key=$(echo "$resp" | jq -r '.current_scenario // ""')
       [ -z "$cur_key" ] && cur_key="${ENGINE}-${label}"
       if [ -n "$cur_key" ] && [ "${_COLLECTED[$cur_key]+set}" != "set" ]; then
