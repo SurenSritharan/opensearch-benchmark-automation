@@ -581,7 +581,11 @@ print(json.dumps(s))
                                                     sleep 10
                                                 done
 
-                                                # Wait for cluster to reach green with no initializing shards
+                                                # Wait for cluster to reach green with no initializing shards.
+                                                # Uses the benchmark worker pod as a proxy to hit the cluster
+                                                # service endpoint — the same host the benchmark runner uses —
+                                                # so a passing health check guarantees the runner can connect.
+                                                OS_HOST="opensearch-cluster.${ns}.svc.cluster.local:9200"
                                                 echo "Waiting for ${ns} cluster health (green + 0 initializing shards)..."
                                                 LAST_PROGRESS=\$SECONDS
                                                 LAST_ACTIVE=9999
@@ -589,16 +593,16 @@ print(json.dumps(s))
                                                 RETRIED=0
                                                 while true; do
                                                     { set +x; } 2>/dev/null
-                                                    HEALTH=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                                    HEALTH=\$(kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
                                                         curl -sk -u admin:admin \
-                                                        'https://localhost:9200/_cluster/health' 2>/dev/null || true)
+                                                        "https://\$OS_HOST/_cluster/health" 2>/dev/null || true)
                                                     STATUS=\$(echo "\$HEALTH" | grep -oP '(?<="status":")[^"]+' || echo "unknown")
                                                     INIT=\$(echo "\$HEALTH" | grep -oP '(?<="initializing_shards":)\\d+' || echo 0)
                                                     RELOC=\$(echo "\$HEALTH" | grep -oP '(?<="relocating_shards":)\\d+' || echo 0)
                                                     UNASSIGNED=\$(echo "\$HEALTH" | grep -oP '(?<="unassigned_shards":)\\d+' || echo 0)
-                                                    ACTIVE=\$(kubectl exec -n ${ns} opensearch-data-0 -c opensearch -- \
+                                                    ACTIVE=\$(kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
                                                         curl -sk -u admin:admin \
-                                                        'https://localhost:9200/_cat/recovery?h=stage&active_only=true' \
+                                                        "https://\$OS_HOST/_cat/recovery?h=stage&active_only=true" \
                                                         2>/dev/null | grep -c . || true)
                                                     set -x
                                                     if [ "\$STATUS" = "green" ] && [ "\$INIT" = "0" ]; then
