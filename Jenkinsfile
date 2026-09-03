@@ -60,6 +60,7 @@ pipeline {
                 'search-compare',
                 'complete-5m-profile-ingest',
                 'search-all-overquery',
+                'openai-large-5m',
                 'overquery-5m-k10',
                 'search-1m',
                 'search-5m',
