@@ -69,7 +69,17 @@ scale_up_namespace() {
         kubectl scale statefulset opensearch-data --replicas=3 -n $ns
     fi
 
-    echo -e "${GREEN}✅ Scale commands issued for $ns${NC}"
+    # Wait for pods to be Ready
+    echo ""
+    echo "Waiting for pods to be Ready in $ns..."
+    kubectl wait pod -l app=opensearch-cluster-manager -n $ns --for=condition=Ready --timeout=1800s \
+        && echo -e "${GREEN}✅ cluster-manager Ready${NC}" \
+        || echo -e "${YELLOW}⚠️  cluster-manager did not become Ready within 1800s${NC}"
+    kubectl wait pod -l app=opensearch-data -n $ns --for=condition=Ready --timeout=1800s \
+        && echo -e "${GREEN}✅ data nodes Ready${NC}" \
+        || echo -e "${YELLOW}⚠️  data nodes did not become Ready within 1800s${NC}"
+
+    echo -e "${GREEN}✅ Scale up complete for $ns${NC}"
 }
 
 # Main logic
@@ -115,9 +125,6 @@ echo ""
 echo "=========================================="
 echo -e "${GREEN}Scale Up Complete${NC}"
 echo "=========================================="
-echo ""
-echo "💡 Monitor cluster status:"
-echo "   kubectl get pods -n ${NAMESPACE:-<namespace>} -w"
 echo ""
 echo "💡 Check cluster health:"
 echo "   kubectl exec -n $NAMESPACE opensearch-data-0 -- curl -k -u admin:admin https://localhost:9200/_cluster/health?pretty"
