@@ -206,13 +206,19 @@ while IFS= read -r pipeline_sweep; do
         fi
       fi
 
-      # Build label from corpus_size and procedure only.
+      # Use the explicit step-level label when present; otherwise derive one
+      # from corpus_size and procedure so non-labelled steps keep working.
       # The server prepends the full dataset name when forming the path_key, so
       # including dataset_short here would produce "cohere-wiki-parquet-wiki-parquet-…".
-      label="${corpus_size}-${procedure}"
-      # Append query_k to search labels so k=10 and k=100 are distinct
-      query_k=$(echo "$merged_params" | jq -r '.query_k // ""')
-      [ -n "$query_k" ] && label="${label}-k${query_k}"
+      step_label=$(echo "$raw_step" | jq -r '.label // ""')
+      if [ -n "$step_label" ]; then
+        label="$step_label"
+      else
+        label="${corpus_size}-${procedure}"
+        # Append query_k to search labels so k=10 and k=100 are distinct
+        query_k=$(echo "$merged_params" | jq -r '.query_k // ""')
+        [ -n "$query_k" ] && label="${label}-k${query_k}"
+      fi
 
       # Deduplicate: if this label has appeared before, append an occurrence counter.
       # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.
