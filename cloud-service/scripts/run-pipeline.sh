@@ -250,8 +250,10 @@ done < <(echo "$PIPELINE_SWEEPS" | jq -c '.[]')
 unset _LABEL_SEEN
 
 # ── Build final payload ────────────────────────────────────────────────────────
+PIPELINE_NAME=$(basename "$PIPELINE_FILE" .json)
 PAYLOAD=$(jq -n \
   --arg     engine              "$ENGINE" \
+  --arg     pipeline_name       "$PIPELINE_NAME" \
   --argjson enable_profiling    "$PROFILING_ENABLED" \
   --argjson profiling_duration  "$PROFILING_DURATION" \
   --argjson no_metrics          "$NO_METRICS" \
@@ -261,6 +263,7 @@ PAYLOAD=$(jq -n \
   --argjson tests               "$TESTS_JSON" \
   '{
     engine: $engine,
+    pipeline_name: $pipeline_name,
     enable_profiling: $enable_profiling,
     profiling_duration: $profiling_duration,
     no_metrics: $no_metrics,
