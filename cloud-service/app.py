@@ -741,6 +741,12 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             if step_password:
                 workload_params['step_password'] = step_password
 
+            # Inject pipeline_name so benchmark_runner can pop it in _get_run_contexts()
+            # and store it on RunContext for the ACL gate in _add_run_context.
+            pipeline_name = scenario.get('pipeline_name', '')
+            if pipeline_name:
+                workload_params['pipeline_name'] = pipeline_name
+
             logger.info(f"Batch job {job_id}, test {label}: merged params keys = {list(workload_params.keys())}")
             
             # Per-step profile flag overrides the job-level enable_profiling.
@@ -1047,6 +1053,7 @@ def trigger_batch_benchmark():
         
         # Extract parameters
         engine = request_data.get('engine')
+        pipeline_name = request_data.get('pipeline_name', '')
         tests = request_data.get('tests', [])
         
         if not engine:
@@ -1134,6 +1141,7 @@ def trigger_batch_benchmark():
                 'profile': test.get('profile'),  # per-step profiling
                 'step_username': step_username,   # stored as step_username (not username)
                 'step_password': step_password,   # stored as step_password (not password)
+                'pipeline_name': pipeline_name,   # forwarded from run-pipeline.sh
             })
             
             logger.info(f"Test: dataset='{dataset}', scenario='{scenario_label}' -> procedure '{procedure_name}'")
@@ -1167,6 +1175,7 @@ def trigger_batch_benchmark():
             'dataset': 'multi',  # Indicate multiple datasets
             'datasets': unique_datasets,  # List of all datasets used
             'engine': engine,
+            'pipeline_name': pipeline_name,
             'scenario': 'batch',  # Set to 'batch' to avoid null issues
             'ui_scenario': f"{len(scenarios)} tests across {datasets_summary}",  # Summary for display
             'scenarios': scenarios,  # List of {dataset, label, procedure_name, params}

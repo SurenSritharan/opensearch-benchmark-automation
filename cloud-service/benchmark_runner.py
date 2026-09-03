@@ -43,6 +43,7 @@ class RunContext:
     username:       str = 'admin'   # cluster auth — kept off params so never sent to OSB
     password:       str = 'admin'
     client_timeout: int = 600       # HTTP client timeout (s) — runner-only, never sent to OSB
+    pipeline_name:  str = ''        # originating pipeline name (e.g. "acl-sweep-1m") — runner-only
 
 
 def _kill_proc_group(proc: subprocess.Popen) -> None:
@@ -191,6 +192,7 @@ class BenchmarkRunner:
         password       = (workload_params or {}).pop('password',       'admin')
         step_u         = (workload_params or {}).pop('step_username',  '')
         step_p         = (workload_params or {}).pop('step_password',  '')
+        pipeline_name  = (workload_params or {}).pop('pipeline_name',  '')
         client_timeout = (workload_params or {}).get('client_timeout', 600)
 
         # Per-step credentials override the job-level credentials when present.
@@ -280,6 +282,7 @@ class BenchmarkRunner:
                 username       = username,
                 password       = password,
                 client_timeout = client_timeout,
+                pipeline_name  = pipeline_name,
             ))
 
         return sweeps
@@ -872,8 +875,14 @@ class BenchmarkRunner:
         for DLS users it reflects the DLS-filtered doc count, not the total index
         size. Falls back to None if the cluster is unreachable — does NOT fail
         the run.
+
+        run_context is only written for ACL pipelines (pipeline name starts with "acl-").
+        Non-ACL runs are returned unchanged.
         """
         if ctx is None:
+            return test_run_data
+
+        if not ctx.pipeline_name.startswith('acl-'):
             return test_run_data
 
         try:
@@ -905,50 +914,6 @@ class BenchmarkRunner:
                         f"user={ctx.username!r}: {e}"
                     )
 
-            # Fetch search_query_after_security via POST /{index}/_search?profile=true
-            # as the step user so DLS is active. Falls back to None on any error.
-            search_query_after_security = None
-            if index:
-                try:
-                    target_field = params.get('target_field_name', 'target_field')
-                    dimension    = int((ctx.dataset_config or {}).get('dimension', 768))
-                    probe_body   = {
-                        "query": {
-                            "knn": {
-                                target_field: {
-                                    "vector": [0.0] * dimension,
-                                    "k": 1,
-                                }
-                            }
-                        },
-                        "size": 1,
-                        "profile": True,
-                    }
-                    url  = f"https://{ctx.target_host}/{index}/_search"
-                    resp = requests.post(
-                        url,
-                        auth=(ctx.username, ctx.password),
-                        verify=False,
-                        timeout=30,
-                        json=probe_body,
-                    )
-                    if resp.status_code == 200:
-                        shards = resp.json().get('profile', {}).get('shards', [])
-                        if shards:
-                            searches = shards[0].get('searches', [])
-                            if searches:
-                                search_query_after_security = searches[0].get('query')
-                    else:
-                        logger.warning(
-                            f"[run_context] profile _search returned HTTP {resp.status_code} "
-                            f"for index={index!r} user={ctx.username!r}"
-                        )
-                except Exception as e:
-                    logger.warning(
-                        f"[run_context] Could not fetch post-security query "
-                        f"for index={index!r} user={ctx.username!r}: {e}"
-                    )
-
             space_type = (
                 params.get('target_index_space_type')
                 or (ctx.dataset_config or {}).get('space_type', '')
@@ -964,14 +929,12 @@ class BenchmarkRunner:
                 'search_clients':              params.get('search_clients'),
                 'num_vectors':                 params.get('num_vectors'),
                 'visible_doc_count':           visible_doc_count,
-                'search_query_after_security': search_query_after_security,
                 'target_host':                 ctx.target_host,
             }
 
             logger.info(
                 f"[run_context] user={ctx.username!r} index={index!r} "
-                f"visible_doc_count={visible_doc_count} "
-                f"after_security={'captured' if search_query_after_security is not None else 'null'}"
+                f"visible_doc_count={visible_doc_count}"
             )
 
         except Exception as e:
