@@ -289,18 +289,6 @@ Run Benchmarks  (per engine, in parallel)
   └─ d)  collect server logs + telemetry
 ```
 
-## Post-Ingest Verification
-
-[`gke-manifest/acl-verify.sh`](../gke-manifest/acl-verify.sh) runs three checks after the benchmark completes:
-
-| Check             | What it confirms                                                                                                                            |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| index settings    | `default_pipeline: acl_guard` is set on the index and `knn: true`                                                                           |
-| random doc sample | 10 random docs show heterogeneous ACL field population — some have only `access_roles`, some only `access_groups`, some only `access_users` |
-| DLS restriction   | `user-role-group` sees ~67% of docs and `user-ultrastrict` sees ~1%; pass requires `admin > role-group > ultrastrict > 0`                   |
-
-Check C is the key correctness gate: if the counts do not satisfy the expected ordering, DLS is either not active or the ingest pipeline did not assign the correct access fields.
-
 ## Expected Visible Document Counts
 
 At 1M corpus (100 buckets × ~10k docs each), ordered from least to most restrictive:

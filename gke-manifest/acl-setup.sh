@@ -2,8 +2,7 @@
 # Master ACL setup script.
 #
 # Usage:
-#   acl-setup.sh <namespace>           — full setup (pipeline + roles + users)
-#   acl-setup.sh <namespace> verify    — post-ingest verification only
+#   acl-setup.sh <namespace>  — full setup (pipeline + roles + users)
 #
 # All OpenSearch calls are routed through the benchmark worker pod because
 # Jenkins has no direct network path to the OpenSearch cluster endpoint.
@@ -11,7 +10,6 @@
 set -euo pipefail
 
 NS="${1:?Usage: $0 <namespace>  e.g. os-jvector}"
-MODE="${2:-setup}"
 ENGINE="${NS#os-}"
 
 export WORKER_POD="opensearch-benchmark-worker-${ENGINE}-0"
@@ -20,15 +18,10 @@ OS_HOST="opensearch-cluster.${NS}.svc.cluster.local:9200"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "ACL setup  namespace=${NS}  mode=${MODE}"
+echo "ACL setup  namespace=${NS}"
 echo "Worker: ${WORKER_NS}/${WORKER_POD}"
 echo "Host:   ${OS_HOST}"
 echo ""
-
-if [ "$MODE" = "verify" ]; then
-    bash "${SCRIPT_DIR}/acl-verify.sh" "$OS_HOST"
-    exit 0
-fi
 
 # Wait for OpenSearch to be reachable (up to 5 minutes)
 echo "Waiting for OpenSearch at ${OS_HOST}..."
