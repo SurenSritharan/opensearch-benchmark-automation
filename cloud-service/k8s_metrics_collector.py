@@ -95,16 +95,45 @@ class K8sMetricsCollector:
         return float(cpu_str)
 
     def _parse_memory_to_mi(self, mem_str: str) -> float:
-        """Converts K8s Memory strings (e.g., '2449Mi', '16Gi') to float MiB."""
+        """Converts K8s memory quantity strings to float MiB.
+
+        Handles all suffixes defined in the Kubernetes quantity spec:
+          decimal SI:  k, M, G, T, P, E
+          binary IEC:  Ki, Mi, Gi, Ti, Pi, Ei
+          SI base:     (bare integer = bytes)
+          micro:       u  (microbytes — occasionally emitted by some metrics-server builds)
+        """
         if not mem_str:
             return 0.0
+        # Binary IEC (most common from metrics-server)
         if mem_str.endswith('Ki'):
             return float(mem_str[:-2]) / 1024.0
         if mem_str.endswith('Mi'):
             return float(mem_str[:-2])
         if mem_str.endswith('Gi'):
             return float(mem_str[:-2]) * 1024.0
-        return float(mem_str)
+        if mem_str.endswith('Ti'):
+            return float(mem_str[:-2]) * 1024.0 ** 2
+        if mem_str.endswith('Pi'):
+            return float(mem_str[:-2]) * 1024.0 ** 3
+        if mem_str.endswith('Ei'):
+            return float(mem_str[:-2]) * 1024.0 ** 4
+        # Decimal SI
+        if mem_str.endswith('k'):
+            return float(mem_str[:-1]) * 1000.0 / (1024.0 ** 2)
+        if mem_str.endswith('M'):
+            return float(mem_str[:-1]) / 1.048576          # 1 MB = 1e6 B → MiB
+        if mem_str.endswith('G'):
+            return float(mem_str[:-1]) * 1000.0 ** 3 / (1024.0 ** 3) * 1024.0
+        # Micro (u) — microbytes
+        if mem_str.endswith('u'):
+            return float(mem_str[:-1]) / (1024.0 ** 2) / 1e6
+        # Bare integer → bytes
+        try:
+            return float(mem_str) / (1024.0 ** 2)
+        except ValueError:
+            logger.warning(f"Unrecognised memory quantity {mem_str!r} — defaulting to 0")
+            return 0.0
 
     def _cache_node_pools(self):
         """Fetches nodes once at initialization to map node-pools."""
@@ -300,12 +329,26 @@ class K8sMetricsCollector:
         self._stop_event.set()
 
     def save_metrics(self, scenario_name: str):
-        if not self.enabled or not self.total_samples or not self.final_payload:
+        if not self.enabled or not self.total_samples:
             return
+
+        # final_payload is set at the end of start_collection(). If the background
+        # thread was still in its collection loop when _stop_metrics_collection()
+        # joined it (e.g. timed out during a long ingest run), final_payload may
+        # still be None. Build it now from whatever samples were captured.
+        if not self.final_payload:
+            self.final_payload = {
+                "scenario":         scenario_name,
+                "namespace":        self.namespace,
+                "start_time":       self.start_iso,
+                "end_time":         datetime.now(timezone.utc).isoformat().replace("+00:00", ""),
+                "duration_seconds": None,
+                "summary":          self._calculate_summary(),
+            }
 
         self.final_payload["scenario"] = scenario_name
         self.results_dir.mkdir(parents=True, exist_ok=True)
-        
+
         with open(self.results_dir / "k8s_metrics.json", 'w') as f:
             json.dump(self.final_payload, f, indent=2)
         logger.info(f"✓ Target JSON format payload saved to: {self.results_dir}")
