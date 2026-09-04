@@ -80,11 +80,22 @@ pipeline {
         KUBECONFIG  = "${env.WORKSPACE}/.kube/config"
     }
 
-    // triggers {
-    //     // No automatic cron — interns trigger manually or on a schedule they define.
-    //     // Uncomment and adjust to enable a cadence:
-    //     cron('0 8 * * *')  
-    // }
+    triggers {
+        // Automated benchmark schedule (Milestone 2.0):
+        // - Daily canary (50k): Fast smoke test to catch regressions
+        // - Weekly complete-1m: Full 1M test suite
+        // - Monthly complete-5m: Thorough pre-release testing
+        // Runs at off-minutes (2:07 AM) to avoid load spikes
+
+        parameterizedCron('''
+            # Daily canary at 2:07 AM
+            7 2 * * * %PIPELINE=canary-50k;ENGINE=jvector
+            # Weekly complete-1m on Sundays at 2:07 AM
+            7 2 * * 0 %PIPELINE=complete-1m;ENGINE=jvector
+            # Monthly complete-5m on the 1st at 2:07 AM
+            7 2 1 * * %PIPELINE=complete-5m;ENGINE=jvector
+        ''')
+    }
 
     options {
         buildDiscarder(logRotator(numToKeepStr: '30', artifactNumToKeepStr: '10'))
