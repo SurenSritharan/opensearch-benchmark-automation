@@ -60,6 +60,7 @@ pipeline {
                 'search-compare',
                 'complete-5m-profile-ingest',
                 'search-all-overquery',
+                'openai-large-5m',
                 'overquery-5m-k10',
                 'search-1m',
                 'search-5m',
@@ -430,9 +431,13 @@ print(json.dumps(s))
 
                     sh "mkdir -p ${RESULTS_DIR}"
 
-                    def redeploy         = params.REDEPLOY_CLUSTERS || pipelineJson.redeploy == true
-                    def multiRun         = (pipelineJson.versions || pipelineJson.node_sizes) ? true : false
-                    def hasFirstRunSteps = pipelineJson.first_run_steps && pipelineJson.first_run_steps.size() > 0
+                    def redeploy              = params.REDEPLOY_CLUSTERS || pipelineJson.redeploy == true
+                    def multiRun              = (pipelineJson.versions || pipelineJson.node_sizes) ? true : false
+                    def hasFirstRunSteps      = pipelineJson.first_run_steps && pipelineJson.first_run_steps.size() > 0
+                    // When true, first_run_steps re-execute on every version change (not just the
+                    // first run). Useful when you want ingest perf data for each version, not just
+                    // search. PVCs are still preserved — create-index + bulk-ingest overwrite in-place.
+                    def rebuildOnVersionChange = pipelineJson.rebuild_on_version_change == true
 
                     // Resolve dataset cache files to seed (same logic as the old Seed Dataset Cache stage).
                     def corpusSizeVal  = pipelineJson.params?.corpus_size
@@ -538,18 +543,34 @@ print(json.dumps(s))
                                     """
                                 }
 
+                                // Multi-run PVC lifecycle rules:
+                                //
+                                //   first run:
+                                //     PVCs are DELETED (fresh start). first_run_steps execute (build + search).
+                                //     DELETE_PVCS param is honoured here; ignored on all subsequent runs.
+                                //
+                                //   all subsequent runs (size change or version change):
+                                //     Cluster is redeployed with new resources/version. PVCs are PRESERVED —
+                                //     indexes on disk are reused as-is. Only search steps execute.
                                 def engineFirstRun = true
+                                def lastVersion    = null
                                 runs.each { run ->
                                     if (currentBuild.currentResult == 'ABORTED') { return }
-                                    def version      = run.version
-                                    def runSize      = run.nodeSize
-                                    def versionLabel = run.versionLabel
-                                    def runKey       = "${versionLabel}/${runSize}"
-                                    def isFirstRun   = engineFirstRun
-                                    engineFirstRun   = false
+                                    def version         = run.version
+                                    def runSize         = run.nodeSize
+                                    def versionLabel    = run.versionLabel
+                                    def runKey          = "${versionLabel}/${runSize}"
+                                    def isFirstRun      = engineFirstRun
+                                    def isVersionChange = !isFirstRun && (version != lastVersion)
+                                    // Run first_run_steps when: it's the first run, or the version changed
+                                    // and rebuild_on_version_change is set in the pipeline JSON.
+                                    def runFirstRunSteps = isFirstRun || (isVersionChange && rebuildOnVersionChange)
+                                    engineFirstRun      = false
+                                    lastVersion         = version
 
                                     def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
-                                    if (params.DELETE_PVCS || (hasFirstRunSteps && isFirstRun)) { runExtraArgs += " --delete-pvcs" }
+                                    // Delete PVCs only on the very first run — never on size or version changes.
+                                    if (isFirstRun && (params.DELETE_PVCS || hasFirstRunSteps)) { runExtraArgs += " --delete-pvcs" }
 
                                     stage("${engine} / ${versionLabel} / ${runSize} — Prepare Cluster") {
                                         // ── a) Scale up or deploy this engine's cluster ────
@@ -716,7 +737,7 @@ print(json.dumps(s))
                                             WORKER_POD="opensearch-benchmark-worker-${engine}-0" \
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
-                                                ${hasFirstRunSteps && isFirstRun ? "--first-run" : ""} \
+                                                ${hasFirstRunSteps && runFirstRunSteps ? "--first-run" : ""} \
                                                 ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \

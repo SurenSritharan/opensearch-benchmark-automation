@@ -1,20 +1,18 @@
 {
-  "description": "Bulk-size sweep — varies target_index_bulk_size across [100, 500, 1000, 2500, 5000] using the two best ef/m combos from the index parameter sweep (ef=64/m=8, ef=128/m=16). Measures ingest throughput (docs/s) sensitivity to bulk_size.",
+  "description": "Bulk-size sweep — holds ef_c=64/m=16 (recommended config from index parameter sweep) fixed and varies target_index_bulk_size across 6 values: 100, 500, 1000, 2500, 5000, 10000. Spacing is geometric to capture the steep low-end gains and confirm the plateau at the high end. 5000 is the existing control point from builds #100 and #156. Measures effective ingest throughput, P99 ingest latency, and segment count. Search (k=10, k=100) confirms recall is not affected by bulk_size.",
   "engine": "__ENGINE__",
   "params": {
-    "corpus_size": "1m"
+    "corpus_size": "1m",
+    "hnsw_ef_construction": 64,
+    "hnsw_m": 16
   },
   "parameter_sweeps": [
-    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 100  } },
-    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 500  } },
-    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 1000 } },
-    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 2500 } },
-    { "params": { "hnsw_ef_construction": 64,  "hnsw_m": 8,  "target_index_bulk_size": 5000 } },
-    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 100  } },
-    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 500  } },
-    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 1000 } },
-    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 2500 } },
-    { "params": { "hnsw_ef_construction": 128, "hnsw_m": 16, "target_index_bulk_size": 5000 } }
+    { "params": { "target_index_bulk_size": 100   } },
+    { "params": { "target_index_bulk_size": 500   } },
+    { "params": { "target_index_bulk_size": 1000  } },
+    { "params": { "target_index_bulk_size": 2500  } },
+    { "params": { "target_index_bulk_size": 5000  } },
+    { "params": { "target_index_bulk_size": 10000 } }
   ],
   "steps": [
     { "dataset": "cohere-msmarco-1024", "scenario": "delete-index" },
