@@ -42,6 +42,8 @@ spec:
         component: worker
         engine: ${ENGINE}
     spec:
+      # Give the worker 60s to finish its finally-block cleanup after SIGTERM.
+      terminationGracePeriodSeconds: 60
       nodeSelector:
         cloud.google.com/gke-nodepool: client-pool
       
@@ -91,7 +93,7 @@ spec:
               faiss-cpu pyarrow huggingface_hub
             
             echo "Setting up directories..."
-            mkdir -p /datasets/opensearch-benchmark /results /opt/benchmark-src /app
+            mkdir -p /datasets/opensearch-benchmark /datasets/gt /results /opt/benchmark-src /app
             
             echo "Cloning OpenSearch Benchmark..."
             git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark /opt/benchmark-src

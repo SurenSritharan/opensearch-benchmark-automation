@@ -242,7 +242,7 @@ datasets:
           hnsw_ef_search: 128
           search_clients: 8
 
-  cohere-wiki-parquet:
+  cohere-wiki-parquet-1024:
     dimension: 1024
     format: parquet
     space_type: "cosinesimil"
@@ -254,7 +254,8 @@ datasets:
     # No gcs_cache_files — data is streamed from HuggingFace at runtime.
 
     common_params:
-      target_index_name: "cohere-wikipedia-parquet-{{corpus_size}}"
+      target_index_name: "cohere-wikipedia-parquet-1024-{{corpus_size}}"
+      queries_file: "/datasets/gt/cohere-wikipedia-parquet-1024-{{corpus_size}}-gt.json"
 
     engine_params:
       faiss:
@@ -351,6 +352,7 @@ datasets:
     # Data is streamed directly from HuggingFace at runtime.
     common_params:
       target_index_name: "dbpedia-openai-1536-{{corpus_size}}"
+      queries_file: "/datasets/gt/dbpedia-openai-1536-{{corpus_size}}-gt.json"
       target_index_dimension: 1536
       target_field_name: "openai"
       hf_repo_id: "KShivendu/dbpedia-entities-openai-1M"
@@ -431,7 +433,7 @@ datasets:
           hybrid_text_field: "text"
           detailed_results: true
 
-  openai-large-5m:
+  openai-large-1536:
     dimension: 1536
     format: parquet
     space_type: "cosinesimil"
@@ -443,7 +445,8 @@ datasets:
     # No gcs_cache_files — data is streamed from HuggingFace at runtime.
 
     common_params:
-      target_index_name: "openai-large-5m"
+      target_index_name: "openai-large-1536-{{corpus_size}}"
+      queries_file: "/datasets/gt/openai-large-1536-{{corpus_size}}-gt.json"
       target_index_dimension: 1536
       target_field_name: "emb"
       hf_repo_id: "makneeee/openai_large_5m"

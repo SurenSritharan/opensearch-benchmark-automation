@@ -1,0 +1,14 @@
+{
+  "description": "OpenAI Large 5M 1536-d Parquet (create, ingest, merge, search k=10)",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "5m" },
+  "steps": [
+    { "dataset": "openai-large-1536", "scenario": "delete-index" },
+    { "dataset": "openai-large-1536", "scenario": "create-index" },
+    { "dataset": "openai-large-1536", "scenario": "bulk-ingest-data" },
+    { "dataset": "openai-large-1536", "scenario": "refresh-index" },
+    { "dataset": "openai-large-1536", "scenario": "force-merge" },
+    { "dataset": "openai-large-1536", "scenario": "refresh-index" },
+    { "dataset": "openai-large-1536", "scenario": "vector-search", "params": { "query_k": 10 } }
+  ]
+}
