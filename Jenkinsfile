@@ -877,21 +877,24 @@ Parameters:
   OpenSearch Version: ${params.OPENSEARCH_VERSION}
   Enable Profiling:   ${params.ENABLE_PROFILING}
 
-Results per engine:
+Results (all version × size × engine runs):
 EOF
-                        for version_dir in ${RESULTS_DIR}/*/; do
-                            version=\$(basename "\$version_dir")
-                            echo "  --- OpenSearch \$version ---" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
-                            for engine in ${engines.join(' ')}; do
-                                JOB_FILE=\$(ls job_id_\${engine}-\${version}-*.txt 2>/dev/null | head -1)
-                                if [ -n "\$JOB_FILE" ] && [ -f "\$JOB_FILE" ]; then
-                                    JOB_ID=\$(cat "\$JOB_FILE")
-                                    echo "    \${engine}: ${apiUrl}/results.html?job_id=\${JOB_ID}" \
-                                        >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
-                                else
-                                    echo "    \${engine}: no job submitted" \
-                                        >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
-                                fi
+                        # Enumerate every job_id_<engine>-<version>-<size>.txt written during the run.
+                        # Files are named: job_id_<engine>-<versionLabel>-<nodeSize>.txt
+                        # Group them by engine for readability.
+                        for engine in ${engines.join(' ')}; do
+                            FILES=\$(ls job_id_\${engine}-*.txt 2>/dev/null | sort || true)
+                            if [ -z "\$FILES" ]; then
+                                echo "  \${engine}: no jobs submitted" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
+                                continue
+                            fi
+                            echo "  --- \${engine} ---" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
+                            for f in \$FILES; do
+                                # Extract version+size label from filename: strip "job_id_<engine>-" prefix and ".txt" suffix
+                                RUN_LABEL=\$(basename "\$f" .txt | sed "s/^job_id_\${engine}-//")
+                                JOB_ID=\$(cat "\$f")
+                                echo "    \${RUN_LABEL}: ${apiUrl}/results.html?job_id=\${JOB_ID}&engine=\${engine}" \
+                                    >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
                             done
                         done
                         echo "========================================" >> ${RESULTS_DIR}/BUILD_SUMMARY.txt
