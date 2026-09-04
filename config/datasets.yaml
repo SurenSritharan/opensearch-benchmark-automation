@@ -217,6 +217,9 @@ datasets:
       - name: "refresh-index"
         params: {}
 
+      - name: "update-index-settings"
+        params: {}
+
       # Restores replicas to 1 after a no-replicas ingest, then waits for replica
       # allocation to complete. Used as step 5 in the sweep pipeline.
       # Requires an "enable-replicas" test procedure in workload.json (workload repo).
