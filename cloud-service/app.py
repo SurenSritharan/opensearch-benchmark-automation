@@ -161,23 +161,6 @@ def init_db():
                 except Exception:
                     pass
 
-    # Remove orphaned memmap temp files left in /datasets/gt/ by a previous run
-    # that was killed mid-ingest (SIGKILL, OOM, node eviction).  These files are
-    # always safe to delete on startup: the parquet workload creates them fresh
-    # for every ingest and removes them on normal completion.  Any that survive a
-    # restart are definitionally stale.
-    gt_dir = Path("/datasets/gt")
-    if gt_dir.is_dir():
-        for orphan in list(gt_dir.glob("*.bin")) + list(gt_dir.glob("*.ids")):
-            try:
-                size_gb = orphan.stat().st_size / 1024 ** 3
-                orphan.unlink()
-                logger.warning(f"Startup: removed orphaned GT temp file {orphan} ({size_gb:.1f} GB)")
-            except FileNotFoundError:
-                pass  # already gone
-            except Exception as e:
-                logger.warning(f"Startup: could not remove GT temp file {orphan}: {e}")
-
     # Release any stale engine lock files left over from the previous process
     locks_dir = "/workspace/locks"
     if os.path.isdir(locks_dir):

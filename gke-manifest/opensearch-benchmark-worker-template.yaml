@@ -90,7 +90,7 @@ spec:
             
             echo "Installing Python packages..."
             pip install --quiet h5py numpy scikit-learn opensearch-py flask flask-cors jinja2 pyyaml gunicorn filelock \
-              faiss-cpu pyarrow huggingface_hub
+              pyarrow huggingface_hub
             
             echo "Setting up directories..."
             mkdir -p /datasets/opensearch-benchmark /datasets/gt /results /opt/benchmark-src /app

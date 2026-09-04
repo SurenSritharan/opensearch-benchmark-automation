@@ -259,6 +259,7 @@ datasets:
     common_params:
       target_index_name: "cohere-wikipedia-parquet-1024-{{corpus_size}}"
       queries_file: "/datasets/gt/cohere-wikipedia-parquet-1024-{{corpus_size}}-gt.json"
+      gcs_gt_bucket: "opensearch-benchmark-datasets"
 
     engine_params:
       faiss:
@@ -296,7 +297,7 @@ datasets:
         params:
           target_index_bulk_size: 500
           target_index_bulk_indexing_clients: 1
-          num_queries: 1000
+          num_queries: 10000
           detailed_results: false
 
       - name: "refresh-index"
@@ -356,6 +357,7 @@ datasets:
     common_params:
       target_index_name: "dbpedia-openai-1536-{{corpus_size}}"
       queries_file: "/datasets/gt/dbpedia-openai-1536-{{corpus_size}}-gt.json"
+      gcs_gt_bucket: "opensearch-benchmark-datasets"
       target_index_dimension: 1536
       target_field_name: "openai"
       hf_repo_id: "KShivendu/dbpedia-entities-openai-1M"
@@ -395,7 +397,7 @@ datasets:
         params:
           target_index_bulk_size: 500
           target_index_bulk_indexing_clients: 1
-          num_queries: 1000
+          num_queries: 10000
           detailed_results: false
 
       - name: "refresh-index"
@@ -450,6 +452,7 @@ datasets:
     common_params:
       target_index_name: "openai-large-1536-{{corpus_size}}"
       queries_file: "/datasets/gt/openai-large-1536-{{corpus_size}}-gt.json"
+      gcs_gt_bucket: "opensearch-benchmark-datasets"
       target_index_dimension: 1536
       target_field_name: "emb"
       hf_repo_id: "makneeee/openai_large_5m"
@@ -488,7 +491,7 @@ datasets:
         params:
           target_index_bulk_size: 1000
           target_index_bulk_indexing_clients: 1
-          num_queries: 1000
+          num_queries: 10000
           detailed_results: false
         engine_params:
           jvector:
