@@ -547,11 +547,12 @@ print(json.dumps(s))
                                 //
                                 //   first run:
                                 //     PVCs are DELETED (fresh start). first_run_steps execute (build + search).
-                                //     DELETE_PVCS param is honoured here; ignored on all subsequent runs.
                                 //
                                 //   all subsequent runs (size change or version change):
                                 //     Cluster is redeployed with new resources/version. PVCs are PRESERVED —
                                 //     indexes on disk are reused as-is. Only search steps execute.
+                                //
+                                //   DELETE_PVCS=true overrides the above and always deletes PVCs on every run.
                                 def engineFirstRun = true
                                 def lastVersion    = null
                                 runs.each { run ->
