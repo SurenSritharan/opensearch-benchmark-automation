@@ -276,8 +276,8 @@ datasets:
       - name: "create-index"
         params:
           target_index_body: "indices/index.json"
-          target_index_primary_shards: 1
-          target_index_replica_shards: 0
+          target_index_primary_shards: 3
+          target_index_replica_shards: 1
           target_index_dimension: 1024
           target_index_space_type: "cosinesimil"
           hnsw_ef_construction: 64
@@ -296,7 +296,7 @@ datasets:
       - name: "bulk-ingest-data"
         params:
           target_index_bulk_size: 500
-          target_index_bulk_indexing_clients: 1
+          target_index_bulk_indexing_clients: 4
           num_queries: 10000
           detailed_results: false
 
@@ -378,8 +378,8 @@ datasets:
       - name: "create-index"
         params:
           target_index_body: "indices/index.json"
-          target_index_primary_shards: 1
-          target_index_replica_shards: 0
+          target_index_primary_shards: 3
+          target_index_replica_shards: 1
           target_index_space_type: "cosinesimil"
           hnsw_ef_construction: 64
           hnsw_m: 16
@@ -396,7 +396,7 @@ datasets:
       - name: "bulk-ingest-data"
         params:
           target_index_bulk_size: 500
-          target_index_bulk_indexing_clients: 1
+          target_index_bulk_indexing_clients: 4
           num_queries: 10000
           detailed_results: false
 
@@ -473,8 +473,8 @@ datasets:
       - name: "create-index"
         params:
           target_index_body: "indices/index.json"
-          target_index_primary_shards: 1
-          target_index_replica_shards: 0
+          target_index_primary_shards: 3
+          target_index_replica_shards: 1
           hnsw_ef_construction: 256
           hnsw_m: 16
           refresh_interval: "-1"
@@ -490,13 +490,13 @@ datasets:
       - name: "bulk-ingest-data"
         params:
           target_index_bulk_size: 1000
-          target_index_bulk_indexing_clients: 1
+          target_index_bulk_indexing_clients: 4
           num_queries: 10000
           detailed_results: false
         engine_params:
           jvector:
             target_index_bulk_size: 2000
-            target_index_bulk_indexing_clients: 1
+            target_index_bulk_indexing_clients: 4
 
       - name: "refresh-index"
         params: {}
