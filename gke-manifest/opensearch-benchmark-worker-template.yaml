@@ -105,9 +105,9 @@ spec:
               git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-workloads.git /datasets/opensearch-benchmark-workloads
             else
               cd /datasets/opensearch-benchmark-workloads
-              git reset --hard
+              git fetch origin
+              git reset --hard origin/main
               git clean -fd
-              git pull origin main || echo "Git pull failed, using existing version"
             fi
             
             echo "Setting up workspace (${AUTOMATION_BRANCH} branch)..."
@@ -121,9 +121,9 @@ spec:
               echo "Workspace already exists, ensuring origin remote and pulling latest ${AUTOMATION_BRANCH} changes..."
               cd /workspace
               git remote set-url origin https://github.com/SurenSritharan/opensearch-benchmark-automation.git
-              git reset --hard
+              git fetch origin
+              git reset --hard origin/${AUTOMATION_BRANCH}
               git clean -fd
-              git pull origin ${AUTOMATION_BRANCH} || echo "Git pull failed, using existing version"
             fi
             
             echo "Setting up worker service..."
