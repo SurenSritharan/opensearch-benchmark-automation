@@ -569,8 +569,11 @@ print(json.dumps(s))
                                     lastVersion         = version
 
                                     def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
-                                    // Delete PVCs only on the very first run — never on size or version changes.
-                                    if (isFirstRun && (params.DELETE_PVCS || hasFirstRunSteps)) { runExtraArgs += " --delete-pvcs" }
+                                    // PVC deletion rules:
+                                    //   DELETE_PVCS=true  → always delete (explicit user override, e.g. corrupted data)
+                                    //   hasFirstRunSteps  → delete only on the first run (automatic fresh-start)
+                                    //   all other runs    → preserve PVCs so indexed data is reused
+                                    if (params.DELETE_PVCS || (isFirstRun && hasFirstRunSteps)) { runExtraArgs += " --delete-pvcs" }
 
                                     stage("${engine} / ${versionLabel} / ${runSize} — Prepare Cluster") {
                                         // ── a) Scale up or deploy this engine's cluster ────
