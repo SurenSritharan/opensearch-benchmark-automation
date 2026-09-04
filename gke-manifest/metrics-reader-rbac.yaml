@@ -74,5 +74,31 @@ roleRef:
   kind: ClusterRole
   name: metrics-reader
   apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: benchmark-metrics-reader-develop-jvector
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: os-develop-jvector
+roleRef:
+  kind: ClusterRole
+  name: metrics-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: benchmark-metrics-reader-api-develop
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: benchmark-api-develop
+roleRef:
+  kind: ClusterRole
+  name: metrics-reader
+  apiGroup: rbac.authorization.k8s.io
 
 # Made with Bob
