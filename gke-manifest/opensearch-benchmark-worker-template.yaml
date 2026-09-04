@@ -105,8 +105,8 @@ spec:
               git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark-workloads.git /datasets/opensearch-benchmark-workloads
             else
               cd /datasets/opensearch-benchmark-workloads
-              git fetch origin
-              git reset --hard origin/main
+              git fetch origin main
+              git reset --hard FETCH_HEAD
               git clean -fd
             fi
             
@@ -121,8 +121,8 @@ spec:
               echo "Workspace already exists, ensuring origin remote and pulling latest ${AUTOMATION_BRANCH} changes..."
               cd /workspace
               git remote set-url origin https://github.com/SurenSritharan/opensearch-benchmark-automation.git
-              git fetch origin
-              git reset --hard origin/${AUTOMATION_BRANCH}
+              git fetch origin ${AUTOMATION_BRANCH}
+              git reset --hard FETCH_HEAD
               git clean -fd
             fi
             
