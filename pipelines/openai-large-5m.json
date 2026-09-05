@@ -7,7 +7,7 @@
     { "dataset": "openai-large-1536", "scenario": "create-index" },
     { "dataset": "openai-large-1536", "scenario": "bulk-ingest-data" },
     { "dataset": "openai-large-1536", "scenario": "refresh-index" },
-    { "dataset": "openai-large-1536", "scenario": "force-merge", "params": { "target_index_max_num_segments": 10 } },
+    { "dataset": "openai-large-1536", "scenario": "force-merge", "params": { "target_index_max_num_segments": 15 } },
     { "dataset": "openai-large-1536", "scenario": "refresh-index" },
     { "dataset": "openai-large-1536", "scenario": "vector-search", "params": { "query_k": 10 } }
   ]
