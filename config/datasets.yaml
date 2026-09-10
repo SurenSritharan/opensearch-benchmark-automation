@@ -86,7 +86,7 @@ datasets:
         # partial-ingest shortfalls.
         engine_params:
           jvector:
-            target_index_bulk_size: 2000
+            target_index_bulk_size: 500
             target_index_bulk_indexing_clients: 1
 
         # uses make_blobs synthetic generation — no corpus file, supports any num_vectors
@@ -211,7 +211,7 @@ datasets:
         # Same DiskANN constraint as cohere-wiki-en-768 — single client, large batches.
         engine_params:
           jvector:
-            target_index_bulk_size: 2000
+            target_index_bulk_size: 500
             target_index_bulk_indexing_clients: 1
 
       - name: "refresh-index"
@@ -489,13 +489,13 @@ datasets:
 
       - name: "bulk-ingest-data"
         params:
-          target_index_bulk_size: 1000
+          target_index_bulk_size: 500
           target_index_bulk_indexing_clients: 4
           num_queries: 10000
           detailed_results: false
         engine_params:
           jvector:
-            target_index_bulk_size: 2000
+            target_index_bulk_size: 500
             target_index_bulk_indexing_clients: 4
 
       - name: "refresh-index"
