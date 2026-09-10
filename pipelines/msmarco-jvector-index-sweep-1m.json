@@ -25,7 +25,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef64-m8",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -52,7 +52,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef64-m16",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -79,7 +79,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef64-m32",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -106,7 +106,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef64-m64",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -133,7 +133,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef128-m8",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -160,7 +160,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef128-m16",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -187,7 +187,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef128-m32",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -214,7 +214,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef128-m64",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -241,7 +241,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef256-m8",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -268,7 +268,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef256-m16",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -295,7 +295,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef256-m32",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -322,7 +322,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef256-m64",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -349,7 +349,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef512-m8",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -376,7 +376,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef512-m16",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -403,7 +403,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef512-m32",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {
@@ -430,7 +430,7 @@
       "scenario": "bulk-ingest-data",
       "params": {
         "target_index_name": "cohere-msmarco-1024-1m-ef512-m64",
-        "target_index_bulk_size": 5000
+        "target_index_bulk_size": 500
       }
     },
     {

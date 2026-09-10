@@ -6,7 +6,7 @@
   "node_sizes": ["small"],
   "params": {
     "corpus_size": "1m",
-    "target_index_bulk_size": 5000
+    "target_index_bulk_size": 500
   },
   "steps": [
     { "dataset": "cohere-msmarco-1024", "scenario": "delete-index" },

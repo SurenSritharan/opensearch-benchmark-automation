@@ -4,7 +4,7 @@
   "no_profiling": true,
   "params": {
     "corpus_size": "1m",
-    "target_index_bulk_size": 5000
+    "target_index_bulk_size": 500
   },
   "steps": [
     {
