@@ -86,7 +86,7 @@ datasets:
         # partial-ingest shortfalls.
         engine_params:
           jvector:
-            target_index_bulk_size: 2000
+            target_index_bulk_size: 500
             target_index_bulk_indexing_clients: 1
 
         # uses make_blobs synthetic generation — no corpus file, supports any num_vectors
@@ -211,10 +211,13 @@ datasets:
         # Same DiskANN constraint as cohere-wiki-en-768 — single client, large batches.
         engine_params:
           jvector:
-            target_index_bulk_size: 2000
+            target_index_bulk_size: 500
             target_index_bulk_indexing_clients: 1
 
       - name: "refresh-index"
+        params: {}
+
+      - name: "update-index-settings"
         params: {}
 
       # Restores replicas to 1 after a no-replicas ingest, then waits for replica
@@ -242,7 +245,7 @@ datasets:
           hnsw_ef_search: 128
           search_clients: 8
 
-  cohere-wiki-parquet:
+  cohere-wiki-parquet-1024:
     dimension: 1024
     format: parquet
     space_type: "cosinesimil"
@@ -254,7 +257,9 @@ datasets:
     # No gcs_cache_files — data is streamed from HuggingFace at runtime.
 
     common_params:
-      target_index_name: "cohere-wikipedia-parquet-{{corpus_size}}"
+      target_index_name: "cohere-wikipedia-parquet-1024-{{corpus_size}}"
+      queries_file: "/datasets/gt/cohere-wikipedia-parquet-1024-{{corpus_size}}-gt.json"
+      gcs_gt_bucket: "opensearch-benchmark-datasets"
 
     engine_params:
       faiss:
@@ -271,8 +276,8 @@ datasets:
       - name: "create-index"
         params:
           target_index_body: "indices/index.json"
-          target_index_primary_shards: 1
-          target_index_replica_shards: 0
+          target_index_primary_shards: 3
+          target_index_replica_shards: 1
           target_index_dimension: 1024
           target_index_space_type: "cosinesimil"
           hnsw_ef_construction: 64
@@ -291,8 +296,8 @@ datasets:
       - name: "bulk-ingest-data"
         params:
           target_index_bulk_size: 500
-          target_index_bulk_indexing_clients: 1
-          num_queries: 1000
+          target_index_bulk_indexing_clients: 4
+          num_queries: 10000
           detailed_results: false
 
       - name: "refresh-index"
@@ -351,6 +356,8 @@ datasets:
     # Data is streamed directly from HuggingFace at runtime.
     common_params:
       target_index_name: "dbpedia-openai-1536-{{corpus_size}}"
+      queries_file: "/datasets/gt/dbpedia-openai-1536-{{corpus_size}}-gt.json"
+      gcs_gt_bucket: "opensearch-benchmark-datasets"
       target_index_dimension: 1536
       target_field_name: "openai"
       hf_repo_id: "KShivendu/dbpedia-entities-openai-1M"
@@ -371,8 +378,8 @@ datasets:
       - name: "create-index"
         params:
           target_index_body: "indices/index.json"
-          target_index_primary_shards: 1
-          target_index_replica_shards: 0
+          target_index_primary_shards: 3
+          target_index_replica_shards: 1
           target_index_space_type: "cosinesimil"
           hnsw_ef_construction: 64
           hnsw_m: 16
@@ -389,8 +396,8 @@ datasets:
       - name: "bulk-ingest-data"
         params:
           target_index_bulk_size: 500
-          target_index_bulk_indexing_clients: 1
-          num_queries: 1000
+          target_index_bulk_indexing_clients: 4
+          num_queries: 10000
           detailed_results: false
 
       - name: "refresh-index"
@@ -431,7 +438,7 @@ datasets:
           hybrid_text_field: "text"
           detailed_results: true
 
-  openai-large-5m:
+  openai-large-1536:
     dimension: 1536
     format: parquet
     space_type: "cosinesimil"
@@ -443,7 +450,9 @@ datasets:
     # No gcs_cache_files — data is streamed from HuggingFace at runtime.
 
     common_params:
-      target_index_name: "openai-large-5m"
+      target_index_name: "openai-large-1536-{{corpus_size}}"
+      queries_file: "/datasets/gt/openai-large-1536-{{corpus_size}}-gt.json"
+      gcs_gt_bucket: "opensearch-benchmark-datasets"
       target_index_dimension: 1536
       target_field_name: "emb"
       hf_repo_id: "makneeee/openai_large_5m"
@@ -464,8 +473,8 @@ datasets:
       - name: "create-index"
         params:
           target_index_body: "indices/index.json"
-          target_index_primary_shards: 1
-          target_index_replica_shards: 0
+          target_index_primary_shards: 3
+          target_index_replica_shards: 1
           hnsw_ef_construction: 256
           hnsw_m: 16
           refresh_interval: "-1"
@@ -480,14 +489,14 @@ datasets:
 
       - name: "bulk-ingest-data"
         params:
-          target_index_bulk_size: 1000
-          target_index_bulk_indexing_clients: 1
-          num_queries: 1000
+          target_index_bulk_size: 500
+          target_index_bulk_indexing_clients: 4
+          num_queries: 10000
           detailed_results: false
         engine_params:
           jvector:
-            target_index_bulk_size: 2000
-            target_index_bulk_indexing_clients: 1
+            target_index_bulk_size: 500
+            target_index_bulk_indexing_clients: 4
 
       - name: "refresh-index"
         params: {}

@@ -1952,10 +1952,10 @@
         function getMetricValue(metric, type = 'mean') {
             if (typeof metric === 'number') return metric;
             if (metric && typeof metric === 'object') {
-                if (type === 'p90') return metric['90_0'] || metric.p90;
-                if (type === 'p99') return metric['99_0'] || metric.p99;
+                if (type === 'p90') return metric['90_0'] || metric.p90 || null;
+                if (type === 'p99') return metric['99_0'] || metric.p99 || null;
                 return metric.mean || metric.median || metric['50_0'] ||
-                       Object.values(metric).find(v => typeof v === 'number');
+                       Object.values(metric).find(v => typeof v === 'number') || null;
             }
             return null;
         }

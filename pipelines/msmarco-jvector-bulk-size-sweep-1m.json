@@ -11,7 +11,7 @@
     { "params": { "target_index_bulk_size": 500   } },
     { "params": { "target_index_bulk_size": 1000  } },
     { "params": { "target_index_bulk_size": 2500  } },
-    { "params": { "target_index_bulk_size": 5000  } },
+    { "params": { "target_index_bulk_size": 500  } },
     { "params": { "target_index_bulk_size": 10000 } }
   ],
   "steps": [
