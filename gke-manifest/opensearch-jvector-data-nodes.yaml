@@ -77,35 +77,6 @@ data:
 
     indexing_pressure.memory.limit: 40%
 ---
-apiVersion: monitoring.googleapis.com/v1
-kind: PodMonitoring
-metadata:
-  name: opensearch-prometheus
-  namespace: ${NAMESPACE}
-spec:
-  selector:
-    matchLabels:
-      app: opensearch-data
-  endpoints:
-    - port: http
-      scheme: https
-      path: /_prometheus/metrics
-      interval: 10s
-      tls:
-        ca:
-          secret:
-            name: opensearch-shared-certs
-            key: root-ca.pem
-        cert:
-          secret:
-            name: opensearch-shared-certs
-            key: admin.pem
-        key:
-          secret:
-            name: opensearch-shared-certs
-            key: admin-key.pem
-        serverName: opensearch-cluster.${NAMESPACE}.svc.cluster.local
----
 apiVersion: v1
 kind: Service
 metadata:
