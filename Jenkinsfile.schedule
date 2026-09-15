@@ -1,0 +1,60 @@
+pipeline {
+    // Scheduled trigger pipeline — fires the main benchmark pipeline on a cron cadence.
+    //
+    // This job lives on the `main` branch and should be configured in Jenkins to use
+    // this file exclusively. It has no build logic of its own — it simply triggers
+    // the main pipeline job with the appropriate parameters.
+    //
+    // Prerequisites:
+    //   - Jenkins Parameterized Scheduler plugin (for parameterizedCron)
+    //   - The main pipeline job must be named "opensearch-benchmark-automation" (adjust
+    //     MAIN_JOB below if your Jenkins job has a different name)
+    agent none
+
+    triggers {
+        parameterizedCron('''
+            # Daily search-compare at 2:07 AM
+            7 2 * * * %PIPELINE=search-compare;ENGINE_TARGET=jvector
+        ''')
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(
+            name: 'PIPELINE',
+            defaultValue: 'search-compare',
+            description: 'Pipeline to trigger on the main job.'
+        )
+        choice(
+            name: 'ENGINE_TARGET',
+            choices: ['jvector', 'faiss', 'lucene', 'all'],
+            description: 'Engine to run.'
+        )
+    }
+
+    stages {
+        stage('Trigger Benchmark') {
+            steps {
+                script {
+                    def mainJob = 'main'
+                    echo "Triggering ${mainJob} — PIPELINE=${params.PIPELINE} ENGINE_TARGET=${params.ENGINE_TARGET}"
+                    build(
+                        job: mainJob,
+                        wait: false,
+                        parameters: [
+                            string(name: 'PIPELINE',       value: params.PIPELINE),
+                            string(name: 'ENGINE_TARGET',  value: params.ENGINE_TARGET),
+                            booleanParam(name: 'SCALE_CLUSTERS',    value: true),
+                            booleanParam(name: 'REDEPLOY_CLUSTERS', value: false),
+                        ]
+                    )
+                }
+            }
+        }
+    }
+}

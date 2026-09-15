@@ -357,9 +357,9 @@ spec:
                     --key /usr/share/opensearch/config/certs/admin-key.pem \
                     https://localhost:9200/_cluster/health?local=true
             initialDelaySeconds: 90
-            periodSeconds: 20
-            timeoutSeconds: 5
-            failureThreshold: 3
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 10
       volumes:
         - name: config
           configMap:
