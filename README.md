@@ -6,7 +6,7 @@ A cloud-native benchmark automation framework for testing OpenSearch vector sear
 
 The primary way to run benchmarks is via the Jenkins pipeline:
 
-**[http://os-perf-jenkins.dev.fyre.ibm.com:8080/job/benchmark-service-runner/](http://os-perf-jenkins.dev.fyre.ibm.com:8080/job/benchmark-service-runner/)**
+**[http://os-perf-jenkins.dev.fyre.ibm.com:8080/job/benchmark-service-runner/](http://os-perf-jenkins.dev.fyre.ibm.com:8080/job/main/)**
 
 > Login with your **IBM ID credentials**.
 
