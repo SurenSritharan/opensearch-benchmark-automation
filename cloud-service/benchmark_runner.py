@@ -104,6 +104,7 @@ def _diff_node_stats(before: Dict, after: Dict) -> Dict:
             'jvm': {
                 'heap_used_percent':      after_node.get('jvm', {}).get('mem', {}).get('heap_used_percent'),
                 'heap_used_mb':           round(after_node.get('jvm', {}).get('mem', {}).get('heap_used_in_bytes', 0) / 1048576, 1),
+                'uptime_ms':              after_node.get('jvm', {}).get('uptime_in_millis'),
                 'gc_young_count_delta':   delta(['jvm', 'gc', 'collectors', 'young', 'collection_count']),
                 'gc_young_time_ms_delta': delta(['jvm', 'gc', 'collectors', 'young', 'collection_time_in_millis']),
                 'gc_old_count_delta':     delta(['jvm', 'gc', 'collectors', 'old', 'collection_count']),
@@ -591,6 +592,8 @@ class BenchmarkRunner:
         active_key: str,
         target_host: str,
         cancel_event: Optional[threading.Event],
+        engine: str = '',
+        results_dir: Optional[Path] = None,
     ) -> subprocess.CompletedProcess:
         """Poll the benchmark subprocess until it finishes, is cancelled, times
         out, or the cluster health watchdog decides to kill it.
@@ -607,22 +610,28 @@ class BenchmarkRunner:
         The distinction is made entirely from the exception type raised by the
         HTTP request — no kubectl or external dependencies required.
 
+        When heap usage on any node exceeds HEAP_DUMP_THRESHOLD_PCT a heap dump
+        is triggered once per node per run via jcmd inside the opensearch
+        container, then copied to results_dir/heap-dumps/.
+
         Returns a CompletedProcess with the exit code, stdout, and stderr.
         """
-        TIMEOUT_SECONDS    = 86400   # 24-hour hard limit
-        POLL_INTERVAL      = 1.0     # seconds between loop iterations
-        HEALTH_INTERVAL    = 60.0    # seconds between cluster health checks
-        RED_TOLERANCE      = 5       # consecutive connection failures → kill
-        BUSY_TOLERANCE     = 60      # consecutive read timeouts → kill
-                                     # 60 × 60 s = 60 min grace; the 24-hour hard limit
-                                     # is the real backstop for CPU-bound work like
-                                     # jvector force-merge (final graph build can take
-                                     # 2-4 h on small nodes for a 1.67M-vector shard)
+        TIMEOUT_SECONDS        = 86400   # 24-hour hard limit
+        POLL_INTERVAL          = 1.0     # seconds between loop iterations
+        HEALTH_INTERVAL        = 60.0    # seconds between cluster health checks
+        RED_TOLERANCE          = 5       # consecutive connection failures → kill
+        BUSY_TOLERANCE         = 60      # consecutive read timeouts → kill
+                                         # 60 × 60 s = 60 min grace; the 24-hour hard limit
+                                         # is the real backstop for CPU-bound work like
+                                         # jvector force-merge (final graph build can take
+                                         # 2-4 h on small nodes for a 1.67M-vector shard)
+        HEAP_DUMP_THRESHOLD_PCT = 95     # trigger a heap dump when any node exceeds this
 
         elapsed            = 0.0
         health_elapsed     = 0.0
         red_consecutive    = 0
         busy_consecutive   = 0
+        heap_dumped_nodes: set = set()   # guard: at most one dump per node per run
         pgid_file          = Path("/workspace/run") / f"job_{active_key}.pgid"
 
         try:
@@ -640,6 +649,14 @@ class BenchmarkRunner:
                 health_elapsed += POLL_INTERVAL
                 if health_elapsed >= HEALTH_INTERVAL:
                     health_elapsed = 0.0
+
+                    # ── Heap-dump check ────────────────────────────────────────
+                    if engine and results_dir:
+                        self._check_and_dump_heap(
+                            target_host, engine, results_dir,
+                            heap_dumped_nodes, HEAP_DUMP_THRESHOLD_PCT, job_id,
+                        )
+
                     status, timed_out = self._poll_cluster_health(target_host)
                     if status in ('green', 'yellow'):
                         red_consecutive  = 0
@@ -848,6 +865,70 @@ class BenchmarkRunner:
 
         self.profiler_thread = threading.Thread(target=_run_profiler, daemon=True)
         self.profiler_thread.start()
+
+    def _check_and_dump_heap(
+        self,
+        target_host: str,
+        engine: str,
+        results_dir: Path,
+        dumped_nodes: set,
+        threshold_pct: int,
+        job_id: str,
+    ) -> None:
+        """Check heap usage on all nodes; trigger a jcmd heap dump for any node
+        that exceeds threshold_pct and has not already been dumped this run.
+
+        The dump file is written to /tmp inside the opensearch container then
+        copied to results_dir/heap-dumps/<pod>-heapdump.hprof via kubectl cp.
+        Errors are logged as warnings — a failed dump never affects the run.
+        """
+        stats = _fetch_node_stats(target_host)
+        if not stats:
+            return
+
+        namespace = get_os_namespace(engine)
+
+        for node_id, node in stats.get('nodes', {}).items():
+            node_name = node.get('name', node_id)
+            heap_pct  = node.get('jvm', {}).get('mem', {}).get('heap_used_percent', 0)
+
+            if heap_pct < threshold_pct or node_name in dumped_nodes:
+                continue
+
+            logger.warning(
+                f"[heap-dump] Job {job_id}: node {node_name!r} heap at {heap_pct}% "
+                f"(>= {threshold_pct}%) — triggering heap dump"
+            )
+            dumped_nodes.add(node_name)  # mark before attempting so a slow dump isn't re-triggered
+
+            # Find the pod for this OpenSearch node (pod name == node name in our clusters)
+            remote_path = f'/tmp/heapdump-{node_name}.hprof'
+            dump_dir    = results_dir / 'heap-dumps'
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            local_path  = dump_dir / f'{node_name}-heapdump.hprof'
+
+            try:
+                r = subprocess.run(
+                    ['kubectl', 'exec', node_name, '-c', 'opensearch', '-n', namespace, '--',
+                     'jcmd', '1', 'GC.heap_dump', remote_path],
+                    capture_output=True, text=True, timeout=120,
+                )
+                if r.returncode != 0:
+                    logger.warning(f"[heap-dump] jcmd failed on {node_name}: {r.stderr.strip()}")
+                    continue
+
+                cp = subprocess.run(
+                    ['kubectl', 'cp',
+                     f'{namespace}/{node_name}:{remote_path}', str(local_path),
+                     '-c', 'opensearch'],
+                    capture_output=True, text=True, timeout=300,
+                )
+                if cp.returncode == 0:
+                    logger.info(f"[heap-dump] Saved: {local_path}")
+                else:
+                    logger.warning(f"[heap-dump] kubectl cp failed for {node_name}: {cp.stderr.strip()}")
+            except Exception as e:
+                logger.warning(f"[heap-dump] Error collecting heap dump from {node_name}: {e}")
 
     def _stop_profiling(self) -> None:
         """Signal the profiler thread to stop waiting and collect, then join it.
@@ -1139,7 +1220,7 @@ class BenchmarkRunner:
                 with self._log_level_override(log_level):
                     try:
                         proc   = self._launch_process(cmd, env, active_key, cancel_event)
-                        result = self._poll_until_done(proc, cmd, job_id, active_key, ctx.target_host, cancel_event)
+                        result = self._poll_until_done(proc, cmd, job_id, active_key, ctx.target_host, cancel_event, engine=engine, results_dir=ctx.results_dir)
                     finally:
                         end_time = datetime.utcnow()
                         self._save_server_stats(ctx.results_dir, start_time, end_time, ctx.target_host, stats_before)
