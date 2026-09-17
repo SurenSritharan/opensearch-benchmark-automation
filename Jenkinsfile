@@ -1070,8 +1070,13 @@ EOF
 
                                     echo "Waiting for ${engine} job \$JOB_ID to stop..."
                                     for attempt in \$(seq 1 12); do
-                                        STATUS=\$(curl -s "${apiUrl}/api/v1/benchmark/\$JOB_ID?engine=${engine}" \
-                                            | jq -r '.status // "unknown"')
+                                        RESP=\$(curl -s "${apiUrl}/api/v1/benchmark/\$JOB_ID?engine=${engine}")
+                                        STATUS=\$(echo "\$RESP" | jq -r '.status // "unknown"')
+                                        SRV_ERR=\$(echo "\$RESP" | jq -r '.error // empty')
+                                        if [ -n "\$SRV_ERR" ]; then
+                                            echo "  [${engine}] job \$JOB_ID not found on server — skipping wait"
+                                            break
+                                        fi
                                         echo "  [${engine}] status: \$STATUS"
                                         case "\$STATUS" in
                                             completed|failed|partial|cancelled|error) break ;;
