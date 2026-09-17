@@ -600,6 +600,39 @@ while true; do
   terminal=false
   case "$job_status" in completed|failed|error|partial|cancelled) terminal=true ;; esac
 
+  # ── Heap dump requests ────────────────────────────────────────────────────────
+  # benchmark_runner signals when a node crosses the heap threshold. We have
+  # kubectl here on the Jenkins agent, so we execute jcmd + cp and ack to clear.
+  while IFS= read -r req; do
+    [ -z "$req" ] && continue
+    hd_node=$(echo "$req"      | jq -r '.node')
+    hd_ns=$(echo "$req"        | jq -r '.namespace')
+    hd_pct=$(echo "$req"       | jq -r '.heap_pct')
+    [ -z "$hd_node" ] || [ "$hd_node" = "null" ] && continue
+
+    echo "$now  [heap-dump] Node ${hd_node} at ${hd_pct}% — collecting heap dump..."
+    hd_remote="/tmp/heapdump-${hd_node}.hprof"
+    hd_local="${RESULTS_DEST:-/tmp}/heap-dumps/${hd_node}-heapdump.hprof"
+    mkdir -p "$(dirname "$hd_local")"
+
+    # Trigger jcmd inside the OpenSearch container
+    if kubectl exec "${hd_node}" -c opensearch -n "${hd_ns}" -- \
+        jcmd 1 GC.heap_dump "${hd_remote}" 2>/dev/null; then
+      # Copy the dump to the Jenkins workspace
+      if kubectl cp -c opensearch "${hd_ns}/${hd_node}:${hd_remote}" "${hd_local}" 2>/dev/null; then
+        echo "$now  [heap-dump] Saved: ${hd_local}"
+      else
+        echo "$now  [heap-dump] WARNING: kubectl cp failed for ${hd_node}"
+      fi
+    else
+      echo "$now  [heap-dump] WARNING: jcmd failed on ${hd_node}"
+    fi
+
+    # Ack to clear the request regardless of success — avoid re-triggering
+    curl -s -X POST "${API_URL}/api/v1/benchmark/${JOB_ID}/heap-dump-ack?node=${hd_node}&engine=${ENGINE}" \
+      > /dev/null || true
+  done < <(echo "$resp" | jq -c '.heap_dump_requests // [] | .[]')
+
   # Print any newly failed scenarios — runs every poll, not just on label change,
   # so failures from scenarios that complete between polls are never silently dropped.
   FAILURES=$(echo "$resp" | jq -r '

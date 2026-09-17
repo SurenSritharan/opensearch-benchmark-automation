@@ -1433,6 +1433,40 @@ def cancel_job(job_id: str):
         }), 400
 
 
+
+@app.route('/api/v1/benchmark/<job_id>/heap-dump-ack', methods=['POST'])
+def heap_dump_ack(job_id: str):
+    """Acknowledge a heap dump request — called by run-pipeline.sh after it has
+    executed kubectl exec jcmd + kubectl cp. Removes the matching entry from
+    heap_dump_requests so the same node is not triggered again.
+
+    Query params:
+      node    — required  node name to acknowledge  e.g. "opensearch-data-1"
+      engine  — optional  route to the correct worker
+    """
+    if not _IS_WORKER:
+        engine = request.args.get('engine') or _engine_from_job_id(job_id)
+        if not engine:
+            return jsonify({'error': 'Job not found'}), 404
+        return _proxy(engine, f'/api/v1/benchmark/{job_id}/heap-dump-ack', method='POST')
+
+    node = request.args.get('node', '')
+    if not node:
+        return jsonify({'error': 'node query param is required'}), 400
+
+    job = get_job(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+
+    before = job.get('heap_dump_requests', [])
+    job['heap_dump_requests'] = [r for r in before if r.get('node') != node]
+    save_job(job_id, job)
+
+    logger.info(f"[heap-dump] Ack received for job {job_id} node {node!r}")
+    return jsonify({'acknowledged': node})
+
+
+
 @app.route('/api/v1/benchmark/<job_id>', methods=['DELETE'])
 def delete_job(job_id: str):
     """
@@ -1779,7 +1813,8 @@ def get_live_status(job_id: str):
         'completed_at': job.get('completed_at'),
         'current_scenario': job.get('current_scenario'),
         'current_scenario_index': job.get('current_scenario_index', 0),
-        'scenario_status': job.get('scenario_status', {}),
+        'scenario_status':    job.get('scenario_status', {}),
+        'heap_dump_requests': job.get('heap_dump_requests', []),
         'scenario_times': job.get('scenario_times', {}),
         # Ordered list of scenarios so the frontend can render them in sequence
         'scenarios': [
