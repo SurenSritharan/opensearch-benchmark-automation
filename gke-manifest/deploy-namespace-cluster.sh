@@ -128,9 +128,29 @@ echo "Initiating deletion of StatefulSets and Pods..."
 kubectl delete statefulset --all -n $NAMESPACE --ignore-not-found=true --wait=false
 kubectl delete pod --all -n $NAMESPACE --ignore-not-found=true --wait=false
 
-# Explicitly wait for pods to terminate to release PVC locks (finalizers)
+# Explicitly wait for pods to terminate to release PVC locks (finalizers).
+# Do NOT silently continue if pods are still running — the benchmark may start
+# against a mix of old and new pods, producing invalid results.
+# Strategy: wait 300s, and if pods remain, re-issue the delete signal and wait
+# another 300s before giving up.
 echo "Waiting for pods to terminate..."
-kubectl wait --for=delete pod --all -n $NAMESPACE --timeout=120s 2>/dev/null || true
+if ! kubectl wait --for=delete pod --all -n $NAMESPACE --timeout=300s 2>/dev/null; then
+    REMAINING=$(kubectl get pods -n $NAMESPACE --no-headers 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$REMAINING" -gt 0 ]; then
+        echo "⚠️  Pods still present after 300s — re-issuing delete and waiting another 300s..."
+        kubectl get pods -n $NAMESPACE
+        kubectl delete pod --all -n $NAMESPACE --ignore-not-found=true --wait=false
+        if ! kubectl wait --for=delete pod --all -n $NAMESPACE --timeout=300s 2>/dev/null; then
+            REMAINING=$(kubectl get pods -n $NAMESPACE --no-headers 2>/dev/null | wc -l | tr -d ' ')
+            if [ "$REMAINING" -gt 0 ]; then
+                echo "❌ Pods did not terminate within 600s — refusing to proceed to avoid mixed-pod benchmark runs"
+                kubectl get pods -n $NAMESPACE
+                exit 1
+            fi
+        fi
+        echo "✅ Pods terminated after retry"
+    fi
+fi
 
 # Delete services
 kubectl delete service --all -n $NAMESPACE --ignore-not-found=true --wait=false

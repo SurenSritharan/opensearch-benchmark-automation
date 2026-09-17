@@ -875,18 +875,23 @@ class BenchmarkRunner:
         threshold_pct: int,
         job_id: str,
     ) -> None:
-        """Check heap usage on all nodes; trigger a jcmd heap dump for any node
-        that exceeds threshold_pct and has not already been dumped this run.
-
-        The dump file is written to /tmp inside the opensearch container then
-        copied to results_dir/heap-dumps/<pod>-heapdump.hprof via kubectl cp.
-        Errors are logged as warnings — a failed dump never affects the run.
+        """Check heap usage on all nodes; signal Jenkins to collect a heap dump
+        for any node that exceeds threshold_pct and has not already been dumped
+        this run.
+        Errors are logged as warnings — a failed signal never affects the run.
         """
         stats = _fetch_node_stats(target_host)
         if not stats:
             return
 
         namespace = get_os_namespace(engine)
+
+        # job_id may be a nested path like "20260917-024756-71a65b16/jvector/scenario"
+        # — the top-level job key is the first segment.
+        job_key = job_id.split('/')[0]
+        job_data = get_job(job_key)
+        if job_data is None:
+            return
 
         for node_id, node in stats.get('nodes', {}).items():
             node_name = node.get('name', node_id)
@@ -897,38 +902,17 @@ class BenchmarkRunner:
 
             logger.warning(
                 f"[heap-dump] Job {job_id}: node {node_name!r} heap at {heap_pct}% "
-                f"(>= {threshold_pct}%) — triggering heap dump"
+                f"(>= {threshold_pct}%) — signalling Jenkins to collect heap dump"
             )
-            dumped_nodes.add(node_name)  # mark before attempting so a slow dump isn't re-triggered
+            dumped_nodes.add(node_name)  # mark before writing so a slow write isn't re-triggered
 
-            # Find the pod for this OpenSearch node (pod name == node name in our clusters)
-            remote_path = f'/tmp/heapdump-{node_name}.hprof'
-            dump_dir    = results_dir / 'heap-dumps'
-            dump_dir.mkdir(parents=True, exist_ok=True)
-            local_path  = dump_dir / f'{node_name}-heapdump.hprof'
-
-            try:
-                r = subprocess.run(
-                    ['kubectl', 'exec', node_name, '-c', 'opensearch', '-n', namespace, '--',
-                     'jcmd', '1', 'GC.heap_dump', remote_path],
-                    capture_output=True, text=True, timeout=120,
-                )
-                if r.returncode != 0:
-                    logger.warning(f"[heap-dump] jcmd failed on {node_name}: {r.stderr.strip()}")
-                    continue
-
-                cp = subprocess.run(
-                    ['kubectl', 'cp',
-                     f'{namespace}/{node_name}:{remote_path}', str(local_path),
-                     '-c', 'opensearch'],
-                    capture_output=True, text=True, timeout=300,
-                )
-                if cp.returncode == 0:
-                    logger.info(f"[heap-dump] Saved: {local_path}")
-                else:
-                    logger.warning(f"[heap-dump] kubectl cp failed for {node_name}: {cp.stderr.strip()}")
-            except Exception as e:
-                logger.warning(f"[heap-dump] Error collecting heap dump from {node_name}: {e}")
+            requests = job_data.setdefault('heap_dump_requests', [])
+            requests.append({
+                'node':      node_name,
+                'namespace': namespace,
+                'heap_pct':  heap_pct,
+            })
+            save_job(job_key, job_data)
 
     def _stop_profiling(self) -> None:
         """Signal the profiler thread to stop waiting and collect, then join it.
