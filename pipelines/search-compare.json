@@ -3,6 +3,7 @@
   "engine": "__ENGINE__",
   "versions": ["3.7.0", "3.8.0"],
   "node_sizes": ["small", "medium"],
+  "restart_after_build": true,
   "first_run_steps": [
     { "dataset": "cohere-wiki-en-768",  "scenario": "create-index",    "params": { "corpus_size": "1m" } },
     { "dataset": "cohere-wiki-en-768",  "scenario": "bulk-ingest-data", "params": { "corpus_size": "1m" } },
