@@ -38,6 +38,7 @@ set -euo pipefail
 PIPELINE_FILE=""
 CLI_LOG_LEVEL=""
 FIRST_RUN=false
+BUILD_ONLY=false
 ENABLE_PROFILING=false
 PROFILING_DURATION=60
 STATS_INTERVAL=0   # 0 = disabled; >0 = poll _nodes/stats every N seconds
@@ -52,6 +53,11 @@ while true; do
       shift 2
       ;;
     --first-run)
+      FIRST_RUN=true
+      shift
+      ;;
+    --build-only)
+      BUILD_ONLY=true
       FIRST_RUN=true
       shift
       ;;
@@ -120,11 +126,16 @@ PIPELINE_SWEEPS=$(echo "$PIPELINE_JSON" | jq '.parameter_sweeps // [{}]')
 USERNAME=$(echo "$PIPELINE_PARAMS" | jq -r '.username // ""')
 PASSWORD=$(echo "$PIPELINE_PARAMS" | jq -r '.password // ""')
 
-# When --first-run is set and the pipeline defines first_run_steps, prepend them
-# to steps so the first run does: build (first_run_steps) + search (steps).
-# Without --first-run, or when first_run_steps is absent, only steps runs.
+# Step selection:
+#   --build-only  → first_run_steps only  (build the index, no search)
+#   --first-run   → first_run_steps + steps  (build then search)
+#   (default)     → steps only  (search only, reuse existing index)
 if [ "$FIRST_RUN" = true ] && echo "$PIPELINE_JSON" | jq -e '.first_run_steps | length > 0' > /dev/null 2>&1; then
-  EFFECTIVE_STEPS=$(echo "$PIPELINE_JSON" | jq '.first_run_steps + .steps')
+  if [ "$BUILD_ONLY" = true ]; then
+    EFFECTIVE_STEPS=$(echo "$PIPELINE_JSON" | jq '.first_run_steps')
+  else
+    EFFECTIVE_STEPS=$(echo "$PIPELINE_JSON" | jq '.first_run_steps + .steps')
+  fi
 else
   EFFECTIVE_STEPS=$(echo "$PIPELINE_JSON" | jq '.steps')
 fi

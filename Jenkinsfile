@@ -438,6 +438,10 @@ print(json.dumps(s))
                     // first run). Useful when you want ingest perf data for each version, not just
                     // search. PVCs are still preserved — create-index + bulk-ingest overwrite in-place.
                     def rebuildOnVersionChange = pipelineJson.rebuild_on_version_change == true
+                    // When true, the cluster is restarted after first_run_steps complete and before
+                    // the first search run — ensures all version/size comparisons start from the
+                    // same cold JVM/cache state.
+                    def restartAfterBuild     = pipelineJson.restart_after_build == true
 
                     // Resolve dataset cache files to seed (same logic as the old Seed Dataset Cache stage).
                     def corpusSizeVal  = pipelineJson.params?.corpus_size
@@ -724,12 +728,18 @@ print(json.dumps(s))
                                             }
                                         }
 
-                                        // On the first run, --first-run is passed so run-pipeline.sh
-                                        // reads first_run_steps (build + search). All subsequent runs
-                                        // omit the flag and use steps (search-only), reusing the PVC.
+                                        // Build phase: when restart_after_build is set, run first_run_steps
+                                        // alone (--build-only), then redeploy the cluster to get a cold
+                                        // JVM/cache state, then run search steps as a separate call.
+                                        // Without restart_after_build, --first-run runs both phases together
+                                        // (existing behaviour for all other pipelines).
                                         // RESULTS_DEST + WORKER_POD are consumed by run-pipeline.sh's
                                         // incremental copy helper so each scenario is pulled to the
                                         // Jenkins workspace as soon as it finishes.
+                                        def buildFlag = (hasFirstRunSteps && runFirstRunSteps)
+                                            ? (restartAfterBuild ? "--build-only" : "--first-run")
+                                            : ""
+
                                         sh """
                                             set +e
                                             DEST="${RESULTS_DIR}/${runKey}/test-runs/${engine}"
@@ -741,7 +751,7 @@ print(json.dumps(s))
                                             WORKER_POD="opensearch-benchmark-worker-${engine}-0" \
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
-                                                ${hasFirstRunSteps && runFirstRunSteps ? "--first-run" : ""} \
+                                                ${buildFlag} \
                                                 ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
@@ -758,6 +768,118 @@ print(json.dumps(s))
 
                                             exit \$PIPE_RC
                                         """
+
+                                        // After --build-only: redeploy the cluster (same version + size,
+                                        // preserve PVCs) to clear JVM heap and OS page cache, then run
+                                        // search steps so the first comparison run starts cold.
+                                        if (hasFirstRunSteps && runFirstRunSteps && restartAfterBuild) {
+                                            sh """
+                                                echo "Restarting cluster ${ns} after build to ensure cold start for search..."
+                                                gke-manifest/deploy-namespace-cluster.sh ${ns} --version ${version} --node-size ${runSize} --force
+
+                                                kubectl rollout status statefulset/opensearch-cluster-manager -n ${ns} --timeout=600s
+
+                                                echo "Waiting for opensearch-data pods to be Running in ${ns}..."
+                                                RUNNING=0
+                                                LAST_PROGRESS=\${SECONDS}
+                                                STALL_LIMIT=900
+                                                while true; do
+                                                    NEW_RUNNING=\$(kubectl get pods -n ${ns} -l app=opensearch-data --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l | tr -d ' ')
+                                                    TOTAL=\$(kubectl get pods -n ${ns} -l app=opensearch-data --no-headers 2>/dev/null | wc -l | tr -d ' ')
+                                                    echo "  [${ns}] data pods Running: \${NEW_RUNNING}/\${TOTAL}"
+                                                    if [ "\$NEW_RUNNING" -ge 3 ] && [ "\$TOTAL" -ge 3 ]; then
+                                                        echo "  ✅ [${ns}] all data pods Running"
+                                                        break
+                                                    fi
+                                                    if [ "\$NEW_RUNNING" -gt "\$RUNNING" ]; then
+                                                        RUNNING=\$NEW_RUNNING
+                                                        LAST_PROGRESS=\${SECONDS}
+                                                    fi
+                                                    STALLED=\$((SECONDS - LAST_PROGRESS))
+                                                    if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
+                                                        echo "❌ [${ns}] data pods stalled at \${RUNNING}/3 for \${STALL_LIMIT}s — giving up"
+                                                        exit 1
+                                                    fi
+                                                    sleep 10
+                                                done
+
+                                                WORKER_POD="opensearch-benchmark-worker-${engine}-0"
+                                                WORKER_NS="${apiNs}"
+                                                OS_HOST="opensearch-cluster.${ns}.svc.cluster.local:9200"
+                                                echo "Waiting for ${ns} cluster health (green + 0 initializing shards)..."
+                                                LAST_PROGRESS=\${SECONDS}
+                                                LAST_ACTIVE=9999
+                                                STALL_LIMIT=7200
+                                                RETRIED=0
+                                                while true; do
+                                                    HEALTH=\$(kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
+                                                        curl -s --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
+                                                        "https://\$OS_HOST/_cluster/health" 2>/dev/null || echo "{}")
+                                                    STATUS=\$(echo "\$HEALTH" | grep -o '"status":"[^"]*"' | cut -d'"' -f4)
+                                                    [ -z "\$STATUS" ] && STATUS="unknown"
+                                                    INIT=\$(echo "\$HEALTH" | grep -o '"initializing_shards":[0-9]*' | cut -d':' -f2)
+                                                    [ -z "\$INIT" ] && INIT=0
+                                                    ACTIVE=\$(kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
+                                                        curl -s --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
+                                                        "https://\$OS_HOST/_cat/recovery?h=stage&active_only=true" 2>/dev/null \
+                                                        | grep -c .) || ACTIVE=0
+                                                    if [ "\$STATUS" = "green" ] && [ "\$INIT" -eq 0 ]; then
+                                                        echo "  ✅ [${ns}] cluster green after restart — ready for search"
+                                                        break
+                                                    fi
+                                                    STALLED=\$((SECONDS - LAST_PROGRESS))
+                                                    echo "  [${ns}] status=\${STATUS}  initializing=\${INIT}  active_recoveries=\${ACTIVE}  (stall \${STALLED}s/\${STALL_LIMIT}s)"
+                                                    if [ "\$ACTIVE" -lt "\$LAST_ACTIVE" ]; then
+                                                        LAST_PROGRESS=\${SECONDS}
+                                                    fi
+                                                    LAST_ACTIVE=\$ACTIVE
+                                                    STALLED=\$((SECONDS - LAST_PROGRESS))
+                                                    if [ "\$STALLED" -ge "\$STALL_LIMIT" ]; then
+                                                        if [ "\$RETRIED" -eq 0 ]; then
+                                                            echo "⚠️  [${ns}] shard recovery stalled for \${STALL_LIMIT}s — retrying failed shards"
+                                                            kubectl exec -n \$WORKER_NS \$WORKER_POD -c worker -- \
+                                                                curl -s -X POST --cert /certs/admin.pem --key /certs/admin-key.pem --cacert /certs/root-ca.pem \
+                                                                "https://\$OS_HOST/_cluster/reroute?retry_failed=true" > /dev/null || true
+                                                            RETRIED=1
+                                                            LAST_PROGRESS=\${SECONDS}
+                                                            LAST_ACTIVE=9999
+                                                        else
+                                                            echo "❌ [${ns}] shard recovery stalled for \${STALL_LIMIT}s after retry — giving up"
+                                                            exit 1
+                                                        fi
+                                                    fi
+                                                    sleep 10
+                                                done
+                                            """
+
+                                            sh """
+                                                set +e
+                                                DEST="${RESULTS_DIR}/${runKey}/test-runs/${engine}"
+                                                mkdir -p "\$DEST"
+                                                API_URL=${apiUrl} \
+                                                RESULTS_DEST="\$DEST" \
+                                                OS_NAMESPACE="${ns}" \
+                                                API_NAMESPACE="${apiNs}" \
+                                                WORKER_POD="opensearch-benchmark-worker-${engine}-0" \
+                                                cloud-service/scripts/run-pipeline.sh \
+                                                    --pipeline ${pipeline} \
+                                                    ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
+                                                    ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
+                                                    ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
+                                                    ${params.STATS_INTERVAL?.trim() ? "--stats-interval ${params.STATS_INTERVAL.trim()}" : ""} \
+                                                    ${engine} \
+                                                    2>&1 | tee benchmark-run-${engine}-${versionLabel}-${runSize}-search.log
+                                                PIPE_RC=\${PIPESTATUS[0]}
+
+                                                JOB_ID=\$(grep -oP '(?<=Job ID: )\\S+' benchmark-run-${engine}-${versionLabel}-${runSize}-search.log | tail -1 || true)
+                                                if [ -n "\$JOB_ID" ]; then
+                                                    echo "\$JOB_ID" > job_id_${engine}-${versionLabel}-${runSize}.txt
+                                                    echo "[${engine}] Job ID captured: \$JOB_ID"
+                                                fi
+
+                                                exit \$PIPE_RC
+                                            """
+                                        }
 
                                         // ── b2) Post-ingest ACL verification ───────────────
                                         // Only for ACL pipelines. Confirms after all benchmark

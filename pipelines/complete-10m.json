@@ -1,7 +1,7 @@
 {
   "description": "Full run — wiki + msmarco at 10M (create, ingest, merge, search k=100 + k=10)",
   "engine": "__ENGINE__",
-  "node_sizes": ["medium"],
+  "node_sizes": ["small"],
   "params": { "corpus_size": "10m" },
   "steps": [
     { "dataset": "cohere-wiki-en-768",  "scenario": "delete-index" },
