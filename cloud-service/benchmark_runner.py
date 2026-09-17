@@ -152,6 +152,16 @@ class BenchmarkRunner:
         # Maps job_id -> (Popen process, cancel_event) for active benchmarks
         self._active: Dict[str, tuple] = {}
         self._active_lock = threading.Lock()
+        # Callbacks injected by app.py to read/write job state without a circular import.
+        # Set via set_job_callbacks() before running any benchmarks.
+        self._get_job_fn = None
+        self._save_job_fn = None
+
+    def set_job_callbacks(self, get_job_fn, save_job_fn) -> None:
+        """Inject get_job / save_job from app.py so benchmark_runner can signal
+        heap dump requests without importing app.py (which would be circular)."""
+        self._get_job_fn = get_job_fn
+        self._save_job_fn = save_job_fn
 
     # ── 1. Setup ──────────────────────────────────────────────────────────────
 
@@ -651,7 +661,7 @@ class BenchmarkRunner:
                     health_elapsed = 0.0
 
                     # ── Heap-dump check ────────────────────────────────────────
-                    if engine and results_dir:
+                    if engine and results_dir and self._get_job_fn and self._save_job_fn:
                         self._check_and_dump_heap(
                             target_host, engine, results_dir,
                             heap_dumped_nodes, HEAP_DUMP_THRESHOLD_PCT, job_id,
@@ -878,6 +888,9 @@ class BenchmarkRunner:
         """Check heap usage on all nodes; signal Jenkins to collect a heap dump
         for any node that exceeds threshold_pct and has not already been dumped
         this run.
+
+        Uses self._get_job_fn / self._save_job_fn callbacks (injected by app.py)
+        to read and write job state without importing app.py (which would be circular).
         Errors are logged as warnings — a failed signal never affects the run.
         """
         stats = _fetch_node_stats(target_host)
@@ -889,7 +902,11 @@ class BenchmarkRunner:
         # job_id may be a nested path like "20260917-024756-71a65b16/jvector/scenario"
         # — the top-level job key is the first segment.
         job_key = job_id.split('/')[0]
-        job_data = get_job(job_key)
+        try:
+            job_data = self._get_job_fn(job_key)
+        except Exception as e:
+            logger.warning(f"[heap-dump] Could not read job {job_key}: {e}")
+            return
         if job_data is None:
             return
 
@@ -906,13 +923,16 @@ class BenchmarkRunner:
             )
             dumped_nodes.add(node_name)  # mark before writing so a slow write isn't re-triggered
 
-            requests = job_data.setdefault('heap_dump_requests', [])
-            requests.append({
+            heap_requests = job_data.setdefault('heap_dump_requests', [])
+            heap_requests.append({
                 'node':      node_name,
                 'namespace': namespace,
                 'heap_pct':  heap_pct,
             })
-            save_job(job_key, job_data)
+            try:
+                self._save_job_fn(job_key, job_data)
+            except Exception as e:
+                logger.warning(f"[heap-dump] Could not save heap dump request for {node_name}: {e}")
 
     def _stop_profiling(self) -> None:
         """Signal the profiler thread to stop waiting and collect, then join it.

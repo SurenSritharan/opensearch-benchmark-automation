@@ -339,6 +339,10 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
             job['result'] = json.loads(job['result']) if job['result'] else {}
             return _restore_batch_fields(job)
 
+# Wire get_job / save_job into benchmark_runner now that both are defined.
+# This avoids a circular import — benchmark_runner.py cannot import from app.py.
+benchmark_runner.set_job_callbacks(get_job, save_job)
+
 def get_all_jobs(limit: int = 50) -> list:
     """Get all jobs from the database"""
     with db_lock:
