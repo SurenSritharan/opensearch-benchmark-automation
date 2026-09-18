@@ -156,12 +156,21 @@ class BenchmarkRunner:
         # Set via set_job_callbacks() before running any benchmarks.
         self._get_job_fn = None
         self._save_job_fn = None
+        # Atomic heap-dump append callback — avoids the read-modify-write race
+        # between _check_and_dump_heap and process_batch_job's scenario saves.
+        self._append_heap_dump_fn = None
 
     def set_job_callbacks(self, get_job_fn, save_job_fn) -> None:
         """Inject get_job / save_job from app.py so benchmark_runner can signal
         heap dump requests without importing app.py (which would be circular)."""
         self._get_job_fn = get_job_fn
         self._save_job_fn = save_job_fn
+
+    def set_append_heap_dump_callback(self, append_heap_dump_fn) -> None:
+        """Inject the atomic append_heap_dump_request callback from app.py.
+        When set, _check_and_dump_heap uses this instead of a full read-modify-write
+        so heap_dump_requests are never lost to a concurrent scenario save."""
+        self._append_heap_dump_fn = append_heap_dump_fn
 
     # ── 1. Setup ──────────────────────────────────────────────────────────────
 
@@ -661,7 +670,13 @@ class BenchmarkRunner:
                     health_elapsed = 0.0
 
                     # ── Heap-dump check ────────────────────────────────────────
-                    if engine and results_dir and self._get_job_fn and self._save_job_fn:
+                    # Requires the atomic append callback (preferred) or at minimum
+                    # the legacy get/save pair so _check_and_dump_heap can persist
+                    # the signal.
+                    if engine and results_dir and (
+                        self._append_heap_dump_fn or
+                        (self._get_job_fn and self._save_job_fn)
+                    ):
                         self._check_and_dump_heap(
                             target_host, engine, results_dir,
                             heap_dumped_nodes, HEAP_DUMP_THRESHOLD_PCT, job_id,
@@ -889,9 +904,9 @@ class BenchmarkRunner:
         for any node that exceeds threshold_pct and has not already been dumped
         this run.
 
-        Uses self._get_job_fn / self._save_job_fn callbacks (injected by app.py)
-        to read and write job state without importing app.py (which would be circular).
-        Errors are logged as warnings — a failed signal never affects the run.
+        Uses self._append_heap_dump_fn (preferred — atomic under db_lock) or falls
+        back to self._get_job_fn / self._save_job_fn when the atomic callback is not
+        set. Errors are logged as warnings — a failed signal never affects the run.
         """
         stats = _fetch_node_stats(target_host)
         if not stats:
@@ -902,13 +917,6 @@ class BenchmarkRunner:
         # job_id may be a nested path like "20260917-024756-71a65b16/jvector/scenario"
         # — the top-level job key is the first segment.
         job_key = job_id.split('/')[0]
-        try:
-            job_data = self._get_job_fn(job_key)
-        except Exception as e:
-            logger.warning(f"[heap-dump] Could not read job {job_key}: {e}")
-            return
-        if job_data is None:
-            return
 
         for node_id, node in stats.get('nodes', {}).items():
             node_name = node.get('name', node_id)
@@ -923,16 +931,26 @@ class BenchmarkRunner:
             )
             dumped_nodes.add(node_name)  # mark before writing so a slow write isn't re-triggered
 
-            heap_requests = job_data.setdefault('heap_dump_requests', [])
-            heap_requests.append({
-                'node':      node_name,
-                'namespace': namespace,
-                'heap_pct':  heap_pct,
-            })
-            try:
-                self._save_job_fn(job_key, job_data)
-            except Exception as e:
-                logger.warning(f"[heap-dump] Could not save heap dump request for {node_name}: {e}")
+            entry = {'node': node_name, 'namespace': namespace, 'heap_pct': heap_pct}
+
+            if self._append_heap_dump_fn:
+                # Preferred path: atomic append under db_lock in app.py.
+                # Avoids the race where process_batch_job's concurrent save_job call
+                # overwrites heap_dump_requests with a stale copy that lacks this entry.
+                try:
+                    self._append_heap_dump_fn(job_key, entry)
+                except Exception as e:
+                    logger.warning(f"[heap-dump] Could not save heap dump request for {node_name}: {e}")
+            else:
+                # Fallback: full read-modify-write (original behaviour).
+                try:
+                    job_data = self._get_job_fn(job_key)
+                    if job_data is None:
+                        continue
+                    job_data.setdefault('heap_dump_requests', []).append(entry)
+                    self._save_job_fn(job_key, job_data)
+                except Exception as e:
+                    logger.warning(f"[heap-dump] Could not save heap dump request for {node_name}: {e}")
 
     def _stop_profiling(self) -> None:
         """Signal the profiler thread to stop waiting and collect, then join it.
