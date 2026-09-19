@@ -274,6 +274,7 @@ def _restore_batch_fields(job: Dict[str, Any]) -> Dict[str, Any]:
         job['scenario_times'] = batch_meta.get('scenario_times', {})
         job['current_scenario'] = batch_meta.get('current_scenario')
         job['current_scenario_index'] = batch_meta.get('current_scenario_index', 0)
+        job['heap_dump_requests'] = batch_meta.get('heap_dump_requests', [])
     return job
 
 
@@ -295,7 +296,8 @@ def save_job(job_id: str, job_data: Dict[str, Any]):
                     'scenario_results': job_data.get('scenario_results', {}),
                     'scenario_times': job_data.get('scenario_times', {}),
                     'current_scenario': job_data.get('current_scenario'),
-                    'current_scenario_index': job_data.get('current_scenario_index', 0)
+                    'current_scenario_index': job_data.get('current_scenario_index', 0),
+                    'heap_dump_requests': job_data.get('heap_dump_requests', []),
                 }
                 options_json = json.dumps(options_data)
             
@@ -339,9 +341,77 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
             job['result'] = json.loads(job['result']) if job['result'] else {}
             return _restore_batch_fields(job)
 
+def append_heap_dump_request(job_id: str, entry: Dict[str, Any]) -> None:
+    """Atomically append a heap dump request to a job's heap_dump_requests list.
+
+    Performs the read-modify-write entirely under db_lock so that a concurrent
+    save_job call from process_batch_job cannot overwrite the list with a stale
+    copy that omits this entry.  Idempotent: a duplicate entry for the same node
+    is not appended if one is already present.
+    """
+    with db_lock:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,))
+            row = cursor.fetchone()
+            if not row:
+                return
+            job = dict(row)
+            job['options'] = json.loads(job['options']) if job['options'] else {}
+            job['result']  = json.loads(job['result'])  if job['result']  else {}
+            job = _restore_batch_fields(job)
+
+            requests = job.setdefault('heap_dump_requests', [])
+            # Idempotent: skip if a request for this node is already queued.
+            if any(r.get('node') == entry.get('node') for r in requests):
+                return
+            requests.append(entry)
+
+            # Persist — re-use save_job logic but we already hold db_lock, so
+            # call the inner INSERT directly to avoid a deadlock on the RLock.
+            options_data = job.get('options', {}).copy()
+            if 'scenarios' in job and isinstance(job['scenarios'], list):
+                options_data['_batch_scenarios'] = job['scenarios']
+                options_data['_batch_metadata'] = {
+                    'results_base':            job.get('results_base'),
+                    'scenario_status':         job.get('scenario_status', {}),
+                    'scenario_results':        job.get('scenario_results', {}),
+                    'scenario_times':          job.get('scenario_times', {}),
+                    'current_scenario':        job.get('current_scenario'),
+                    'current_scenario_index':  job.get('current_scenario_index', 0),
+                    'heap_dump_requests':      requests,
+                }
+            options_json = json.dumps(options_data)
+            result_json  = json.dumps(job.get('result', {})) if 'result' in job else None
+            conn.execute("""
+                INSERT OR REPLACE INTO jobs
+                (job_id, status, dataset, engine, scenario, ui_scenario,
+                 created_at, started_at, completed_at, last_heartbeat_at,
+                 options, result, error, queue_position)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                job_id,
+                job.get('status'),
+                job.get('dataset'),
+                job.get('engine'),
+                job.get('scenario'),
+                job.get('ui_scenario'),
+                job.get('created_at'),
+                job.get('started_at'),
+                job.get('completed_at'),
+                job.get('last_heartbeat_at'),
+                options_json,
+                result_json,
+                job.get('error'),
+                job.get('queue_position'),
+            ))
+            conn.commit()
+
+
 # Wire get_job / save_job into benchmark_runner now that both are defined.
 # This avoids a circular import — benchmark_runner.py cannot import from app.py.
 benchmark_runner.set_job_callbacks(get_job, save_job)
+benchmark_runner.set_append_heap_dump_callback(append_heap_dump_request)
 
 def get_all_jobs(limit: int = 50) -> list:
     """Get all jobs from the database"""
@@ -807,11 +877,15 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
 
             # Persist scenario-level status and timing unconditionally so the UI
             # always reflects what happened, even when we are about to break out.
+            # Also clear heap_dump_requests: any pending requests were for this
+            # scenario's run; they must not carry over to the next scenario where
+            # the node may have recovered or a stale jcmd would be misleading.
             job_data = get_job(job_id)
             if job_data and 'scenario_status' in job_data:
                 job_data['scenario_status'][scenario_key] = scenario_run_status or 'failed'
                 job_data.setdefault('scenario_times', {}).setdefault(scenario_key, {})['completed_at'] = scenario_completed_at
                 job_data['last_heartbeat_at'] = scenario_completed_at
+                job_data['heap_dump_requests'] = []
                 save_job(job_id, job_data)
 
             if scenario_run_status == 'completed':
