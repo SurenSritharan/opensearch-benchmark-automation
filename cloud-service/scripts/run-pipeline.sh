@@ -603,6 +603,7 @@ while true; do
   # ── Heap dump requests ────────────────────────────────────────────────────────
   # benchmark_runner signals when a node crosses the heap threshold. We have
   # kubectl here on the Jenkins agent, so we execute jcmd + cp and ack to clear.
+  _hd_scenario=$(echo "$resp" | jq -r '.current_scenario // ""')
   while IFS= read -r req; do
     [ -z "$req" ] && continue
     hd_node=$(echo "$req"      | jq -r '.node')
@@ -611,11 +612,21 @@ while true; do
     [ -z "$hd_node" ] || [ "$hd_node" = "null" ] && continue
 
     echo "$now  [heap-dump] Node ${hd_node} at ${hd_pct}% — collecting heap dump..."
-    hd_remote="/tmp/heapdump-${hd_node}.hprof"
-    hd_local="${RESULTS_DEST:-/tmp}/heap-dumps/${hd_node}-heapdump.hprof"
+    hd_ts=$(date -u '+%Y%m%d-%H%M%S')
+    hd_remote="/tmp/heapdump-${hd_node}-${hd_ts}.hprof"
+    # Store the dump inside the active scenario's results directory so it is
+    # immediately associated with the test that caused the heap pressure.
+    # Falls back to a top-level heap-dumps/ dir when no scenario is active.
+    if [ -n "$_hd_scenario" ] && [ -n "${RESULTS_DEST:-}" ]; then
+      hd_local="${RESULTS_DEST}/${_hd_scenario}/heap-dumps/${hd_node}-${hd_ts}-heapdump.hprof"
+    else
+      hd_local="${RESULTS_DEST:-/tmp}/heap-dumps/${hd_node}-${hd_ts}-heapdump.hprof"
+    fi
     mkdir -p "$(dirname "$hd_local")"
 
-    # Trigger jcmd inside the OpenSearch container
+    # Trigger jcmd inside the OpenSearch container.
+    # Use a timestamped remote path so jcmd never hits "File exists" from a prior
+    # dump that was not cleaned up between collections.
     if kubectl exec "${hd_node}" -c opensearch -n "${hd_ns}" -- \
         jcmd 1 GC.heap_dump "${hd_remote}" 2>/dev/null; then
       # Copy the dump to the Jenkins workspace
@@ -624,6 +635,9 @@ while true; do
       else
         echo "$now  [heap-dump] WARNING: kubectl cp failed for ${hd_node}"
       fi
+      # Remove the remote file so we don't accumulate .hprof files in /tmp
+      kubectl exec "${hd_node}" -c opensearch -n "${hd_ns}" -- \
+        rm -f "${hd_remote}" 2>/dev/null || true
     else
       echo "$now  [heap-dump] WARNING: jcmd failed on ${hd_node}"
     fi
