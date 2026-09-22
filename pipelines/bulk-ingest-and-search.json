@@ -7,7 +7,7 @@
   },
   "steps": [
     { "dataset": "cohere-wiki-en-768", "scenario": "delete-index" },
-    { "dataset": "cohere-wiki-en-768", "scenario": "create-index", "params": { "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "1gb", "merge_scheduler_max_thread_count": 2 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "create-index", "params": { "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "16mb", "merge_scheduler_max_thread_count": 2 } },
     { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-and-search", "params": { "query_k": 100 } }
   ]
 }
