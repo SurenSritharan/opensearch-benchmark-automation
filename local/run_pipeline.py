@@ -188,6 +188,19 @@ def main():
             if not copied:
                 logger.warning(f"Could not find test_run.json for ID {run_id} under {benchmark_home}")
 
+        # Copy OSB benchmark log into step results directory
+        benchmark_log_candidates = [
+            benchmark_home / "logs" / "benchmark.log",
+            Path.home() / ".benchmark" / "logs" / "benchmark.log",
+        ]
+        for log_path in benchmark_log_candidates:
+            if log_path.exists():
+                shutil.copy(log_path, step_results_dir / "benchmark.log")
+                logger.info(f"✓ Copied benchmark.log to {step_results_dir}")
+                break
+        else:
+            logger.warning("Could not find benchmark.log to copy")
+
         if process.returncode != 0:
             logger.error(f"✖ Step {scenario} failed with exit code {process.returncode}")
             sys.exit(process.returncode)
