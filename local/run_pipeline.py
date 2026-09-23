@@ -46,7 +46,6 @@ def parse_args():
     parser.add_argument("--target-host", default=os.environ.get("TARGET_HOST", "127.0.0.1:9200"), help="OpenSearch host:port")
     parser.add_argument("--workloads-dir", default=os.environ.get("WORKLOADS_DIR", str(REPO_ROOT.parent / "opensearch-benchmark-workloads")), help="Path to workloads repository")
     parser.add_argument("--results-dir", default=os.environ.get("RESULTS_DIR", str(REPO_ROOT / "results" / "local")), help="Results output directory")
-    parser.add_argument("--corpus-size", default=os.environ.get("CORPUS_SIZE", "50k"), help="Default corpus size if not defined in pipeline")
     parser.add_argument("--use-ssl", default=os.environ.get("USE_SSL", "true"), help="Use SSL/HTTPS (true/false)")
     parser.add_argument("--auth-user", default=os.environ.get("AUTH_USER", "admin"), help="OpenSearch Basic Auth Username")
     parser.add_argument("--auth-pass", default=os.environ.get("AUTH_PASS", "admin"), help="OpenSearch Basic Auth Password")
@@ -85,8 +84,7 @@ def main():
     with open(pipeline_file) as f:
         pipeline_data = json.load(f)
 
-    pipeline_params = pipeline_data.get("params", {})
-    pipeline_params.setdefault("corpus_size", args.corpus_size)
+    pipeline_params = pipeline_data.get("params", {}).copy()
 
     use_ssl = str(args.use_ssl).lower() == "true"
     client_opts = (

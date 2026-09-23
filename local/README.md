@@ -52,7 +52,6 @@ python3 local/run_pipeline.py \
 | `--target-host` | `127.0.0.1:9200` | OpenSearch host and port |
 | `--workloads-dir` | `../opensearch-benchmark-workloads` | Path to workloads directory |
 | `--results-dir` | `./results/local` | Directory where per-step `test_run.json` and logs will be saved |
-| `--corpus-size` | `50k` | Default corpus size (e.g. `50k`, `1m`, `5m`) |
 | `--use-ssl` | `true` | Use HTTPS (`true` / `false`) |
 | `--auth-user` | `admin` | Basic auth username |
 | `--auth-pass` | `admin` | Basic auth password |
