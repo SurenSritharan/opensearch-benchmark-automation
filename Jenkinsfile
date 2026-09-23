@@ -79,6 +79,9 @@ pipeline {
                 'dbpedia-parquet-1m',
                 'complete-5m-test',
                 'bulk-ingest-and-search',
+                //Created for comparison with sequential vs parallel runs
+                'sequential',
+                'parallel',
             ],
             description: 'Pipeline to run. Corresponds to a file in the pipelines/ directory.'
         )
