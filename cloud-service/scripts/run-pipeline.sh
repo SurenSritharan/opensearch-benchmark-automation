@@ -636,14 +636,14 @@ while true; do
 
     echo "$now  [heap-dump] Node ${hd_node} at ${hd_pct}% — collecting heap dump..."
     hd_ts=$(date -u '+%Y%m%d-%H%M%S')
-    hd_remote="/tmp/heapdump-${hd_node}-${hd_ts}.hprof"
+    hd_remote="/tmp/heapdump-${hd_node}-${hd_ts}.hprof.gz"
     # Store the dump inside the active scenario's results directory so it is
     # immediately associated with the test that caused the heap pressure.
     # Falls back to a top-level heap-dumps/ dir when no scenario is active.
     if [ -n "$_hd_scenario" ] && [ -n "${RESULTS_DEST:-}" ]; then
-      hd_local="${RESULTS_DEST}/${_hd_scenario}/heap-dumps/${hd_node}-${hd_ts}-heapdump.hprof"
+      hd_local="${RESULTS_DEST}/${_hd_scenario}/heap-dumps/${hd_node}-${hd_ts}-heapdump.hprof.gz"
     else
-      hd_local="${RESULTS_DEST:-/tmp}/heap-dumps/${hd_node}-${hd_ts}-heapdump.hprof"
+      hd_local="${RESULTS_DEST:-/tmp}/heap-dumps/${hd_node}-${hd_ts}-heapdump.hprof.gz"
     fi
     mkdir -p "$(dirname "$hd_local")"
 
@@ -651,7 +651,7 @@ while true; do
     # Use a timestamped remote path so jcmd never hits "File exists" from a prior
     # dump that was not cleaned up between collections.
     if kubectl exec "${hd_node}" -c opensearch -n "${hd_ns}" -- \
-        jcmd 1 GC.heap_dump "${hd_remote}" 2>/dev/null; then
+        jcmd 1 GC.heap_dump -gz=4 "${hd_remote}" 2>/dev/null; then
       # Copy the dump to the Jenkins workspace
       if kubectl cp -c opensearch "${hd_ns}/${hd_node}:${hd_remote}" "${hd_local}" 2>/dev/null; then
         echo "$now  [heap-dump] Saved: ${hd_local}"
