@@ -109,8 +109,28 @@ def main():
         scenario = step["scenario"]
         step_params = step.get("params", {})
 
+        # Mirror app.py param layering:
+        # 1. common_params (index name, corpus name templates, field names)
+        # 2. engine-level params (engine, method, etc.)
+        # 3. test procedure base params (bulk size, format, corpus, etc.)
+        # 4. pipeline step params (overrides)
+        dataset_cfg = loader.get_dataset_config(dataset_name)
+        base_params = dataset_cfg.get("common_params", {}).copy()
+        base_params.update(loader.get_workload_params(dataset_name, args.engine))
+
+        procedures = loader.get_test_procedures(dataset_name)
+        matched_proc = next(
+            (p for p in procedures if isinstance(p, dict) and p.get("name") == scenario),
+            None
+        )
+        if matched_proc:
+            base_params.update(matched_proc.get("params", {}))
+            # Merge engine-specific overrides within this test procedure
+            proc_engine_params = matched_proc.get("engine_params", {}).get(args.engine, {})
+            if proc_engine_params:
+                base_params.update(proc_engine_params)
+
         combined_runtime_params = {**pipeline_params, **step_params}
-        base_params = loader.get_workload_params(dataset_name, args.engine)
 
         # Resolve templates and filter unused parameters
         final_params = loader.resolve_workload_params(
@@ -175,6 +195,9 @@ def main():
                 benchmark_home / "benchmarks" / "test-runs" / run_id / "test_run.json",
                 Path.home() / ".benchmark" / ".osb" / "benchmarks" / "test-runs" / run_id / "test_run.json",
                 Path.home() / ".benchmark" / "benchmarks" / "test-runs" / run_id / "test_run.json",
+                # Jenkins workspace-local .benchmark layout
+                REPO_ROOT / ".benchmark" / ".osb" / "benchmarks" / "test-runs" / run_id / "test_run.json",
+                REPO_ROOT / ".benchmark" / "benchmarks" / "test-runs" / run_id / "test_run.json",
             ]
 
             copied = False
@@ -190,8 +213,13 @@ def main():
 
         # Copy OSB benchmark log into step results directory
         benchmark_log_candidates = [
+            benchmark_home / ".osb" / "logs" / "benchmark.log",
             benchmark_home / "logs" / "benchmark.log",
+            Path.home() / ".benchmark" / ".osb" / "logs" / "benchmark.log",
             Path.home() / ".benchmark" / "logs" / "benchmark.log",
+            # Jenkins workspace-local .benchmark layout
+            REPO_ROOT / ".benchmark" / ".osb" / "logs" / "benchmark.log",
+            REPO_ROOT / ".benchmark" / "logs" / "benchmark.log",
         ]
         for log_path in benchmark_log_candidates:
             if log_path.exists():
