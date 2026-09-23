@@ -423,6 +423,11 @@ PREV_LABEL=""
 PREV_FAILURES=""
 # Tracks scenario keys already processed so we never re-collect on subsequent deltas.
 declare -A _COLLECTED
+# Tracks the wall-clock start time (RFC-3339) of each scenario key, captured
+# when the API first reports that scenario as the current_scenario.
+# Used by _collect_scenario_server_logs to bound kubectl logs with --since-time
+# so the collected log covers only the scenario's own duration.
+declare -A _SCENARIO_START_TIME
 # Timestamp of the last successful poll that returned a known job status.
 # Used to detect a sustained worker-unreachable window and fail fast rather
 # than silently looping forever (e.g. after a worker pod restart wipes the DB).
@@ -467,16 +472,34 @@ _copy_scenario_results() {
 # Collects pod container logs, GC logs, heap dumps, and REST telemetry from the
 # OpenSearch namespace and writes them into the scenario's local results dir.
 #
+# Usage:
+#   _collect_scenario_server_logs <scenario_key> [since_time]
+#
+#   since_time — RFC-3339 timestamp (e.g. "2026-09-22T00:30:00Z") captured when
+#                the scenario started. When provided, kubectl logs uses --since-time
+#                so the collected log covers only the scenario's own duration.
+#                Falls back to --tail=5000 when omitted or empty.
+#
 # Uses the same env vars as _copy_scenario_results:
 #   RESULTS_DEST   local destination directory
 #   OS_NAMESPACE   OpenSearch namespace (derived from ENGINE when not set)
 _collect_scenario_server_logs() {
   local scenario_key="$1"
+  local since_time="${2:-}"
   [ -z "${RESULTS_DEST:-}" ] && return 0
 
   local ns="${OS_NAMESPACE:-os-${ENGINE}}"
   local log_dir="${RESULTS_DEST}/${scenario_key}/server-logs"
   mkdir -p "$log_dir"
+
+  # Build the kubectl logs time flag: prefer --since-time (exact scenario window)
+  # over --tail (last N lines regardless of which scenario produced them).
+  local log_time_flag
+  if [ -n "$since_time" ]; then
+    log_time_flag="--since-time=${since_time}"
+  else
+    log_time_flag="--tail=5000"
+  fi
 
   # ── Pod container logs ────────────────────────────────────────────────────
   local pods pod_count=0 gc_count=0 hprof_count=0
@@ -491,7 +514,7 @@ _collect_scenario_server_logs() {
       -o jsonpath='{.spec.containers[*].name}' 2>/dev/null || true)
     for container in $containers; do
       local logfile="${log_dir}/${pod}-${container}.log"
-      kubectl logs "$pod" -c "$container" -n "$ns" --tail=5000 \
+      kubectl logs "$pod" -c "$container" -n "$ns" $log_time_flag \
         > "$logfile" 2>&1 || true
       pod_count=$((pod_count + 1))
     done
@@ -613,14 +636,14 @@ while true; do
 
     echo "$now  [heap-dump] Node ${hd_node} at ${hd_pct}% — collecting heap dump..."
     hd_ts=$(date -u '+%Y%m%d-%H%M%S')
-    hd_remote="/tmp/heapdump-${hd_node}-${hd_ts}.hprof"
+    hd_remote="/tmp/heapdump-${hd_node}-${hd_ts}.hprof.gz"
     # Store the dump inside the active scenario's results directory so it is
     # immediately associated with the test that caused the heap pressure.
     # Falls back to a top-level heap-dumps/ dir when no scenario is active.
     if [ -n "$_hd_scenario" ] && [ -n "${RESULTS_DEST:-}" ]; then
-      hd_local="${RESULTS_DEST}/${_hd_scenario}/heap-dumps/${hd_node}-${hd_ts}-heapdump.hprof"
+      hd_local="${RESULTS_DEST}/${_hd_scenario}/heap-dumps/${hd_node}-${hd_ts}-heapdump.hprof.gz"
     else
-      hd_local="${RESULTS_DEST:-/tmp}/heap-dumps/${hd_node}-${hd_ts}-heapdump.hprof"
+      hd_local="${RESULTS_DEST:-/tmp}/heap-dumps/${hd_node}-${hd_ts}-heapdump.hprof.gz"
     fi
     mkdir -p "$(dirname "$hd_local")"
 
@@ -628,7 +651,7 @@ while true; do
     # Use a timestamped remote path so jcmd never hits "File exists" from a prior
     # dump that was not cleaned up between collections.
     if kubectl exec "${hd_node}" -c opensearch -n "${hd_ns}" -- \
-        jcmd 1 GC.heap_dump "${hd_remote}" 2>/dev/null; then
+        jcmd 1 GC.heap_dump -gz=4 "${hd_remote}" 2>/dev/null; then
       # Copy the dump to the Jenkins workspace
       if kubectl cp -c opensearch "${hd_ns}/${hd_node}:${hd_remote}" "${hd_local}" 2>/dev/null; then
         echo "$now  [heap-dump] Saved: ${hd_local}"
@@ -667,6 +690,14 @@ while true; do
   if [ "$label" != "$PREV_LABEL" ] || [ "$job_status" != "$PREV_STATUS" ]; then
     if [ -n "$label" ]; then
       printf "%s  %-9s  %2d/%d  (running: %s)\n" "$now" "$job_status" "${display:-0}" "${total:-0}" "$label"
+      # Stamp the start time for this scenario key the first time we see it as
+      # current. Use the raw current_scenario key from the API so the key matches
+      # what _collect_scenario_server_logs receives later.
+      _cur_key=$(echo "$resp" | jq -r '.current_scenario // ""')
+      [ -z "$_cur_key" ] && _cur_key="${ENGINE}-${label}"
+      if [ -n "$_cur_key" ] && [ -z "${_SCENARIO_START_TIME[$_cur_key]+set}" ]; then
+        _SCENARIO_START_TIME[$_cur_key]=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+      fi
     else
       printf "%s  %-9s  %2d/%d\n" "$now" "$job_status" "${completed:-0}" "${total:-0}"
     fi
@@ -718,7 +749,7 @@ while true; do
       [ "${_COLLECTED[$skey]+set}" = "set" ] && continue
       _COLLECTED[$skey]=1
       _copy_scenario_results "$skey"
-      _collect_scenario_server_logs "$skey"
+      _collect_scenario_server_logs "$skey" "${_SCENARIO_START_TIME[$skey]:-}"
     done < <(echo "$resp" | jq -r '
       .scenario_status // {} | to_entries[] |
       select(.value | test("completed|failed|partial_failure|error|cancelled")) |
@@ -739,7 +770,7 @@ while true; do
       if [ -n "$cur_key" ] && [ "${_COLLECTED[$cur_key]+set}" != "set" ]; then
         _COLLECTED[$cur_key]=1
         _copy_scenario_results "$cur_key"
-        _collect_scenario_server_logs "$cur_key"
+        _collect_scenario_server_logs "$cur_key" "${_SCENARIO_START_TIME[$cur_key]:-}"
       fi
     fi
     echo ""

@@ -644,7 +644,7 @@ class BenchmarkRunner:
                                          # is the real backstop for CPU-bound work like
                                          # jvector force-merge (final graph build can take
                                          # 2-4 h on small nodes for a 1.67M-vector shard)
-        HEAP_DUMP_THRESHOLD_PCT = 90     # trigger a heap dump when any node exceeds this
+        HEAP_DUMP_THRESHOLD_PCT = 95     # trigger a heap dump when any node exceeds this
 
         elapsed            = 0.0
         health_elapsed     = 0.0

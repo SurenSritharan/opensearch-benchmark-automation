@@ -78,6 +78,7 @@ pipeline {
                 'dbpedia-parquet-500k',
                 'dbpedia-parquet-1m',
                 'complete-5m-test',
+                'bulk-ingest-and-search',
             ],
             description: 'Pipeline to run. Corresponds to a file in the pipelines/ directory.'
         )
@@ -1029,14 +1030,6 @@ EOF
             }
         }
 
-        // ── 7. Archive Results ─────────────────────────────────────────────────
-        stage('Archive Results') {
-            steps {
-                archiveArtifacts artifacts: "${RESULTS_DIR}/**/*",
-                                 allowEmptyArchive: true,
-                                 fingerprint: true
-            }
-        }
     }
 
     post {

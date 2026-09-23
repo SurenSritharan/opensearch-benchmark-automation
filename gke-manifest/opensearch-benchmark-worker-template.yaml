@@ -1,3 +1,22 @@
+# PodDisruptionBudget — prevents the GKE cluster autoscaler from voluntarily
+# evicting the worker pod during a benchmark run (scale-downs, node upgrades).
+# minAvailable: 1 ensures at least one worker stays up; because the StatefulSet
+# runs exactly 1 replica this blocks all voluntary evictions while the pod is
+# healthy, preventing the mid-run node replacement that causes Multi-Attach
+# errors and lost in-flight jobs on the ReadWriteOnce PVC.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: opensearch-benchmark-worker-pdb-${ENGINE}
+  namespace: ${NAMESPACE}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: opensearch-benchmark
+      component: worker
+      engine: ${ENGINE}
+---
 apiVersion: v1
 kind: Service
 metadata:

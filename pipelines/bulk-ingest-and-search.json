@@ -1,0 +1,13 @@
+{
+  "description": "Concurrent bulk-ingest and vector search — measures search recall impact of concurrent ingestion against seed ground truth",
+  "engine": "__ENGINE__",
+  "params": {
+    "corpus_size": "1m",
+    "seed_num_vectors": 100000
+  },
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "delete-index" },
+    { "dataset": "cohere-wiki-en-768", "scenario": "create-index", "params": { "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "16mb", "merge_scheduler_max_thread_count": 2 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-and-search", "params": { "query_k": 100 } }
+  ]
+}
