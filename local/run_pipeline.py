@@ -162,6 +162,21 @@ def main():
         logger.info(f"Workload path: {workload_path}")
         logger.info(f"Params: {json.dumps(final_params)}")
 
+        # Truncate benchmark.log before each step so the copy captures only this step's output
+        benchmark_log_candidates = [
+            benchmark_home / ".osb" / "logs" / "benchmark.log",
+            benchmark_home / "logs" / "benchmark.log",
+            Path.home() / ".benchmark" / ".osb" / "logs" / "benchmark.log",
+            Path.home() / ".benchmark" / "logs" / "benchmark.log",
+            REPO_ROOT / ".benchmark" / ".osb" / "logs" / "benchmark.log",
+            REPO_ROOT / ".benchmark" / "logs" / "benchmark.log",
+        ]
+        for log_path in benchmark_log_candidates:
+            if log_path.exists():
+                log_path.write_text("", encoding="utf-8")
+                logger.info(f"Cleared benchmark.log at {log_path}")
+                break
+
         # Execute OSB process and stream output live
         process = subprocess.Popen(
             cmd,
