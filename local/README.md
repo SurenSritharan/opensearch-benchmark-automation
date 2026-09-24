@@ -8,6 +8,7 @@ The `local/` folder contains scripts for running benchmark pipelines directly on
 
 - Python 3.9+
 - OpenSearch instance reachable via HTTP/HTTPS
+- Google Cloud SDK (`gcloud` or `gsutil`) if running datasets with GCS pre-seeded corpus files or cached ground truth
 
 ---
 
@@ -22,7 +23,10 @@ source venv/bin/activate
 
 # Install requirements
 pip install -r cloud-service/requirements.txt
-pip install opensearch-benchmark faiss-cpu pyarrow numpy datasets
+# Install forked OSB (matches GKE worker pod setup)
+git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark /tmp/osb-src
+pip install -e /tmp/osb-src
+pip install faiss-cpu pyarrow numpy datasets
 ```
 
 ---

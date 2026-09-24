@@ -66,6 +66,7 @@ pipeline {
                 'search-5m',
                 'complete-1m',
                 'complete-5m',
+                'complete-8m',
                 'complete-1m-profile-ingest',
                 'msmarco-jvector-hq-build',
                 'msmarco-jvector-hq-full',
@@ -448,9 +449,13 @@ print(json.dumps(s))
                     def restartAfterBuild     = pipelineJson.restart_after_build == true
 
                     // Resolve dataset cache files to seed (same logic as the old Seed Dataset Cache stage).
+                    // Corpus sizes are derived from ALL steps in the pipeline (both first_run_steps
+                    // and steps) so that every corpus_size used by any step gets its GCS file seeded.
+                    // If a pipeline provides params.corpus_size, that single value is used instead.
                     def corpusSizeVal  = pipelineJson.params?.corpus_size
-                    def corpusSizes    = corpusSizeVal ? [corpusSizeVal] : ['1m', '5m']
-                    def datasets       = (pipelineJson.steps ?: []).collect { it.dataset }.unique()
+                    def allSteps       = (pipelineJson.first_run_steps ?: []) + (pipelineJson.steps ?: [])
+                    def corpusSizes    = corpusSizeVal ? [corpusSizeVal] : allSteps.collect { it.params.corpus_size }.unique().findAll { it }
+                    def datasets       = allSteps.collect { it.dataset }.unique().findAll { it }
                     def datasetsConfig = readYaml file: 'config/datasets.yaml'
                     def filesToSeed    = []
                     datasets.each { dataset ->
