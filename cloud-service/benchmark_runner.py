@@ -1214,9 +1214,6 @@ class BenchmarkRunner:
 
                 logger.info(f"Running sweep {idx}/{len(sweeps)}: dataset={dataset}, engine={engine}, scenario={scenario}")
 
-                if ctx.dataset_config and not self.config.download_dataset_files(dataset, ctx.params):
-                    return {'status': 'failed', 'error': f'Failed to download dataset files for sweep {idx}.'}
-
                 logger.info(f"Checking cluster health for {engine}...")
                 if not self._check_cluster_health(ctx.target_host):
                     all_results.append({
