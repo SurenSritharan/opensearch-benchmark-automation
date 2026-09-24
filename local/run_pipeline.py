@@ -269,6 +269,50 @@ def _save_server_stats(host: str, use_ssl: bool, user: str, password: str,
         logger.warning(f"Failed to save server_stats: {e}")
 
 
+def _save_rest_telemetry(host: str, use_ssl: bool, user: str, password: str,
+                         results_dir: Path) -> None:
+    """Capture cluster REST telemetry snapshots to server-logs/telemetry/.
+
+    Mirrors the telemetry capture in cloud-service/scripts/run-pipeline.sh so
+    local runs have identical REST telemetry artifacts compatible with the dashboard.
+    """
+    if not _REQUESTS_AVAILABLE:
+        return
+
+    tel_dir = results_dir / "server-logs" / "telemetry"
+    tel_dir.mkdir(parents=True, exist_ok=True)
+
+    endpoints = [
+        ("/_cluster/health?pretty", "cluster-health.json"),
+        ("/_cluster/stats?pretty", "cluster-stats.json"),
+        ("/_cluster/settings?include_defaults=true&flat_settings=true&pretty", "cluster-settings.json"),
+        ("/_nodes/stats?pretty", "nodes-stats.json"),
+        ("/_cat/nodes?v&h=name,heap.percent,heap.current,heap.max,ram.percent,cpu,load_1m,load_5m", "nodes.txt"),
+        ("/_cat/thread_pool?v&h=node_name,name,active,queue,rejected,largest,completed", "thread-pools.txt"),
+        ("/_cat/tasks?v&detailed", "tasks.txt"),
+        ("/_cat/segments?v", "segments.txt"),
+    ]
+
+    proto = "https" if use_ssl else "http"
+    for endpoint, filename in endpoints:
+        try:
+            resp = _requests.get(
+                f"{proto}://{host}{endpoint}",
+                auth=(user, password),
+                verify=False,
+                timeout=15,
+            )
+            out_file = tel_dir / filename
+            if resp.ok:
+                out_file.write_text(resp.text, encoding="utf-8")
+            else:
+                logger.warning(f"Telemetry GET {endpoint} returned status {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"Telemetry failed for {endpoint}: {e}")
+
+    logger.info(f"✓ Saved REST telemetry to {tel_dir}")
+
+
 def _download_dataset_files(loader: ConfigLoader, pipeline_data: Dict) -> None:
     """Download HTTP/S3-backed data_files (base vectors, queries) for all corpus-requiring steps.
 
@@ -619,6 +663,13 @@ def main():
                 _save_index_snapshot(
                     args.target_host, use_ssl, args.auth_user, args.auth_pass,
                     index_name, step_results_dir,
+                )
+
+            # REST telemetry dump (cluster-health, cluster-stats, nodes, thread-pools, segments, tasks)
+            if _REQUESTS_AVAILABLE:
+                _save_rest_telemetry(
+                    args.target_host, use_ssl, args.auth_user, args.auth_pass,
+                    step_results_dir,
                 )
 
             # Save stdout log
