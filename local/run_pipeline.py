@@ -32,6 +32,8 @@ from typing import Dict, List, Optional
 
 try:
     import requests as _requests
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     _REQUESTS_AVAILABLE = True
 except ImportError:
     _REQUESTS_AVAILABLE = False
