@@ -325,6 +325,11 @@ datasets:
           target_index_bulk_indexing_clients: 4
           num_queries: 10000
           detailed_results: false
+        # Same DiskANN constraint as cohere-wiki-en-768 — single client, large batches.
+        engine_params:
+          jvector:
+            target_index_bulk_size: 500
+            target_index_bulk_indexing_clients: 1
 
       - name: "refresh-index"
         params: {}
@@ -425,6 +430,12 @@ datasets:
           target_index_bulk_indexing_clients: 4
           num_queries: 10000
           detailed_results: false
+        # Same DiskANN constraint as cohere-wiki-en-768 — single client, large batches.
+        engine_params:
+          jvector:
+            target_index_bulk_size: 500
+            target_index_bulk_indexing_clients: 1
+
 
       - name: "refresh-index"
         params: {}
@@ -519,10 +530,11 @@ datasets:
           target_index_bulk_indexing_clients: 4
           num_queries: 10000
           detailed_results: false
+        # Same DiskANN constraint as cohere-wiki-en-768 — single client, large batches.
         engine_params:
           jvector:
             target_index_bulk_size: 500
-            target_index_bulk_indexing_clients: 4
+            target_index_bulk_indexing_clients: 1
 
       - name: "refresh-index"
         params: {}
@@ -595,6 +607,12 @@ datasets:
           target_index_bulk_indexing_clients: 4
           num_queries: 10000
           detailed_results: false
+        # Same DiskANN constraint as cohere-wiki-en-768 — single client, large batches.
+        engine_params:
+          jvector:
+            target_index_bulk_size: 500
+            target_index_bulk_indexing_clients: 1
+
 
       - name: "refresh-index"
         params: {}
