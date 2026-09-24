@@ -21,7 +21,7 @@
     { "dataset": "cohere-msmarco-1024",      "scenario": "bulk-ingest-data", "params": { "corpus_size": "5m",  "target_index_bulk_size": 200 } },
     { "dataset": "cohere-msmarco-1024",      "scenario": "force-merge",      "params": { "corpus_size": "5m",  "client_timeout": 28800, "target_index_max_num_segments": 1 } },
     { "dataset": "openai-large-1536",        "scenario": "create-index",     "params": { "corpus_size": "5m",  "refresh_interval": -1, "min_batch_size_for_quantization": 100000, "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "16mb", "merge_scheduler_max_thread_count": 2 } },
-    { "dataset": "openai-large-1536",        "scenario": "bulk-ingest-data", "params": { "corpus_size": "5m" } },
+    { "dataset": "openai-large-1536",        "scenario": "bulk-ingest-data", "params": { "corpus_size": "5m",  "target_index_bulk_size": 200 } },
     { "dataset": "openai-large-1536",        "scenario": "force-merge",      "params": { "corpus_size": "5m",  "client_timeout": 28800, "target_index_max_num_segments": 1 } },
     { "dataset": "cohere-wiki-en-768",       "scenario": "create-index",     "params": { "corpus_size": "8m",  "refresh_interval": -1, "min_batch_size_for_quantization": 100000, "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "16mb", "merge_scheduler_max_thread_count": 2 } },
     { "dataset": "cohere-wiki-en-768",       "scenario": "bulk-ingest-data", "params": { "corpus_size": "8m",  "target_index_bulk_size": 200 } },
