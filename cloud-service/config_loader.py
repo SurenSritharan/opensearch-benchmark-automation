@@ -507,12 +507,22 @@ class ConfigLoader:
                 if file_range:
                     wget_cmd.extend(['--header', f'Range: bytes={file_range}'])
                 wget_cmd.append(file_url)
-                
+
+                # Scale timeout based on a minimum speed of 5 MB/s,
+                # with a floor of 1 hour and a ceiling of 24 hours.
+                if expected_size:
+                    min_speed_bytes_per_sec = 5 * 1024**2
+                    calculated_timeout = int(expected_size / min_speed_bytes_per_sec)
+                    download_timeout = max(3600, min(86400, calculated_timeout))
+                else:
+                    download_timeout = 3600
+                logger.info(f"  Download timeout: {download_timeout // 3600:.1f}h ({download_timeout}s)")
+
                 result = subprocess.run(
                     wget_cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=3600
+                    timeout=download_timeout
                 )
                 
                 if result.returncode != 0:
