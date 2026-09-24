@@ -269,6 +269,56 @@ def _save_server_stats(host: str, use_ssl: bool, user: str, password: str,
         logger.warning(f"Failed to save server_stats: {e}")
 
 
+def _download_dataset_files(loader: ConfigLoader, pipeline_data: Dict) -> None:
+    """Download HTTP/S3-backed data_files (base vectors, queries) for all corpus-requiring steps.
+
+    Mirrors the download logic in benchmark_runner.py so the local runner does not
+    require files to be pre-placed at /datasets/* by hand.
+    Skips datasets that have no ``data_files`` entry in datasets.yaml.
+    """
+    steps = pipeline_data.get("steps", [])
+    pipeline_params = pipeline_data.get("params", {})
+
+    CORPUS_REQUIRING_SCENARIOS = {"bulk-ingest-data", "bulk-ingest-and-search", "vector-search"}
+
+    # Collect unique (dataset, params) pairs so we download each corpus size once.
+    seen: set = set()
+    for step in steps:
+        scenario = step.get("scenario")
+        if scenario not in CORPUS_REQUIRING_SCENARIOS:
+            continue
+        dataset_name = step.get("dataset")
+        if not dataset_name:
+            continue
+
+        step_params = step.get("params", {})
+        # Sweeps may each target a different corpus_size — handle them individually.
+        sweeps = step_params.get("parameter_sweeps") or []
+        candidates = [step_params] if not sweeps else [
+            {**step_params, **sweep.get("params", {})} for sweep in sweeps
+        ]
+
+        for candidate in candidates:
+            merged = {**pipeline_params, **candidate}
+            corpus_size = merged.get("corpus_size", "1m")
+            key = (dataset_name, str(corpus_size))
+            if key in seen:
+                continue
+            seen.add(key)
+
+            dataset_cfg = loader.get_dataset_config(dataset_name)
+            if not dataset_cfg or not dataset_cfg.get("data_files"):
+                continue
+
+            logger.info(f"📦 Ensuring dataset files for '{dataset_name}' corpus_size={corpus_size}...")
+            ok = loader.download_dataset_files(dataset_name, merged)
+            if not ok:
+                logger.error(
+                    f"Failed to download dataset files for '{dataset_name}' (corpus_size={corpus_size}). "
+                    "Continuing — the benchmark step will fail if the file is missing."
+                )
+
+
 def _seed_gcs_cache_files(loader: ConfigLoader, pipeline_data: Dict, benchmark_home: Path) -> None:
     """Pre-seed dataset cache files listed in datasets.yaml (gcs_cache_files).
 
@@ -440,7 +490,10 @@ def main():
     logger.info(f" Results Dir:  {results_dir}")
     logger.info("=" * 60)
 
-    # 3. Pre-seed any GCS dataset cache files (e.g. Cohere 5M/8M HDF5)
+    # 3. Download HTTP/S3-backed dataset files (base vectors, queries, ground truth)
+    _download_dataset_files(loader, pipeline_data)
+
+    # 4. Pre-seed any GCS dataset cache files (e.g. Cohere 5M/8M HDF5)
     _seed_gcs_cache_files(loader, pipeline_data, benchmark_home)
 
     for idx, step in enumerate(steps):
