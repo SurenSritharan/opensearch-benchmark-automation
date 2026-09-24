@@ -66,6 +66,7 @@ pipeline {
                 'search-5m',
                 'complete-1m',
                 'complete-5m',
+                'complete-8m',
                 'complete-1m-profile-ingest',
                 'msmarco-jvector-hq-build',
                 'msmarco-jvector-hq-full',
