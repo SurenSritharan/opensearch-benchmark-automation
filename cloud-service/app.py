@@ -1264,8 +1264,12 @@ def trigger_batch_benchmark():
         timestamp = datetime.utcnow().strftime('%Y%m%d-%H%M%S')
         batch_id = f"{timestamp}-{uuid.uuid4().hex[:8]}"
         
-        # Create results directory structure: <batch_id>/engine/
-        results_base = f"{batch_id}/{engine}"
+        # Cloud runs keep each job isolated under <job_id>/<engine>. Local runs
+        # can opt into a stable <engine> directory for easier comparison.
+        if os.environ.get('RESULTS_INCLUDE_JOB_ID', 'true').lower() == 'true':
+            results_base = f"{batch_id}/{engine}"
+        else:
+            results_base = engine
         
         # Get current queue position for this engine
         with db_lock:
