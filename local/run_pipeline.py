@@ -576,12 +576,14 @@ def main():
                 poller.start()
 
             # Execute OSB process and stream output live
+            sub_env = {**os.environ, "PYTHONWARNINGS": "ignore:Unverified HTTPS request"}
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                env=sub_env
             )
 
             stdout_lines = []
