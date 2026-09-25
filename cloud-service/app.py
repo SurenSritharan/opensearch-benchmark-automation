@@ -30,7 +30,13 @@ CORS(app)
 # Initialize components
 _workspace_dir = os.environ.get("WORKSPACE_DIR", "/workspace")
 RESULTS_DIR    = Path(os.environ.get("RESULTS_DIR", "/results")).resolve()
-config_loader = ConfigLoader(workspace_dir=_workspace_dir)
+RUN_DIR        = Path(os.environ.get("RUN_DIR", str(Path(_workspace_dir) / "run"))).resolve()
+LOCKS_DIR      = Path(os.environ.get("LOCKS_DIR", str(Path(_workspace_dir) / "locks"))).resolve()
+APP_DIR        = Path(os.environ.get("APP_DIR", str(Path(__file__).resolve().parent))).resolve()
+config_loader = ConfigLoader(
+    workspace_dir=_workspace_dir,
+    workloads_dir=os.environ.get("WORKLOADS_DIR", "/datasets/opensearch-benchmark-workloads"),
+)
 benchmark_runner = BenchmarkRunner(config_loader, results_dir=str(RESULTS_DIR))
 
 # WORKER_ENGINES must be resolved first — it gates init_db() and all queue logic.
@@ -49,7 +55,7 @@ _IS_WORKER = bool(_ALLOWED_ENGINES)
 logger.info(f"WORKER_ENGINES={_WORKER_ENGINES_RAW!r}, allowed engines: {_ALLOWED_ENGINES}, will process jobs: {_IS_WORKER}")
 
 # SQLite database for job storage — lives on the worker PVC, not used by the API server.
-DB_PATH = os.environ.get("DB_PATH", "/workspace/jobs.db")
+DB_PATH = os.environ.get("DB_PATH", str(Path(_workspace_dir) / "jobs.db"))
 db_lock = threading.RLock()
 
 # Track which engine processors are running (in-memory per worker)
@@ -73,7 +79,7 @@ def init_db():
     2. Stale engine lock files are released so a lock that survived a pod
        restart cannot permanently block the queue processor for that engine.
     """
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    os.makedirs(os.path.dirname(DB_PATH) or '.', exist_ok=True)
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS jobs (
@@ -144,7 +150,7 @@ def init_db():
     # still present here means the worker was killed mid-run and the subprocess is
     # either still running (consuming CPU/memory) or already dead.  Either way,
     # send SIGKILL to the whole process group and remove the stale file.
-    run_dir = Path("/workspace/run")
+    run_dir = RUN_DIR
     if run_dir.is_dir():
         for pgid_file in run_dir.glob("*.pgid"):
             try:
@@ -162,7 +168,7 @@ def init_db():
                     pass
 
     # Release any stale engine lock files left over from the previous process
-    locks_dir = "/workspace/locks"
+    locks_dir = LOCKS_DIR
     if os.path.isdir(locks_dir):
         for fname in os.listdir(locks_dir):
             if fname.endswith(".lock"):
@@ -199,6 +205,26 @@ _WORKER_URL_TEMPLATE = os.environ.get(
 # to probe pods in parallel. "jvector-acl" is a separate pod from "jvector" and
 # must be listed here so the API server can discover jobs submitted to it.
 _KNOWN_ENGINES = ['jvector', 'jvector-acl', 'faiss', 'lucene']
+
+
+def _local_or_gke_request_kwargs(timeout: int) -> Dict[str, Any]:
+    cert = (
+        os.environ.get('OS_CERT', '/certs/admin.pem'),
+        os.environ.get('OS_KEY', '/certs/admin-key.pem'),
+    )
+    ca = os.environ.get('OS_CA', '/certs/root-ca.pem')
+    if all(Path(path).exists() for path in (*cert, ca)):
+        return {'cert': cert, 'verify': ca, 'timeout': timeout}
+    return {
+        'auth': (os.environ.get('AUTH_USER', 'admin'), os.environ.get('AUTH_PASS', 'admin')),
+        'verify': os.environ.get('VERIFY_CERTS', 'false').lower() == 'true',
+        'timeout': timeout,
+    }
+
+
+def _opensearch_base_url(host: str) -> str:
+    scheme = 'https' if os.environ.get('USE_SSL', 'true').lower() == 'true' else 'http'
+    return f'{scheme}://{host}'
 
 def _base_engine(engine: str) -> str:
     """Return the base engine name used for dataset config and workload param lookups.
@@ -469,9 +495,9 @@ def get_engine_lock(engine: str, timeout: int = -1):
         engine: The engine name
         timeout: Lock timeout in seconds. -1 means wait forever (blocking)
     """
-    lock_path = f"/workspace/locks/{engine}.lock"
-    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
-    return FileLock(lock_path, timeout=timeout)
+    lock_path = LOCKS_DIR / f"{engine}.lock"
+    LOCKS_DIR.mkdir(parents=True, exist_ok=True)
+    return FileLock(str(lock_path), timeout=timeout)
 
 def is_engine_busy(engine: str) -> bool:
     """Check if the engine lock file is currently locked by ANY worker"""
@@ -693,8 +719,8 @@ def _save_index_snapshot(engine: str, index_name: str, results_dir: Path) -> Non
     """
     try:
         host = config_loader.get_target_host(engine)
-        base_url = f"https://{host}/{index_name}"
-        kwargs = dict(cert=('/certs/admin.pem', '/certs/admin-key.pem'), verify='/certs/root-ca.pem', timeout=15)
+        base_url = f"{_opensearch_base_url(host)}/{index_name}"
+        kwargs = _local_or_gke_request_kwargs(15)
 
         snapshot = {"index": index_name, "engine": engine}
         for key, path in [("mapping", "/_mapping"), ("settings", "/_settings"), ("stats", "/_stats")]:
@@ -1582,7 +1608,7 @@ def delete_job(job_id: str):
         if cleanup_results:
             results_dir = None
             if job.get('results_base'):
-                results_dir = Path('/results') / job['results_base']
+                results_dir = RESULTS_DIR / job['results_base']
             elif job.get('result', {}).get('results_dir'):
                 results_dir = Path(job['result']['results_dir'])
 
@@ -1712,7 +1738,7 @@ def get_job_results(job_id: str):
     
     # Use results_base if available (batch jobs), otherwise use job_id (single jobs)
     results_base = job.get('results_base', job_id)
-    results_dir = Path('/results') / results_base
+    results_dir = RESULTS_DIR / results_base
     if not results_dir.exists():
         return jsonify({'error': 'Results directory not found'}), 404
 
@@ -1926,7 +1952,7 @@ def get_live_status(job_id: str):
     # For running or completed jobs, try to get live data
     if status in ['running', 'completed', 'error', 'failed', 'partial_failure']:
         results_base = job.get('results_base', job_id)
-        results_dir = Path('/results') / results_base
+        results_dir = RESULTS_DIR / results_base
         
         # Try to find the most recent test_run.json and benchmark.log
         live_data = {
@@ -2035,7 +2061,7 @@ def _collect_live_data(sweep_dir: Path, live_data: dict, scenario_label: Optiona
     # While a sweep is running the file hasn't been copied to sweep_dir yet,
     # so fall back to the live log in the OSB home directory.
     log_file = sweep_dir / 'benchmark.log'
-    live_log_file = Path('/datasets/opensearch-benchmark/.osb/logs/benchmark.log')
+    live_log_file = Path(os.environ.get('BENCHMARK_HOME', '/datasets/opensearch-benchmark')) / '.osb' / 'logs' / 'benchmark.log'
     source_log = log_file if log_file.exists() else (live_log_file if live_log_file.exists() else None)
     if source_log:
         try:
@@ -2061,12 +2087,11 @@ def get_cluster_health(engine: str):
         return _proxy(engine, f'/api/v1/cluster/{engine}/health')
     try:
         target_host = config_loader.get_target_host(engine)
-        url = f"https://{target_host}/_cluster/health"
+        url = f"{_opensearch_base_url(target_host)}/_cluster/health"
         
         response = requests.get(
             url,
-            cert=('/certs/admin.pem', '/certs/admin-key.pem'), verify='/certs/root-ca.pem',
-            timeout=10
+            **_local_or_gke_request_kwargs(10)
         )
         
         if response.status_code == 200:
