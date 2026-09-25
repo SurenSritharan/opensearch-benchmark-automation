@@ -820,6 +820,15 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             scenario_params = scenario.get('params', {}) or {}
             workload_params = {**global_params, **scenario_params}
 
+            # Job-level credentials are authoritative for every scenario.
+            # Only the dedicated step_username/step_password fields below may
+            # override them for ACL scenarios. Never let pipeline workload
+            # params silently replace the Jenkins/API credentials.
+            if 'username' in global_params:
+                workload_params['username'] = global_params['username']
+            if 'password' in global_params:
+                workload_params['password'] = global_params['password']
+
             # Inject per-step credentials into workload_params so benchmark_runner
             # can pop them in _get_run_contexts().
             # step_username/step_password come from the step's own params block and
@@ -1272,6 +1281,15 @@ def trigger_batch_benchmark():
         unique_datasets = list(set(s['dataset'] for s in scenarios))
         datasets_summary = ', '.join(unique_datasets) if len(unique_datasets) <= 3 else f"{len(unique_datasets)} datasets"
         
+        # Keep credentials in the worker options so BenchmarkRunner can pass
+        # them to OSB. Accept both the legacy top-level form and the newer
+        # workload_params form; top-level request credentials win.
+        workload_params = dict(request_data.get('workload_params') or {})
+        if request_data.get('username') is not None:
+            workload_params['username'] = request_data['username']
+        if request_data.get('password') is not None:
+            workload_params['password'] = request_data['password']
+
         # Create batch job data
         batch_data = {
             'job_id': batch_id,
@@ -1295,7 +1313,7 @@ def trigger_batch_benchmark():
                 'profiling_duration': request_data.get('profiling_duration', 60),
                 'no_metrics':         request_data.get('no_metrics', False),
                 'log_level':          request_data.get('log_level', None),
-                'workload_params':    request_data.get('workload_params', None)
+                'workload_params':    workload_params or None
             }
         }
         
@@ -1379,6 +1397,12 @@ def trigger_benchmark():
                 """, (engine,))
                 queue_position = cursor.fetchone()[0]
         
+        workload_params = dict(request_data.get('workload_params') or {})
+        if request_data.get('username') is not None:
+            workload_params['username'] = request_data['username']
+        if request_data.get('password') is not None:
+            workload_params['password'] = request_data['password']
+
         job_data = {
             'job_id': job_id,
             'job_type': 'single',
@@ -1393,7 +1417,7 @@ def trigger_benchmark():
                 'enable_profiling':   request_data.get('enable_profiling', False),
                 'profiling_duration': request_data.get('profiling_duration', 60),
                 'no_metrics':         request_data.get('no_metrics', False),
-                'workload_params':    request_data.get('workload_params', None)
+                'workload_params':    workload_params or None
             }
         }
         
