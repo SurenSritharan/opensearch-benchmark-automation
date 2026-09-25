@@ -166,6 +166,16 @@ spec:
           value: "${OS_NAMESPACE}"
         - name: BENCHMARK_HOME
           value: "/datasets/opensearch-benchmark"
+        - name: DATASETS_ROOT
+          value: "/datasets"
+        - name: APP_DIR
+          value: "/app"
+        - name: RUN_DIR
+          value: "/workspace/run"
+        - name: LOCKS_DIR
+          value: "/workspace/locks"
+        - name: TEMP_DIR
+          value: "/tmp"
         - name: PYTHONUNBUFFERED
           value: "1"
         - name: DB_PATH

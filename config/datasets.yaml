@@ -19,15 +19,14 @@ datasets:
     #   corpus_size  - matches a value in supported_corpus_sizes (used to scope
     #                  the seed step to only the corpus sizes being benchmarked)
     #   gcs_path     - full gs:// object path
-    #   target_path  - absolute path on the worker pod where OSB expects the file
-    #                  (under BENCHMARK_HOME/.osb/benchmarks/data/<corpus>/<file>)
+    #   target_path  - path relative to DATASETS_ROOT where the file is seeded
     gcs_cache_files:
       - corpus_size: "5m"
         gcs_path: "gs://opensearch-benchmark-datasets/cohere-wiki-en-768/cohere-5m.hdf5"
-        target_path: "/datasets/opensearch-benchmark/.osb/benchmarks/data/cohere-5m/cohere-5m.hdf5"
+        target_path: "opensearch-benchmark/.osb/benchmarks/data/cohere-5m/cohere-5m.hdf5"
       - corpus_size: "8m"
         gcs_path: "gs://opensearch-benchmark-datasets/cohere-wiki-en-768/cohere-8m.hdf5"
-        target_path: "/datasets/opensearch-benchmark/.osb/benchmarks/data/cohere-8m/cohere-8m.hdf5"
+        target_path: "opensearch-benchmark/.osb/benchmarks/data/cohere-8m/cohere-8m.hdf5"
 
     # Common parameters shared across all scenarios
     common_params:
@@ -167,7 +166,7 @@ datasets:
     space_type: "cosinesimil"
     description: "MS MARCO passage ranking dataset with 1024-dimensional vectors - configurable corpus size"
     workload: "msmarco" # needs to match opensearch-benchmark-workloads folder
-    data_dir: "/datasets/msmarco"
+    data_dir: "msmarco"
     
     # Supported corpus sizes (ground truth files available for k=100)
     # All sizes from 2m to 125m are supported
@@ -231,7 +230,7 @@ datasets:
       - name: "bulk-ingest-data"
         params:
           target_index_bulk_size: 500
-          target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base_{{corpus_size}}.fvec"
+          target_index_bulk_index_data_set_path: "msmarco/cohere_msmarco_base_{{corpus_size}}.fvec"
           target_index_bulk_indexing_clients: 8
           detailed_results: false
         # Same DiskANN constraint as cohere-wiki-en-768 — single client, large batches.
@@ -259,8 +258,8 @@ datasets:
       
       - name: "vector-search"
         params:
-          queries_file: "/datasets/msmarco/cohere_msmarco_queries.fvec"
-          ground_truth_file: "/datasets/msmarco/cohere_msmarco_indices_d1024_k{{query_k}}_{{corpus_size}}.ivec"
+          queries_file: "msmarco/cohere_msmarco_queries.fvec"
+          ground_truth_file: "msmarco/cohere_msmarco_indices_d1024_k{{query_k}}_{{corpus_size}}.ivec"
           target_field_name: "vector"
           query_body:
             docvalue_fields: ["_id"]
@@ -284,7 +283,7 @@ datasets:
 
     common_params:
       target_index_name: "cohere-wikipedia-parquet-1024-{{corpus_size}}"
-      queries_file: "/datasets/gt/cohere-wikipedia-parquet-1024-{{corpus_size}}-gt.json"
+      queries_file: "gt/cohere-wikipedia-parquet-1024-{{corpus_size}}-gt.json"
       gcs_gt_bucket: "opensearch-benchmark-datasets"
 
     engine_params:
@@ -387,7 +386,7 @@ datasets:
     # Data is streamed directly from HuggingFace at runtime.
     common_params:
       target_index_name: "dbpedia-openai-1536-{{corpus_size}}"
-      queries_file: "/datasets/gt/dbpedia-openai-1536-{{corpus_size}}-gt.json"
+      queries_file: "gt/dbpedia-openai-1536-{{corpus_size}}-gt.json"
       gcs_gt_bucket: "opensearch-benchmark-datasets"
       target_index_dimension: 1536
       target_field_name: "openai"
@@ -488,7 +487,7 @@ datasets:
 
     common_params:
       target_index_name: "openai-large-1536-{{corpus_size}}"
-      queries_file: "/datasets/gt/openai-large-1536-{{corpus_size}}-gt.json"
+      queries_file: "gt/openai-large-1536-{{corpus_size}}-gt.json"
       gcs_gt_bucket: "opensearch-benchmark-datasets"
       target_index_dimension: 1536
       target_field_name: "emb"
@@ -564,7 +563,7 @@ datasets:
     # Data is streamed directly from HuggingFace at runtime.
     common_params:
       target_index_name: "dbpedia-openai3-3072-{{corpus_size}}"
-      queries_file: "/datasets/gt/dbpedia-openai3-3072-{{corpus_size}}-gt.json"
+      queries_file: "gt/dbpedia-openai3-3072-{{corpus_size}}-gt.json"
       gcs_gt_bucket: "opensearch-benchmark-datasets"
       target_index_dimension: 3072
       target_field_name: "text-embedding-3-large-3072-embedding"
