@@ -382,6 +382,205 @@ class ConfigLoader:
 
         return resolved_params
 
+    def download_dataset_files(self, dataset_name: str, params: Optional[Dict[str, Any]] = None) -> bool:
+        """Download dataset files locally for a dataset if they do not already exist."""
+        dataset_config = self.get_dataset_config(dataset_name)
+        if not dataset_config:
+            logger.warning(f"Dataset '{dataset_name}' not found in configuration")
+            return False
+        
+        if params:
+            dataset_config = copy.deepcopy(dataset_config)
+            
+            if 'num_vectors' in params:
+                corpus_size = get_corpus_size(params['num_vectors'])
+                dataset_config['corpus_size'] = corpus_size
+                logger.info(f"Converted num_vectors to corpus_size: {corpus_size}")
+            elif 'target_index_num_vectors' in params:
+                corpus_size = get_corpus_size(params['target_index_num_vectors'])
+                dataset_config['corpus_size'] = corpus_size
+                logger.info(f"Converted target_index_num_vectors to corpus_size: {corpus_size}")
+            elif 'corpus_size' in params and '{{' not in str(params['corpus_size']):
+                dataset_config['corpus_size'] = params['corpus_size']
+                logger.info(f"Using corpus_size from params: {params['corpus_size']}")
+            
+            base_url = dataset_config.get('base_url', '')
+            corpus_size = dataset_config.get('corpus_size', '1m')
+
+            # Resolve query_k with the same fallback used in _resolve_template_vars:
+            # if the exact k has no ground truth file, use the smallest supported k >= query_k.
+            query_k_raw = params.get('query_k', params.get('k', 100))
+            supported_k_values = dataset_config.get('supported_k_values', [100])
+            if query_k_raw in supported_k_values:
+                gt_k = query_k_raw
+            else:
+                gt_k = next((k for k in sorted(supported_k_values) if k >= query_k_raw), query_k_raw)
+                if gt_k != query_k_raw:
+                    logger.info(f"No ground truth file for k={query_k_raw}; using k={gt_k} file for download")
+
+            if 'data_files' in dataset_config:
+                resolved_files = []
+                for file_info in dataset_config['data_files']:
+                    resolved_file = {}
+                    for key, value in file_info.items():
+                        if isinstance(value, str):
+                            value = value.replace('{{base_url}}', base_url)
+                            value = value.replace('{{corpus_size}}', corpus_size)
+                            value = value.replace('{{query_k}}', str(gt_k))
+                        resolved_file[key] = value
+                    resolved_files.append(resolved_file)
+                
+                dataset_config['data_files'] = resolved_files
+                logger.info(f"Resolved {len(resolved_files)} data files")
+        
+        data_files = dataset_config.get('data_files', [])
+        
+        data_dir = dataset_config.get('data_dir', '/datasets')
+        data_dir_path = Path(data_dir)
+        
+        logger.info(f"Checking dataset files in {data_dir}...")
+        data_dir_path.mkdir(parents=True, exist_ok=True)
+        
+        corpus_size = dataset_config.get('corpus_size', '1m')
+        dimension = dataset_config.get('dimension', 1024)
+        num_vectors = get_num_vectors(corpus_size)
+
+        if not data_files:
+            logger.info("No static data files to download")
+        
+        for file_info in data_files:
+            file_name = file_info.get('name')
+            file_url = file_info.get('url')
+            file_range = file_info.get('range')
+            
+            if not file_name or not file_url:
+                logger.warning(f"Skipping file with missing name or URL: {file_info}")
+                continue
+            
+            target_file_name = file_name
+            
+            if "_base.fvec" in file_name:
+                target_file_name = file_name.replace('.fvec', f'_{corpus_size}.fvec')
+                bytes_per_vector = 4 + (dimension * 4)
+                byte_range_end = (num_vectors * bytes_per_vector) - 1
+                file_range = f"0-{byte_range_end}"
+                logger.info(f"Using corpus-specific filename: {target_file_name}")
+                logger.info(f"Auto-calculated range for {target_file_name}: {file_range}")
+                logger.info(f"  Corpus size: {corpus_size} ({num_vectors:,} vectors)")
+                logger.info(f"  Bytes per vector: {bytes_per_vector}")
+                logger.info(f"  Total bytes: {byte_range_end + 1:,} ({(byte_range_end + 1) / (1024**3):.2f} GB)")
+            elif file_range:
+                path_obj = Path(file_name)
+                target_file_name = f"{path_obj.stem}.range-{file_range}{path_obj.suffix}"
+            
+            file_path = data_dir_path / target_file_name
+            
+            expected_size = None
+            if file_range:
+                try:
+                    start, end = file_range.split('-')
+                    expected_size = int(end) - int(start) + 1
+                except Exception as e:
+                    logger.warning(f"Could not parse range '{file_range}': {e}")
+            
+            if file_path.exists():
+                current_size = file_path.stat().st_size
+                if expected_size is None or current_size == expected_size:
+                    logger.info(f"✓ File already exists: {target_file_name} ({current_size / (1024**3):.2f} GB)")
+                    continue
+                
+                logger.warning(f"File size mismatch for {target_file_name}: expected {expected_size} bytes, got {current_size} bytes — re-downloading")
+                file_path.unlink()
+            
+            logger.info(f"File not found: {target_file_name}, will download")
+            logger.info(f"📥 Downloading {target_file_name}...")
+            logger.info(f"  URL: {file_url}")
+            if file_range:
+                if expected_size:
+                    size_gb = expected_size / (1024**3)
+                    logger.info(f"  Range: {file_range} ({size_gb:.2f} GB)")
+                else:
+                    logger.info(f"  Range: {file_range}")
+            
+            try:
+                wget_cmd = ['wget', '-q', '--show-progress', '-O', str(file_path)]
+                if file_range:
+                    wget_cmd.extend(['--header', f'Range: bytes={file_range}'])
+                wget_cmd.append(file_url)
+
+                # Scale timeout based on a minimum speed of 5 MB/s,
+                # with a floor of 1 hour and a ceiling of 24 hours.
+                if expected_size:
+                    min_speed_bytes_per_sec = 5 * 1024**2
+                    calculated_timeout = int(expected_size / min_speed_bytes_per_sec)
+                    download_timeout = max(3600, min(86400, calculated_timeout))
+                else:
+                    download_timeout = 3600
+                logger.info(f"  Download timeout: {download_timeout // 3600:.1f}h ({download_timeout}s)")
+
+                result = subprocess.run(
+                    wget_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=download_timeout
+                )
+                
+                if result.returncode != 0:
+                    logger.error(f"Failed to download {target_file_name}")
+                    return False
+                
+                if file_path.exists():
+                    downloaded_size = file_path.stat().st_size
+                    downloaded_gb = downloaded_size / (1024**3)
+                    logger.info(f"✓ Downloaded: {target_file_name} ({downloaded_gb:.2f} GB)")
+                else:
+                    logger.error(f"Download completed but file not found: {file_path}")
+                    return False
+                    
+            except subprocess.TimeoutExpired:
+                logger.error(f"Download timed out for {target_file_name}")
+                return False
+            except Exception as e:
+                logger.error(f"Failed to download {target_file_name}: {e}")
+                return False
+        
+        # Download the ground truth file if specified in params and not already present.
+        # The path is already fully resolved (e.g. /datasets/msmarco/cohere_msmarco_indices_d1024_k10_5m.ivec).
+        # Derive the download URL from base_url + filename.
+        if params and params.get('ground_truth_file'):
+            gt_path = Path(params['ground_truth_file'])
+            if not gt_path.exists():
+                base_url = dataset_config.get('base_url', '')
+                if not base_url:
+                    logger.error(f"ground_truth_file '{gt_path}' not found and no base_url configured to download it")
+                    return False
+                gt_url = f"{base_url}/{gt_path.name}"
+                logger.info(f"📥 Downloading ground truth file: {gt_path.name}")
+                logger.info(f"  URL: {gt_url}")
+                gt_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    result = subprocess.run(
+                        ['wget', '-q', '--show-progress', '-O', str(gt_path), gt_url],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=3600
+                    )
+                    if result.returncode != 0:
+                        logger.error(f"Failed to download ground truth file: {gt_path.name}")
+                        return False
+                    logger.info(f"✓ Downloaded: {gt_path.name} ({gt_path.stat().st_size / (1024**2):.1f} MB)")
+                except subprocess.TimeoutExpired:
+                    logger.error(f"Download timed out for ground truth file: {gt_path.name}")
+                    return False
+                except Exception as e:
+                    logger.error(f"Failed to download ground truth file {gt_path.name}: {e}")
+                    return False
+            else:
+                logger.info(f"✓ Ground truth file already exists: {gt_path.name}")
+
+        logger.info("✓ All dataset files are ready")
+        return True
+    
     def get_test_procedures(self, dataset_name: str) -> List[Dict[str, Any]]:
         """Get available test procedures for a dataset with their configurations"""
         dataset_config = self.get_dataset_config(dataset_name)
@@ -479,16 +678,7 @@ class ConfigLoader:
         if 'num_vectors' not in resolved_params and 'num_vectors' in template_vars:
             resolved_params['num_vectors'] = template_vars['num_vectors']
             logger.debug(f"Added num_vectors={template_vars['num_vectors']} based on corpus_size={corpus_size}")
-
-        # Second pass: some params reference other params (e.g.
-        # target_index_bulk_index_data_set_path: "{{corpus_file}}" where corpus_file
-        # was itself resolved in the first pass from common_params).
-        # Add all scalar resolved values into template_vars, then re-resolve.
-        for k, v in resolved_params.items():
-            if isinstance(v, str) and k not in template_vars:
-                template_vars[k] = v
-        resolved_params = resolve_value(resolved_params)
-
+        
         # Clean up internal/template parameters that should not be passed to OpenSearch Benchmark.
         # Both are only used above for template resolution — no OSB workload has these as params.
         for internal_key in ('corpus_name', 'corpus_size'):
