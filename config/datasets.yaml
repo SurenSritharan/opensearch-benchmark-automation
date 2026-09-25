@@ -25,13 +25,9 @@ datasets:
       - corpus_size: "5m"
         gcs_path: "gs://opensearch-benchmark-datasets/cohere-wiki-en-768/cohere-5m.hdf5"
         target_path: "/datasets/opensearch-benchmark/.osb/benchmarks/data/cohere-5m/cohere-5m.hdf5"
-        # 5M × 768 dims × 4 bytes ≈ 15.4 GB vectors; full file including queries/GT ≈ 18 GB
-        min_size_bytes: 17179869184
       - corpus_size: "8m"
         gcs_path: "gs://opensearch-benchmark-datasets/cohere-wiki-en-768/cohere-8m.hdf5"
         target_path: "/datasets/opensearch-benchmark/.osb/benchmarks/data/cohere-8m/cohere-8m.hdf5"
-        # 8M × 768 dims × 4 bytes ≈ 24.6 GB vectors; full file including queries/GT ≈ 29 GB
-        min_size_bytes: 28991029248
 
     # Common parameters shared across all scenarios
     common_params:
@@ -170,8 +166,9 @@ datasets:
     format: fvec
     space_type: "cosinesimil"
     description: "MS MARCO passage ranking dataset with 1024-dimensional vectors - configurable corpus size"
-    workload: "msmarco"
-
+    workload: "msmarco" # needs to match opensearch-benchmark-workloads folder
+    data_dir: "/datasets/msmarco"
+    
     # Supported corpus sizes (ground truth files available for k=100)
     # All sizes from 2m to 125m are supported
     supported_corpus_sizes: [
@@ -179,23 +176,15 @@ datasets:
       "40m", "45m", "50m", "55m", "60m", "64m", "65m", "70m", "75m", "80m", "85m",
       "90m", "100m", "125m", "128m"
     ]
-
+    
     # Supported k values for ground truth (i.e. files that actually exist on S3)
     supported_k_values: [10, 100]
-
-    # Root URL for all fvec files for this dataset.
-    # workload.py uses these directly — the loader does not download or inject them.
-    base_url: "https://jvector-datasets-infratest.s3.us-east-2.amazonaws.com/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/cohere/cohere_msmarco"
-
+    
+    # Common parameters shared across all scenarios
     common_params:
       target_index_name: "cohere-msmarco-1024-{{corpus_size}}"
-      dimension: 1024
-      # corpus_file: streamed by MsMarcoFvecBulkSource via HTTP Range requests — no local copy written.
-      # queries_file / ground_truth_file: downloaded on first use by RandomSearchParamSource.
-      corpus_file: "{{base_url}}/cohere_msmarco_base.fvec"
-      queries_file: "{{base_url}}/cohere_msmarco_queries.fvec"
-      ground_truth_file: "{{base_url}}/cohere_msmarco_indices_d1024_k{{query_k}}_{{corpus_size}}.ivec"
-
+    
+    # Engine-specific parameters (used across scenarios)
     engine_params:
       jvector:
         engine: "jvector"
@@ -204,6 +193,16 @@ datasets:
       lucene:
         engine: "lucene"
 
+    # Base URL for all msmarco data files
+    base_url: "https://jvector-datasets-infratest.s3.us-east-2.amazonaws.com/6174752eb60168112f2edb38493782da2ebe5ae6bfc870e25ed1711205e5395d_private/cohere/cohere_msmarco"
+    
+    data_files:
+      - name: "cohere_msmarco_base.fvec"
+        url: "{{base_url}}/cohere_msmarco_base.fvec"
+        # Range automatically calculated based on corpus_size and dimension
+      - name: "cohere_msmarco_queries.fvec"
+        url: "{{base_url}}/cohere_msmarco_queries.fvec"
+    # Test procedures for msmarco
     test_procedures:
       - name: "delete-index"
         params: {}
@@ -232,7 +231,7 @@ datasets:
       - name: "bulk-ingest-data"
         params:
           target_index_bulk_size: 500
-          target_index_bulk_index_data_set_path: "{{corpus_file}}"
+          target_index_bulk_index_data_set_path: "/datasets/msmarco/cohere_msmarco_base_{{corpus_size}}.fvec"
           target_index_bulk_indexing_clients: 8
           detailed_results: false
         # Same DiskANN constraint as cohere-wiki-en-768 — single client, large batches.
@@ -257,9 +256,11 @@ datasets:
       - name: "force-merge"
         params:
           target_index_max_num_segments: 1
-
+      
       - name: "vector-search"
         params:
+          queries_file: "/datasets/msmarco/cohere_msmarco_queries.fvec"
+          ground_truth_file: "/datasets/msmarco/cohere_msmarco_indices_d1024_k{{query_k}}_{{corpus_size}}.ivec"
           target_field_name: "vector"
           query_body:
             docvalue_fields: ["_id"]
