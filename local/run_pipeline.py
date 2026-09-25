@@ -32,6 +32,8 @@ from typing import Dict, List, Optional
 
 try:
     import requests as _requests
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     _REQUESTS_AVAILABLE = True
 except ImportError:
     _REQUESTS_AVAILABLE = False
@@ -269,6 +271,100 @@ def _save_server_stats(host: str, use_ssl: bool, user: str, password: str,
         logger.warning(f"Failed to save server_stats: {e}")
 
 
+def _save_rest_telemetry(host: str, use_ssl: bool, user: str, password: str,
+                         results_dir: Path) -> None:
+    """Capture cluster REST telemetry snapshots to server-logs/telemetry/.
+
+    Mirrors the telemetry capture in cloud-service/scripts/run-pipeline.sh so
+    local runs have identical REST telemetry artifacts compatible with the dashboard.
+    """
+    if not _REQUESTS_AVAILABLE:
+        return
+
+    tel_dir = results_dir / "server-logs" / "telemetry"
+    tel_dir.mkdir(parents=True, exist_ok=True)
+
+    endpoints = [
+        ("/_cluster/health?pretty", "cluster-health.json"),
+        ("/_cluster/stats?pretty", "cluster-stats.json"),
+        ("/_cluster/settings?include_defaults=true&flat_settings=true&pretty", "cluster-settings.json"),
+        ("/_nodes/stats?pretty", "nodes-stats.json"),
+        ("/_cat/nodes?v&h=name,heap.percent,heap.current,heap.max,ram.percent,cpu,load_1m,load_5m", "nodes.txt"),
+        ("/_cat/thread_pool?v&h=node_name,name,active,queue,rejected,largest,completed", "thread-pools.txt"),
+        ("/_cat/tasks?v&detailed", "tasks.txt"),
+        ("/_cat/segments?v", "segments.txt"),
+    ]
+
+    proto = "https" if use_ssl else "http"
+    for endpoint, filename in endpoints:
+        try:
+            resp = _requests.get(
+                f"{proto}://{host}{endpoint}",
+                auth=(user, password),
+                verify=False,
+                timeout=15,
+            )
+            out_file = tel_dir / filename
+            if resp.ok:
+                out_file.write_text(resp.text, encoding="utf-8")
+            else:
+                logger.warning(f"Telemetry GET {endpoint} returned status {resp.status_code}")
+        except Exception as e:
+            logger.warning(f"Telemetry failed for {endpoint}: {e}")
+
+    logger.info(f"✓ Saved REST telemetry to {tel_dir}")
+
+
+def _download_dataset_files(loader: ConfigLoader, pipeline_data: Dict) -> None:
+    """Download HTTP/S3-backed data_files (base vectors, queries) for all corpus-requiring steps.
+
+    Mirrors the download logic in benchmark_runner.py so the local runner does not
+    require files to be pre-placed at /datasets/* by hand.
+    Skips datasets that have no ``data_files`` entry in datasets.yaml.
+    """
+    steps = pipeline_data.get("steps", [])
+    pipeline_params = pipeline_data.get("params", {})
+
+    CORPUS_REQUIRING_SCENARIOS = {"bulk-ingest-data", "bulk-ingest-and-search", "vector-search"}
+
+    # Collect unique (dataset, params) pairs so we download each corpus size once.
+    seen: set = set()
+    for step in steps:
+        scenario = step.get("scenario")
+        if scenario not in CORPUS_REQUIRING_SCENARIOS:
+            continue
+        dataset_name = step.get("dataset")
+        if not dataset_name:
+            continue
+
+        step_params = step.get("params", {})
+        # Sweeps may each target a different corpus_size — handle them individually.
+        sweeps = step_params.get("parameter_sweeps") or []
+        candidates = [step_params] if not sweeps else [
+            {**step_params, **sweep.get("params", {})} for sweep in sweeps
+        ]
+
+        for candidate in candidates:
+            merged = {**pipeline_params, **candidate}
+            corpus_size = merged.get("corpus_size", "1m")
+            key = (dataset_name, str(corpus_size))
+            if key in seen:
+                continue
+            seen.add(key)
+
+            dataset_cfg = loader.get_dataset_config(dataset_name)
+            if not dataset_cfg or not dataset_cfg.get("data_files"):
+                continue
+
+            logger.info(f"📦 Ensuring dataset files for '{dataset_name}' corpus_size={corpus_size}...")
+            ok = loader.download_dataset_files(dataset_name, merged)
+            if not ok:
+                logger.error(
+                    f"Failed to download dataset files for '{dataset_name}' (corpus_size={corpus_size}). "
+                    "Continuing — the benchmark step will fail if the file is missing."
+                )
+
+
 def _seed_gcs_cache_files(loader: ConfigLoader, pipeline_data: Dict, benchmark_home: Path) -> None:
     """Pre-seed dataset cache files listed in datasets.yaml (gcs_cache_files).
 
@@ -440,7 +536,10 @@ def main():
     logger.info(f" Results Dir:  {results_dir}")
     logger.info("=" * 60)
 
-    # 3. Pre-seed any GCS dataset cache files (e.g. Cohere 5M/8M HDF5)
+    # 3. Download HTTP/S3-backed dataset files (base vectors, queries, ground truth)
+    _download_dataset_files(loader, pipeline_data)
+
+    # 4. Pre-seed any GCS dataset cache files (e.g. Cohere 5M/8M HDF5)
     _seed_gcs_cache_files(loader, pipeline_data, benchmark_home)
 
     for idx, step in enumerate(steps):
@@ -530,12 +629,14 @@ def main():
                 poller.start()
 
             # Execute OSB process and stream output live
+            sub_env = {**os.environ, "PYTHONWARNINGS": "ignore:Unverified HTTPS request"}
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                env=sub_env
             )
 
             stdout_lines = []
@@ -566,6 +667,13 @@ def main():
                 _save_index_snapshot(
                     args.target_host, use_ssl, args.auth_user, args.auth_pass,
                     index_name, step_results_dir,
+                )
+
+            # REST telemetry dump (cluster-health, cluster-stats, nodes, thread-pools, segments, tasks)
+            if _REQUESTS_AVAILABLE:
+                _save_rest_telemetry(
+                    args.target_host, use_ssl, args.auth_user, args.auth_pass,
+                    step_results_dir,
                 )
 
             # Save stdout log
