@@ -235,8 +235,8 @@ class BenchmarkRunner:
         # Extract runner-only keys before they can bleed into workload params sent to OSB.
         # username/password are popped to prevent mutation leaking into subsequent calls.
         # client_timeout uses .get() — it is already blocked from ctx.params by _RUNNER_ONLY_KEYS.
-        username       = (workload_params or {}).pop('username',       'admin')
-        password       = (workload_params or {}).pop('password',       'admin')
+        username       = (workload_params or {}).pop('username', None) or os.environ.get('AUTH_USER', 'admin')
+        password       = (workload_params or {}).pop('password', None) or os.environ.get('AUTH_PASS', 'admin')
         step_u         = (workload_params or {}).pop('step_username',  '')
         step_p         = (workload_params or {}).pop('step_password',  '')
         pipeline_name  = (workload_params or {}).pop('pipeline_name',  '')
