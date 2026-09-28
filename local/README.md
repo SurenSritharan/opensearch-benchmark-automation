@@ -2,6 +2,23 @@
 
 The `local/` folder contains scripts for running benchmark pipelines directly on local machines, VMs, or Jenkins agents without requiring Kubernetes, GKE manifests, or the Flask cloud service.
 
+## Running the shared worker locally
+
+The local service uses the same `cloud-service/app.py` worker, queue, `BenchmarkRunner`, API, and result format as the GKE worker pod. It only changes the deployment settings through environment variables.
+
+```bash
+chmod +x local/run-service.sh
+WORKLOADS_DIR=../opensearch-benchmark-workloads \
+TARGET_HOST=127.0.0.1:9200 \
+USE_SSL=false \
+AUTH_PASS=admin \
+local/run-service.sh
+```
+
+Open `http://127.0.0.1:8080` or submit a job through the API. The defaults use `jvector`, `./.benchmark`, and `results/local-service`; set `WORKER_ENGINES` for another engine. GKE still uses the manifest-provided defaults, including worker DNS, `/workspace`, `/datasets`, HTTPS, and mounted certificates.
+
+The direct `local/run_pipeline.py` command remains available for Jenkins or one-shot runs that do not need the REST queue.
+
 ---
 
 ## Prerequisites
