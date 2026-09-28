@@ -69,15 +69,58 @@ def _kill_proc_group(proc: subprocess.Popen) -> None:
         pass
     
 
-_CERT    = '/certs/admin.pem'
-_KEY     = '/certs/admin-key.pem'
-_CA      = '/certs/root-ca.pem'
+_CERT    = os.environ.get('OS_CERT', '/certs/admin.pem')
+_KEY     = os.environ.get('OS_KEY', '/certs/admin-key.pem')
+_CA      = os.environ.get('OS_CA', '/certs/root-ca.pem')
+_BENCHMARK_HOME = Path(os.environ.get('BENCHMARK_HOME', '/datasets/opensearch-benchmark'))
+_DATASETS_ROOT = Path(os.environ.get('DATASETS_ROOT', '/datasets'))
+_TEMP_DIR = Path(os.environ.get('TEMP_DIR', '/tmp'))
+
+
+def _use_ssl() -> bool:
+    return os.environ.get('USE_SSL', 'true').lower() == 'true'
+
+
+def _request_kwargs(timeout: int) -> Dict[str, Any]:
+    """Return GKE certificate or local basic-auth request settings."""
+    if all(Path(path).exists() for path in (_CERT, _KEY, _CA)):
+        return {'cert': (_CERT, _KEY), 'verify': _CA, 'timeout': timeout}
+    return {
+        'auth': (
+            os.environ.get('AUTH_USER', 'admin'),
+            os.environ.get('AUTH_PASS', 'admin'),
+        ),
+        'verify': os.environ.get('VERIFY_CERTS', 'false').lower() == 'true',
+        'timeout': timeout,
+    }
+
+
+def _base_url(target_host: str) -> str:
+    return f"{'https' if _use_ssl() else 'http'}://{target_host}"
+
+
+def _save_index_snapshot(engine: str, target_host: str, index_name: str,
+                         results_dir: Path) -> None:
+    """Save index metadata beside the run that used this resolved index."""
+    try:
+        base_url = f"{_base_url(target_host)}/{index_name}"
+        snapshot = {'index': index_name, 'engine': engine}
+        for key, path in [('mapping', '/_mapping'), ('settings', '/_settings'), ('stats', '/_stats')]:
+            response = requests.get(f'{base_url}{path}', **_request_kwargs(15))
+            snapshot[key] = response.json() if response.ok else {'error': f'HTTP {response.status_code}'}
+
+        results_dir.mkdir(parents=True, exist_ok=True)
+        out = results_dir / 'index_snapshot.json'
+        out.write_text(json.dumps(snapshot, indent=2))
+        logger.info(f'Saved index snapshot for {index_name} to {out}')
+    except Exception as e:
+        logger.warning(f'Index snapshot failed for {index_name}: {e}')
 
 def _fetch_node_stats(target_host: str) -> Optional[Dict]:
     """Snapshot _nodes/stats from the OpenSearch cluster via REST API."""
     try:
-        url = f"https://{target_host}/_nodes/stats/jvm,os,process,fs,thread_pool,indices"
-        resp = requests.get(url, cert=(_CERT, _KEY), verify=_CA, timeout=15)
+        url = f"{_base_url(target_host)}/_nodes/stats/jvm,os,process,fs,thread_pool,indices"
+        resp = requests.get(url, **_request_kwargs(15))
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -141,9 +184,11 @@ _RUNNER_ONLY_KEYS = frozenset({'client_timeout', 'ingest_max_attempts'})
 class BenchmarkRunner:
     """Executes opensearch-benchmark commands without kubectl dependencies"""
     
-    def __init__(self, config_loader: ConfigLoader, results_dir: str = '/results'):
+    def __init__(self, config_loader: ConfigLoader, results_dir: Optional[str] = None):
         self.config = config_loader
-        self.results_dir = Path(results_dir)
+        self.results_dir = Path(results_dir or os.environ.get('RESULTS_DIR', '/results'))
+        self.benchmark_home = _BENCHMARK_HOME
+        self.datasets_root = _DATASETS_ROOT
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_collector = None
         self.metrics_thread = None
@@ -208,8 +253,8 @@ class BenchmarkRunner:
         # Extract runner-only keys before they can bleed into workload params sent to OSB.
         # username/password are popped to prevent mutation leaking into subsequent calls.
         # client_timeout uses .get() — it is already blocked from ctx.params by _RUNNER_ONLY_KEYS.
-        username       = (workload_params or {}).pop('username',       'admin')
-        password       = (workload_params or {}).pop('password',       'admin')
+        username       = (workload_params or {}).pop('username', None) or os.environ.get('AUTH_USER', 'admin')
+        password       = (workload_params or {}).pop('password', None) or os.environ.get('AUTH_PASS', 'admin')
         step_u         = (workload_params or {}).pop('step_username',  '')
         step_p         = (workload_params or {}).pop('step_password',  '')
         pipeline_name  = (workload_params or {}).pop('pipeline_name',  '')
@@ -316,13 +361,12 @@ class BenchmarkRunner:
         attempts so a transiently red/initializing cluster (e.g. just after
         scale-up) doesn't immediately fail all scenarios.
         """
-        url = f"https://{target_host}/_cluster/health"
+        url = f"{_base_url(target_host)}/_cluster/health"
         for attempt in range(1, retries + 1):
             try:
                 response = requests.get(
                     url,
-                    cert=(_CERT, _KEY), verify=_CA,
-                    timeout=10
+                    **_request_kwargs(10)
                 )
                 if response.status_code == 200:
                     health = response.json()
@@ -352,6 +396,10 @@ class BenchmarkRunner:
         sweep_idx: int,
     ) -> None:
         """Initialise and start the K8s metrics collector in a background thread."""
+        if os.environ.get('ENABLE_K8S_METRICS', 'true').lower() != 'true':
+            logger.info("Kubernetes metrics collection disabled")
+            return
+
         namespace = get_os_namespace(engine)
         logger.info(f"📊 Initializing metrics collection for namespace: {namespace}")
         try:
@@ -383,8 +431,7 @@ class BenchmarkRunner:
 
     def _clear_benchmark_logs(self):
         """Clear benchmark log files and reset logging.json before each run."""
-        BENCHMARK_HOME = "/datasets/opensearch-benchmark"
-        osb_dir = Path(f"{BENCHMARK_HOME}/.osb")
+        osb_dir = self.benchmark_home / '.osb'
         log_dir = osb_dir / 'logs'
 
         # Truncate log files so previous run output doesn't bleed into the next run
@@ -443,7 +490,7 @@ class BenchmarkRunner:
             logger.info(f"Purged {deleted} result dir(s) older than {max_age_days}d ({errors} errors)")
 
         # 2. .osb/benchmarks/test-runs/<uuid>/ — UUID-named so use mtime
-        test_runs_dir = Path("/datasets/opensearch-benchmark/.osb/benchmarks/test-runs")
+        test_runs_dir = self.benchmark_home / '.osb' / 'benchmarks' / 'test-runs'
         cutoff_ts = cutoff.timestamp()
         deleted, errors = 0, 0
         try:
@@ -487,7 +534,7 @@ class BenchmarkRunner:
             'opensearch-benchmark', 'run',
             '--workload-path',   ctx.workload_path,
             '--target-hosts',    ctx.target_host,
-            '--client-options',  f'timeout:{ctx.client_timeout},use_ssl:true,verify_certs:false,basic_auth_user:{ctx.username},basic_auth_password:{ctx.password}',
+            '--client-options',  f'timeout:{ctx.client_timeout},use_ssl:{str(_use_ssl()).lower()},verify_certs:{str(os.environ.get("VERIFY_CERTS", "false").lower() == "true").lower()},basic_auth_user:{ctx.username},basic_auth_password:{ctx.password}',
             '--test-procedure',  scenario,
             '--kill-running-processes',
             f'--user-tag={user_tags_str}',
@@ -513,7 +560,7 @@ class BenchmarkRunner:
     def _log_level_override(self, log_level: Optional[str]):
         """Context manager that patches OSB's logging.json for the duration of
         a sweep and restores the original on exit (even if the sweep fails)."""
-        benchmark_home  = Path('/datasets/opensearch-benchmark')
+        benchmark_home  = self.benchmark_home
         log_path        = benchmark_home / '.osb' / 'logging.json'
         backup_path     = benchmark_home / '.osb' / 'logging.json.bak'
 
@@ -582,7 +629,7 @@ class BenchmarkRunner:
         """Launch the opensearch-benchmark subprocess in its own process group,
         register it for cross-Gunicorn-worker cancellation, and write its PGID
         to disk so other workers can kill it if needed."""
-        run_dir = Path("/workspace/run")
+        run_dir = Path(os.environ.get('RUN_DIR', str(self.benchmark_home / 'run')))
         run_dir.mkdir(parents=True, exist_ok=True)
         pgid_file = run_dir / f"job_{active_key}.pgid"
 
@@ -592,6 +639,7 @@ class BenchmarkRunner:
             stderr=subprocess.PIPE,
             text=True,
             env=env,
+            cwd=str(self.datasets_root),
             start_new_session=True,  # Breaks into its own PGID
         )
 
@@ -651,7 +699,8 @@ class BenchmarkRunner:
         red_consecutive    = 0
         busy_consecutive   = 0
         heap_dumped_nodes: set = set()   # guard: at most one dump per node per run
-        pgid_file          = Path("/workspace/run") / f"job_{active_key}.pgid"
+        run_dir            = Path(os.environ.get('RUN_DIR', str(self.benchmark_home / 'run')))
+        pgid_file          = run_dir / f"job_{active_key}.pgid"
 
         try:
             while proc.poll() is None:
@@ -752,9 +801,8 @@ class BenchmarkRunner:
         """
         try:
             response = requests.get(
-                f"https://{target_host}/_cluster/health",
-                cert=(_CERT, _KEY), verify=_CA,
-                timeout=10,
+                f"{_base_url(target_host)}/_cluster/health",
+                **_request_kwargs(10),
             )
             if response.status_code == 200:
                 return response.json().get('status'), False
@@ -862,7 +910,7 @@ class BenchmarkRunner:
             profiling_dir.mkdir(parents=True, exist_ok=True)
 
             for pod in started:
-                remote_path = f'/tmp/flamegraph-{pod}.html'
+                remote_path = str(_TEMP_DIR / f'flamegraph-{pod}.html')
                 local_path  = profiling_dir / f'{pod}-flamegraph.html'
                 try:
                     r = subprocess.run(
@@ -996,7 +1044,7 @@ class BenchmarkRunner:
             visible_doc_count = None
             if index:
                 try:
-                    url  = f"https://{ctx.target_host}/{index}/_count"
+                    url  = f"{_base_url(ctx.target_host)}/{index}/_count"
                     resp = requests.post(
                         url,
                         auth=(ctx.username, ctx.password),
@@ -1057,7 +1105,7 @@ class BenchmarkRunner:
         anything), falls back to writing stdout+stderr so the UI always has
         something to show.
         """
-        BENCHMARK_HOME = "/datasets/opensearch-benchmark"
+        BENCHMARK_HOME = self.benchmark_home
         
         # Regex match UUIDs for the target test execution run
         uuid_pattern = r"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"
@@ -1203,7 +1251,7 @@ class BenchmarkRunner:
                 job_id = str(uuid.uuid4())
 
             sweeps     = self._get_run_contexts(job_id, dataset, engine, scenario, workload_params)
-            env        = {**os.environ, 'TERM': 'dumb', 'BENCHMARK_HOME': '/datasets/opensearch-benchmark'}
+            env        = {**os.environ, 'TERM': 'dumb', 'BENCHMARK_HOME': str(self.benchmark_home)}
             active_key = job_id.split('/')[0] if '/' in job_id else job_id
 
             all_results = []
@@ -1213,6 +1261,12 @@ class BenchmarkRunner:
                     break
 
                 logger.info(f"Running sweep {idx}/{len(sweeps)}: dataset={dataset}, engine={engine}, scenario={scenario}")
+
+                if not self.config.seed_gcs_cache_files(dataset, ctx.params):
+                    return {
+                        'status': 'failed',
+                        'error': f'Failed to seed required GCS cache files for sweep {idx}.',
+                    }
 
                 if ctx.dataset_config and not self.config.download_dataset_files(dataset, ctx.params):
                     return {'status': 'failed', 'error': f'Failed to download dataset files for sweep {idx}.'}
@@ -1262,6 +1316,13 @@ class BenchmarkRunner:
                 self._download_artifacts(result.stdout, ctx.results_dir, ctx, stderr=result.stderr)
 
                 is_cancelled = (cancel_event and cancel_event.is_set()) or result.returncode == -9
+                # Snapshot from this sweep's resolved RunContext, so telemetry
+                # uses the same index name and output directory as the OSB run.
+                if result.returncode == 0 and not is_cancelled:
+                    index_name = ctx.params.get('target_index_name') or ctx.params.get('index')
+                    if index_name:
+                        _save_index_snapshot(engine, ctx.target_host, index_name, ctx.results_dir)
+
                 all_results.append({
                     'status':           'cancelled' if is_cancelled else ('completed' if result.returncode == 0 else 'failed'),
                     'exit_code':        result.returncode,
@@ -1293,8 +1354,8 @@ class BenchmarkRunner:
     def _get_doc_count(self, target_host: str, index: str) -> Optional[int]:
         """Return the doc count for *index* via GET /{index}/_count, or None on error."""
         try:
-            url  = f"https://{target_host}/{index}/_count"
-            resp = requests.get(url, cert=(_CERT, _KEY), verify=_CA, timeout=15)
+            url  = f"{_base_url(target_host)}/{index}/_count"
+            resp = requests.get(url, **_request_kwargs(15))
             resp.raise_for_status()
             return resp.json().get("count")
         except Exception as e:
@@ -1304,8 +1365,8 @@ class BenchmarkRunner:
     def _refresh_index(self, target_host: str, index: str) -> None:
         """POST /{index}/_refresh so the doc count is current before verification."""
         try:
-            url  = f"https://{target_host}/{index}/_refresh"
-            resp = requests.post(url, cert=(_CERT, _KEY), verify=_CA, timeout=30)
+            url  = f"{_base_url(target_host)}/{index}/_refresh"
+            resp = requests.post(url, **_request_kwargs(30))
             resp.raise_for_status()
         except Exception as e:
             logger.warning(f"Could not refresh [{index}]: {e}")

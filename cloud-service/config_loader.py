@@ -65,10 +65,12 @@ def get_corpus_size(num_vectors) -> str:
 class ConfigLoader:
     """Loads and parses dataset and workload configurations"""
     
-    def __init__(self, workspace_dir: str = '/workspace', workloads_dir: str = '/datasets/opensearch-benchmark-workloads'):
-        self.workspace_dir = Path(workspace_dir)
+    def __init__(self, workspace_dir: Optional[str] = None, workloads_dir: Optional[str] = None):
+        self.workspace_dir = Path(workspace_dir or os.environ.get('WORKSPACE_DIR', '/workspace'))
         self.config_dir = self.workspace_dir / 'config'
-        self.workloads_dir = Path(workloads_dir)
+        self.workloads_dir = Path(
+            workloads_dir or os.environ.get('WORKLOADS_DIR', '/datasets/opensearch-benchmark-workloads')
+        )
         self.datasets_config = self._load_datasets_config()
     
     def _git_pull_repo(self, repo_path: Path, repo_name: str) -> Dict[str, Any]:
@@ -141,7 +143,7 @@ class ConfigLoader:
             # Copy updated web assets to /app/web so Flask serves the latest HTML/JS/CSS
             if automation_result['success']:
                 src_web = self.workspace_dir / 'cloud-service' / 'web'
-                dst_web = Path('/app/web')
+                dst_web = Path(os.environ.get('APP_DIR', '/app')) / 'web'
                 if src_web.exists():
                     shutil.copytree(src_web, dst_web, dirs_exist_ok=True)
                     logger.info(f"Copied web assets from {src_web} to {dst_web}")
@@ -277,6 +279,12 @@ class ConfigLoader:
     
     def get_target_host(self, engine: str) -> str:
         """Get the OpenSearch cluster endpoint for an engine"""
+        target_host = os.environ.get(f'TARGET_HOST_{engine.upper().replace("-", "_")}')
+        if target_host:
+            return target_host
+        target_host = os.environ.get('TARGET_HOST')
+        if target_host:
+            return target_host
         namespace = get_os_namespace(engine)
         return f"opensearch-cluster.{namespace}.svc.cluster.local:9200"
     
@@ -435,7 +443,11 @@ class ConfigLoader:
         
         data_files = dataset_config.get('data_files', [])
         
-        data_dir = dataset_config.get('data_dir', '/datasets')
+        datasets_root = os.environ.get('DATASETS_ROOT', '/datasets')
+        data_dir = dataset_config.get('data_dir', '.')
+        data_dir = Path(data_dir)
+        if not data_dir.is_absolute():
+            data_dir = Path(datasets_root) / data_dir
         data_dir_path = Path(data_dir)
         
         logger.info(f"Checking dataset files in {data_dir}...")
@@ -549,6 +561,8 @@ class ConfigLoader:
         # Derive the download URL from base_url + filename.
         if params and params.get('ground_truth_file'):
             gt_path = Path(params['ground_truth_file'])
+            if not gt_path.is_absolute():
+                gt_path = Path(datasets_root) / gt_path
             if not gt_path.exists():
                 base_url = dataset_config.get('base_url', '')
                 if not base_url:
@@ -579,6 +593,66 @@ class ConfigLoader:
                 logger.info(f"✓ Ground truth file already exists: {gt_path.name}")
 
         logger.info("✓ All dataset files are ready")
+        return True
+
+    def seed_gcs_cache_files(self, dataset_name: str, params: Optional[Dict[str, Any]] = None) -> bool:
+        """Ensure GCS-backed cache files exist under DATASETS_ROOT."""
+        dataset_config = self.get_dataset_config(dataset_name)
+        cache_files = dataset_config.get('gcs_cache_files', [])
+        if not cache_files:
+            return True
+
+        runtime_params = params or {}
+        corpus_size = runtime_params.get('corpus_size')
+        if not corpus_size and runtime_params.get('num_vectors'):
+            corpus_size = get_corpus_size(runtime_params['num_vectors'])
+        if not corpus_size:
+            corpus_size = dataset_config.get('corpus_size')
+
+        datasets_root = Path(os.environ.get('DATASETS_ROOT', '/datasets'))
+        gcs_tool = shutil.which('gcloud') or shutil.which('gsutil')
+        for entry in cache_files:
+            if entry.get('corpus_size') and str(entry['corpus_size']) != str(corpus_size):
+                continue
+
+            gcs_path = entry.get('gcs_path')
+            target_path = entry.get('target_path')
+            if not gcs_path or not target_path:
+                logger.error(f"Invalid GCS cache entry for dataset '{dataset_name}': {entry}")
+                return False
+
+            target = Path(target_path)
+            if not target.is_absolute():
+                target = datasets_root / target
+
+            if target.exists() and target.stat().st_size > 0:
+                logger.info(f"GCS cache already present: {target}")
+                continue
+
+            if not gcs_tool:
+                logger.error(
+                    f"Required GCS cache file is missing: {target}; "
+                    "install gcloud/gsutil or seed the file manually"
+                )
+                return False
+
+            target.parent.mkdir(parents=True, exist_ok=True)
+            command = (
+                ['gcloud', 'storage', 'cp', gcs_path, str(target)]
+                if 'gcloud' in gcs_tool
+                else ['gsutil', '-q', 'cp', gcs_path, str(target)]
+            )
+            logger.info(f"Seeding GCS cache: {gcs_path} -> {target}")
+            try:
+                subprocess.run(command, check=True, timeout=3600)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                logger.error(f"Failed to seed GCS cache file {target}: {exc}")
+                return False
+
+            if not target.exists() or target.stat().st_size == 0:
+                logger.error(f"GCS cache target is missing or empty: {target}")
+                return False
+
         return True
     
     def get_test_procedures(self, dataset_name: str) -> List[Dict[str, Any]]:

@@ -386,10 +386,9 @@ print(json.dumps(s))
         // ── 4. Run Benchmarks ──────────────────────────────────────────────────
         //    Per engine, in order:
         //      a) Start worker (just-in-time — only one worker up at a time)
-        //      b) Seed dataset cache onto that worker's PVC
-        //      c) Scale up / deploy OpenSearch cluster
-        //      d) Run benchmark pipeline
-        //      e) Fetch & save results
+        //      b) Scale up / deploy OpenSearch cluster
+        //      c) Run benchmark pipeline; the worker seeds any required GCS cache
+        //      d) Fetch & save results
         //
         //    PROD:    engines run in parallel (independent clusters + resource pools)
         //    DEVELOP: engines run sequentially (shared dev node)
@@ -447,26 +446,6 @@ print(json.dumps(s))
                     // the first search run — ensures all version/size comparisons start from the
                     // same cold JVM/cache state.
                     def restartAfterBuild     = pipelineJson.restart_after_build == true
-
-                    // Resolve dataset cache files to seed (same logic as the old Seed Dataset Cache stage).
-                    // Corpus sizes are derived from ALL steps in the pipeline (both first_run_steps
-                    // and steps) so that every corpus_size used by any step gets its GCS file seeded.
-                    // If a pipeline provides params.corpus_size, that single value is used instead.
-                    def corpusSizeVal  = pipelineJson.params?.corpus_size
-                    def allSteps       = (pipelineJson.first_run_steps ?: []) + (pipelineJson.steps ?: [])
-                    def corpusSizes    = corpusSizeVal ? [corpusSizeVal] : allSteps.collect { it.params.corpus_size }.unique().findAll { it }
-                    def datasets       = allSteps.collect { it.dataset }.unique().findAll { it }
-                    def datasetsConfig = readYaml file: 'config/datasets.yaml'
-                    def filesToSeed    = []
-                    datasets.each { dataset ->
-                        def cacheFiles = datasetsConfig.datasets[dataset]?.gcs_cache_files ?: []
-                        cacheFiles.each { entry ->
-                            if (corpusSizes.contains(entry.corpus_size)) { filesToSeed << entry }
-                        }
-                    }
-                    if (filesToSeed) {
-                        echo "Files to seed per worker: ${filesToSeed.collect { it.gcs_path }.join(', ')}"
-                    }
 
                     // Build a closure that runs all (version × size) iterations for a single engine.
                     def makeEngineClosure = { String engine ->
@@ -531,27 +510,6 @@ print(json.dumps(s))
                                         if [ "\$STATUS" != "200" ]; then
                                             echo "❌ worker-${engine} did not become reachable after 5 minutes"
                                             exit 1
-                                        fi
-                                    """
-                                }
-
-                                // ── b) Seed dataset cache onto this worker's PVC ───────
-                                filesToSeed.each { entry ->
-                                    def gcsPath    = entry.gcs_path
-                                    def targetPath = entry.target_path
-                                    def fileName   = gcsPath.tokenize('/').last()
-                                    sh """
-                                        set -euo pipefail
-                                        POD="opensearch-benchmark-worker-${engine}-0"
-                                        if kubectl exec -n ${apiNs} \$POD -- test -f '${targetPath}' 2>/dev/null; then
-                                            echo "[${engine}] ${fileName} already present — skipping"
-                                        else
-                                            echo "[${engine}] Seeding ${fileName} from GCS..."
-                                            kubectl exec -n ${apiNs} \$POD -- sh -c \
-                                                "mkdir -p \$(dirname '${targetPath}') && gcloud storage cp '${gcsPath}' '${targetPath}'"
-                                            FINAL_SIZE=\$(kubectl exec -n ${apiNs} \$POD -- \
-                                                stat -c '%s' '${targetPath}' 2>/dev/null || echo 0)
-                                            echo "[${engine}] Done — \${FINAL_SIZE} bytes"
                                         fi
                                     """
                                 }
