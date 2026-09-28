@@ -98,6 +98,24 @@ def _request_kwargs(timeout: int) -> Dict[str, Any]:
 def _base_url(target_host: str) -> str:
     return f"{'https' if _use_ssl() else 'http'}://{target_host}"
 
+
+def _save_index_snapshot(engine: str, target_host: str, index_name: str,
+                         results_dir: Path) -> None:
+    """Save index metadata beside the run that used this resolved index."""
+    try:
+        base_url = f"{_base_url(target_host)}/{index_name}"
+        snapshot = {'index': index_name, 'engine': engine}
+        for key, path in [('mapping', '/_mapping'), ('settings', '/_settings'), ('stats', '/_stats')]:
+            response = requests.get(f'{base_url}{path}', **_request_kwargs(15))
+            snapshot[key] = response.json() if response.ok else {'error': f'HTTP {response.status_code}'}
+
+        results_dir.mkdir(parents=True, exist_ok=True)
+        out = results_dir / 'index_snapshot.json'
+        out.write_text(json.dumps(snapshot, indent=2))
+        logger.info(f'Saved index snapshot for {index_name} to {out}')
+    except Exception as e:
+        logger.warning(f'Index snapshot failed for {index_name}: {e}')
+
 def _fetch_node_stats(target_host: str) -> Optional[Dict]:
     """Snapshot _nodes/stats from the OpenSearch cluster via REST API."""
     try:
@@ -1298,6 +1316,13 @@ class BenchmarkRunner:
                 self._download_artifacts(result.stdout, ctx.results_dir, ctx, stderr=result.stderr)
 
                 is_cancelled = (cancel_event and cancel_event.is_set()) or result.returncode == -9
+                # Snapshot from this sweep's resolved RunContext, so telemetry
+                # uses the same index name and output directory as the OSB run.
+                if result.returncode == 0 and not is_cancelled:
+                    index_name = ctx.params.get('target_index_name') or ctx.params.get('index')
+                    if index_name:
+                        _save_index_snapshot(engine, ctx.target_host, index_name, ctx.results_dir)
+
                 all_results.append({
                     'status':           'cancelled' if is_cancelled else ('completed' if result.returncode == 0 else 'failed'),
                     'exit_code':        result.returncode,
