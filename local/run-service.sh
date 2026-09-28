@@ -23,6 +23,7 @@ export AUTH_PASS="${AUTH_PASS:-admin}"
 export WORKER_ENGINES="${WORKER_ENGINES:-jvector}"
 export WORKER_MODE="${WORKER_MODE:-combined}"
 export ENABLE_K8S_METRICS="${ENABLE_K8S_METRICS:-false}"
+export RESULTS_INCLUDE_JOB_ID="${RESULTS_INCLUDE_JOB_ID:-false}"
 
 mkdir -p "${RESULTS_DIR}" "${BENCHMARK_HOME}" "${DATASETS_ROOT}" "${TEMP_DIR}"
 

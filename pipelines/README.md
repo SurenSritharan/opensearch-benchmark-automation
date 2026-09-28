@@ -110,9 +110,11 @@ API_URL=http://1.2.3.4 ./cloud-service/scripts/run-pipeline.sh --pipeline msmarc
 | `search-all.json` | 1M + 5M | wiki + msmarco | Search only at both 1M and 5M, k=100, 64, 10 (indexes must exist) |
 | `complete-1m.json` | 1M | wiki + msmarco | Full run at 1M only |
 | `complete-5m.json` | 5M | wiki + msmarco | Full run at 5M only |
+| `complete-8m.json` | 8M | wiki + msmarco | Full run at 8M only |
 | `search-1m.json` | 1M | wiki + msmarco | Search only at 1M (indexes must exist) |
 | `search-5m.json` | 5M | wiki + msmarco | Search only at 5M (indexes must exist) |
 | `search-compare.json` | 1M + 5M | wiki + msmarco | Version comparison across two OpenSearch versions and two node sizes |
 | `msmarco-jvector-hq-build.json` | 1M | msmarco | Build HQ index (ef_construction=512, M=64) |
 | `msmarco-jvector-hq-search.json` | 1M | msmarco | Search HQ index, sweep ef_search 128/256/512, k=100, 64, 10 |
 | `msmarco-jvector-hq-full.json` | 1M | msmarco | HQ build + ef_search sweep in one job, k=100, 64, 10 |
+| `bulk-ingest-and-search.json` | 1M | wiki | Concurrent bulk ingest + search — measures recall impact of concurrent ingestion, k=100 |

@@ -34,6 +34,9 @@
 
 set -euo pipefail
 
+RESULTS_ROOT="${RESULTS_ROOT:-/results}"
+REMOTE_TMP_DIR="${REMOTE_TMP_DIR:-/tmp}"
+
 # ── Parse arguments ────────────────────────────────────────────────────────────
 PIPELINE_FILE=""
 CLI_LOG_LEVEL=""
@@ -459,7 +462,7 @@ _copy_scenario_results() {
   local scenario_key="$1"   # e.g. cohere-wiki-en-768-wiki-en-768-5m-bulk-ingest-data
   [ -z "${RESULTS_DEST:-}" ] || [ -z "${WORKER_POD:-}" ] && return 0
 
-  local src_path="/results/${JOB_ID}/${ENGINE}/${scenario_key}"
+  local src_path="${RESULTS_ROOT}/${JOB_ID}/${ENGINE}/${scenario_key}"
   local dest="${RESULTS_DEST}/${scenario_key}"
   mkdir -p "$dest"
   local cp_err
@@ -636,7 +639,7 @@ while true; do
 
     echo "$now  [heap-dump] Node ${hd_node} at ${hd_pct}% — collecting heap dump..."
     hd_ts=$(date -u '+%Y%m%d-%H%M%S')
-    hd_remote="/tmp/heapdump-${hd_node}-${hd_ts}.hprof.gz"
+    hd_remote="${REMOTE_TMP_DIR}/heapdump-${hd_node}-${hd_ts}.hprof.gz"
     # Store the dump inside the active scenario's results directory so it is
     # immediately associated with the test that caused the heap pressure.
     # Falls back to a top-level heap-dumps/ dir when no scenario is active.
@@ -658,7 +661,7 @@ while true; do
       else
         echo "$now  [heap-dump] WARNING: kubectl cp failed for ${hd_node}"
       fi
-      # Remove the remote file so we don't accumulate .hprof files in /tmp
+      # Remove the remote file so we don't accumulate heap dumps in the temp directory.
       kubectl exec "${hd_node}" -c opensearch -n "${hd_ns}" -- \
         rm -f "${hd_remote}" 2>/dev/null || true
     else
