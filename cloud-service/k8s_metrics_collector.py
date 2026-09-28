@@ -8,6 +8,7 @@ Outputs the exact target payload schema required.
 import time
 import json
 import logging
+import os
 import re
 import threading
 from datetime import datetime, timezone
@@ -33,9 +34,15 @@ class K8sMetricsCollector:
             logger.info("Metrics collection is disabled")
             return
 
-        self.token_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
-        self.ca_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
-        self.base_url = "https://kubernetes.default.svc"
+        self.token_path = Path(os.environ.get(
+            'K8S_SERVICE_ACCOUNT_TOKEN',
+            '/var/run/secrets/kubernetes.io/serviceaccount/token',
+        ))
+        self.ca_path = Path(os.environ.get(
+            'K8S_SERVICE_ACCOUNT_CA',
+            '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt',
+        ))
+        self.base_url = os.environ.get('K8S_API_URL', 'https://kubernetes.default.svc')
         
         if self.token_path.exists() and self.ca_path.exists():
             logger.info("✓ Running inside cluster. Using ServiceAccount token.")
@@ -150,10 +157,22 @@ class K8sMetricsCollector:
         if not self.opensearch_host:
             return None
         try:
-            url = f"https://{self.opensearch_host}/_nodes/stats/jvm"
+            scheme = 'https' if os.environ.get('USE_SSL', 'true').lower() == 'true' else 'http'
+            url = f"{scheme}://{self.opensearch_host}/_nodes/stats/jvm"
+            cert = (
+                os.environ.get('OS_CERT', '/certs/admin.pem'),
+                os.environ.get('OS_KEY', '/certs/admin-key.pem'),
+            )
+            ca = os.environ.get('OS_CA', '/certs/root-ca.pem')
+            request_kwargs = {
+                'auth': (os.environ.get('AUTH_USER', 'admin'), os.environ.get('AUTH_PASS', 'admin')),
+                'verify': os.environ.get('VERIFY_CERTS', 'false').lower() == 'true',
+            }
+            if all(Path(path).exists() for path in (*cert, ca)):
+                request_kwargs = {'cert': cert, 'verify': ca}
             resp = requests.get(
                 url,
-                cert=('/certs/admin.pem', '/certs/admin-key.pem'), verify='/certs/root-ca.pem',
+                **request_kwargs,
                 timeout=5,
             )
             resp.raise_for_status()
