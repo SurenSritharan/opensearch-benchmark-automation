@@ -365,7 +365,8 @@ def _download_dataset_files(loader: ConfigLoader, pipeline_data: Dict) -> None:
                 )
 
 
-def _seed_gcs_cache_files(loader: ConfigLoader, pipeline_data: Dict, benchmark_home: Path) -> None:
+def _seed_gcs_cache_files(loader: ConfigLoader, pipeline_data: Dict,
+                          benchmark_home: Path, datasets_root: Path) -> None:
     """Pre-seed dataset cache files listed in datasets.yaml (gcs_cache_files).
 
     Only seeds when scenarios that actually require the corpus file
@@ -430,10 +431,16 @@ def _seed_gcs_cache_files(loader: ConfigLoader, pipeline_data: Dict, benchmark_h
 
         file_name = gcs_path.split("/")[-1]
 
-        # Remap /datasets/opensearch-benchmark prefix to local benchmark_home
-        if orig_target_path.startswith("/datasets/opensearch-benchmark/"):
+        # Cache targets are relative to DATASETS_ROOT. Keep the fallback beside
+        # the benchmark home for older config entries.
+        benchmark_prefix = str(benchmark_home) + "/"
+        if not orig_target_path.startswith('/'):
+            local_target = datasets_root / orig_target_path
+        elif orig_target_path.startswith("/datasets/opensearch-benchmark/"):
             rel_path = orig_target_path[len("/datasets/opensearch-benchmark/"):]
             local_target = benchmark_home / rel_path
+        elif orig_target_path.startswith(benchmark_prefix):
+            local_target = benchmark_home / orig_target_path[len(benchmark_prefix):]
         else:
             corpus_size = entry.get("corpus_size", "")
             corpus_folder = f"cohere-{corpus_size}" if corpus_size else ""
@@ -490,7 +497,11 @@ def main():
     workspace = REPO_ROOT
     workloads_dir = Path(args.workloads_dir).resolve()
     results_dir = Path(args.results_dir).resolve()
-    benchmark_home = Path(os.environ.get("BENCHMARK_HOME", Path.home() / ".benchmark")).resolve()
+    datasets_root = Path(os.environ.get("DATASETS_ROOT", REPO_ROOT / "datasets")).resolve()
+    benchmark_home = Path(
+        os.environ.get("BENCHMARK_HOME", str(datasets_root / "opensearch-benchmark"))
+    ).resolve()
+    os.environ.setdefault("DATASETS_ROOT", str(datasets_root))
 
     if not workloads_dir.exists():
         logger.error(f"Workloads directory not found at: {workloads_dir}")
@@ -540,7 +551,7 @@ def main():
     _download_dataset_files(loader, pipeline_data)
 
     # 4. Pre-seed any GCS dataset cache files (e.g. Cohere 5M/8M HDF5)
-    _seed_gcs_cache_files(loader, pipeline_data, benchmark_home)
+    _seed_gcs_cache_files(loader, pipeline_data, benchmark_home, datasets_root)
 
     for idx, step in enumerate(steps):
         dataset_name = step["dataset"]
@@ -636,7 +647,8 @@ def main():
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                env=sub_env
+                env=sub_env,
+                cwd=str(datasets_root),
             )
 
             stdout_lines = []
@@ -662,7 +674,10 @@ def main():
             poller.save(scenario, start_time, end_time, step_results_dir)
 
             # index_snapshot.json — mapping, settings, stats for the benchmark index (mirrors cloud)
-            index_name = final_params.get("index", final_params.get("target_index_name", ""))
+            # target_index_name is the runtime-resolved index used by the
+            # benchmark. Some workload params also carry an `index` template
+            # value, so prefer the resolved target name for telemetry URLs.
+            index_name = final_params.get("target_index_name") or final_params.get("index", "")
             if index_name and _REQUESTS_AVAILABLE:
                 _save_index_snapshot(
                     args.target_host, use_ssl, args.auth_user, args.auth_pass,
