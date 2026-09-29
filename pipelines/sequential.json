@@ -9,6 +9,6 @@
     { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index" },
     { "dataset": "cohere-wiki-en-768", "scenario": "force-merge" },
     { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index" },
-    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "params": { "query_k": 100 } }
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search", "params": { "query_k": 100, "search_clients": 4 } }
   ]
 }

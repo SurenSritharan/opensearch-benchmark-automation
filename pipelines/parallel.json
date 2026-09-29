@@ -5,7 +5,7 @@
   "steps": [
     { "dataset": "cohere-wiki-en-768", "scenario": "delete-index" },
     { "dataset": "cohere-wiki-en-768", "scenario": "create-index" },
-    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-and-search", "params": { "query_k": 100, "target_index_num_vectors": 500000 } }
+    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-and-search", "params": { "query_k": 100, "target_index_num_vectors": 500000, "search_clients": 4 } }
     
   ]
 }
