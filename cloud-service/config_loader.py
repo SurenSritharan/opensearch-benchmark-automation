@@ -679,7 +679,8 @@ class ConfigLoader:
         corpus_size = dataset_config.get('corpus_size', '1m')
         base_url = dataset_config.get('base_url', '')
         
-        # Check if user provided num_vectors directly in params
+        # Prefer an explicit vector count, then a runtime corpus size, before
+        # falling back to the dataset's configured corpus size.
         if 'num_vectors' in params:
             num_vectors_raw = params.get('num_vectors')
             num_vectors = get_num_vectors(num_vectors_raw)
@@ -688,6 +689,14 @@ class ConfigLoader:
             # Auto-select corpus_size from num_vectors
             corpus_size = self._select_corpus_size_from_num_vectors(num_vectors, dataset_config)
             logger.info(f"Auto-selected corpus_size '{corpus_size}' for num_vectors={num_vectors}")
+        elif params.get('corpus_size') is not None and '{{' not in str(params['corpus_size']):
+            requested_corpus_size = str(params['corpus_size'])
+            num_vectors = get_num_vectors(requested_corpus_size)
+            corpus_size = self._select_corpus_size_from_num_vectors(num_vectors, dataset_config)
+            logger.info(
+                f"Parsed runtime corpus_size '{requested_corpus_size}' to {num_vectors}; "
+                f"using corpus_size '{corpus_size}'"
+            )
         else:
             # Parse corpus_size to get num_vectors
             num_vectors = get_num_vectors(corpus_size)
@@ -748,10 +757,10 @@ class ConfigLoader:
             logger.warning(f"Template resolution did not return a dict, returning original params")
             return params
         
-        # Add num_vectors if not already present (for bulk ingestion)
-        if 'num_vectors' not in resolved_params and 'num_vectors' in template_vars:
-            resolved_params['num_vectors'] = template_vars['num_vectors']
-            logger.debug(f"Added num_vectors={template_vars['num_vectors']} based on corpus_size={corpus_size}")
+        # Always pass the resolved numeric count to the workload. This also
+        # normalizes explicit shorthand values such as num_vectors="50k".
+        resolved_params['num_vectors'] = num_vectors
+        logger.debug(f"Resolved num_vectors={num_vectors} from corpus_size={corpus_size}")
         
         # Clean up internal/template parameters that should not be passed to OpenSearch Benchmark.
         # Both are only used above for template resolution — no OSB workload has these as params.
