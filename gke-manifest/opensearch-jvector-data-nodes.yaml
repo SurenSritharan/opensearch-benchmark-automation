@@ -389,6 +389,6 @@ spec:
         storageClassName: premium-rwo
         resources:
           requests:
-            storage: 600Gi
+            storage: 1200Gi
 
 # Made with Bob
