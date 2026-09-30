@@ -1,11 +1,17 @@
 {
-  "description": "Parallel — wiki-768 at 1M: seed 1M + concurrent 500k ingest while searching. 3 runs at 8 search clients / 8 ingest clients, matched to sequential so the ONLY difference is the concurrent ingest during search.",
+  "description": "Parallel — wiki-768 at 1M: seed 1M + concurrent 500k ingest while searching. Sweeps search_clients 4/8/12 (3 runs each) at 8 ingest clients, matched to sequential so the ONLY difference is the concurrent ingest during search.",
   "engine": "__ENGINE__",
   "params": { "corpus_size": "1m", "seed_num_vectors": 1000000 },
   "parameter_sweeps": [
-    { "params": { "search_clients": 8 } },
-    { "params": { "search_clients": 8 } },
-    { "params": { "search_clients": 8 } }
+    { "name": "sc4-run1",  "params": { "search_clients": 4 } },
+    { "name": "sc4-run2",  "params": { "search_clients": 4 } },
+    { "name": "sc4-run3",  "params": { "search_clients": 4 } },
+    { "name": "sc8-run1",  "params": { "search_clients": 8 } },
+    { "name": "sc8-run2",  "params": { "search_clients": 8 } },
+    { "name": "sc8-run3",  "params": { "search_clients": 8 } },
+    { "name": "sc12-run1", "params": { "search_clients": 12 } },
+    { "name": "sc12-run2", "params": { "search_clients": 12 } },
+    { "name": "sc12-run3", "params": { "search_clients": 12 } }
   ],
   "steps": [
     { "dataset": "cohere-wiki-en-768", "scenario": "delete-index" },
