@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import requests
-from config_loader import ConfigLoader, get_os_namespace
+from config_loader import ConfigLoader, get_os_namespace, sweep_directory_name
 from k8s_metrics_collector import K8sMetricsCollector
 
 _CORE_ENGINES = {'jvector', 'faiss', 'lucene'}
@@ -323,6 +323,7 @@ class BenchmarkRunner:
         sweeps = []
         for idx, raw_sweep in enumerate(raw_sweeps, 1):
             sweep_params = raw_sweep.get('params', {})
+            sweep_dir_name = sweep_directory_name(idx, raw_sweep)
             if sweep_params:
                 logger.info(f"Sweep {idx} params: {list(sweep_params.keys())}")
             merged       = {**base_params, **procedure_base_params, **sweep_params}
@@ -331,10 +332,10 @@ class BenchmarkRunner:
 
             if '/' in job_id:
                 base = self.results_dir / job_id
-                results_dir = base / f"sweep-{idx}" if has_sweeps else base
+                results_dir = base / sweep_dir_name if has_sweeps else base
             else:
                 base = self.results_dir / job_id / scenario
-                results_dir = base / f"sweep-{idx}" if has_sweeps else base
+                results_dir = base / sweep_dir_name if has_sweeps else base
             results_dir.mkdir(parents=True, exist_ok=True)
 
             sweeps.append(RunContext(
