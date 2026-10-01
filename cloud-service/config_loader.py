@@ -15,6 +15,18 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def sweep_directory_name(index: int, sweep: Dict[str, Any]) -> str:
+    """Build a safe, sortable result-directory name for a parameter sweep."""
+    name = sweep.get('name')
+    if not isinstance(name, str) or not name.strip():
+        return f'sweep-{index}'
+
+    slug = re.sub(r'[^a-z0-9]+', '-', name.strip().lower()).strip('-')[:64].rstrip('-')
+    if not slug:
+        return f'sweep-{index}'
+    return f'sweep-{index:02d}-{slug}'
+
+
 def get_os_namespace(engine: str) -> str:
     """Return the OpenSearch cluster namespace for *engine*.
 

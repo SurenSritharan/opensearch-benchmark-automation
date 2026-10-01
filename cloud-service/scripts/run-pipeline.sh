@@ -234,6 +234,13 @@ while IFS= read -r pipeline_sweep; do
         [ -n "$query_k" ] && label="${label}-k${query_k}"
       fi
 
+      # Append an optional sweep name to make this result context identifiable.
+      sweep_name=$(echo "$sweep_entry" | jq -r '.name // ""')
+      if [ -n "$sweep_name" ]; then
+        sweep_slug=$(printf '%s' "$sweep_name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+        [ -n "$sweep_slug" ] && label="${label}-${sweep_slug}"
+      fi
+
       # Deduplicate: if this label has appeared before, append an occurrence counter.
       # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.
       # Key on dataset+label (mirrors the server's path_key) so two different datasets

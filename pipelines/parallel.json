@@ -1,11 +1,15 @@
 {
-  "description": "Parallel — wiki-768 at 1M: create, then concurrent bulk-ingest + vector search (search runs under live indexing load)",
+  "description": "Parallel — wiki-768: fixed 500k concurrent ingest while searching, sweeping SEED size 100k / 500k / 1m (one run each). Search clients and ingest clients both fixed at 8 — the only variable is how many vectors are pre-loaded (seeded) before search begins.",
   "engine": "__ENGINE__",
-  "params": { "corpus_size": "1m", "seed_num_vectors": 1000000 },
+  "params": { "corpus_size": "1m", "search_clients": 8 },
+  "parameter_sweeps": [
+    { "name": "seed-100k", "params": { "seed_num_vectors": 100000 } },
+    { "name": "seed-500k", "params": { "seed_num_vectors": 500000 } },
+    { "name": "seed-1m",   "params": { "seed_num_vectors": 1000000 } }
+  ],
   "steps": [
     { "dataset": "cohere-wiki-en-768", "scenario": "delete-index" },
     { "dataset": "cohere-wiki-en-768", "scenario": "create-index" },
-    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-and-search", "params": { "query_k": 100, "target_index_num_vectors": 500000, "search_clients": 8 } }
-    
+    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-and-search", "params": { "query_k": 100, "target_index_num_vectors": 500000, "target_index_bulk_indexing_clients": 8 } }
   ]
 }
