@@ -131,12 +131,29 @@ class MetricsCollector:
 
         logger.info("Stopping metrics collection")
         signal_ok = False
-        try:
-            self.backend.stop_collection()
-            signal_ok = True
-        except Exception as e:
-            logger.error("Error signalling metrics collector to stop: %s", e)
-            trace_event(self.results_dir, "metrics_stop_signal_failed", error=str(e))
+        signal_error = None
+        for attempt in range(1, 3):
+            try:
+                self.backend.stop_collection()
+                signal_ok = True
+                break
+            except Exception as e:
+                signal_error = e
+                logger.warning(
+                    "Error signalling metrics collector to stop (attempt %s/2): %s",
+                    attempt, e,
+                )
+
+        if not signal_ok:
+            try:
+                trace_event(
+                    self.results_dir,
+                    "metrics_stop_signal_failed",
+                    error=str(signal_error),
+                    attempts=2,
+                )
+            except Exception:
+                logger.debug("Could not write metrics stop failure trace", exc_info=True)
 
         if signal_ok:
             self.thread.join()
