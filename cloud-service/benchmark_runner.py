@@ -15,8 +15,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import requests
+from async_profiler import AsyncProfiler
 from config_loader import ConfigLoader, get_os_namespace, sweep_directory_name
-from k8s_metrics_collector import K8sMetricsCollector
+from event_tracer import RunTrace, trace_event
+from metrics_collector import MetricsCollector
+from node_stats_poller import diff_node_stats
 
 _CORE_ENGINES = {'jvector', 'faiss', 'lucene'}
 
@@ -74,7 +77,6 @@ _KEY     = os.environ.get('OS_KEY', '/certs/admin-key.pem')
 _CA      = os.environ.get('OS_CA', '/certs/root-ca.pem')
 _BENCHMARK_HOME = Path(os.environ.get('BENCHMARK_HOME', '/datasets/opensearch-benchmark'))
 _DATASETS_ROOT = Path(os.environ.get('DATASETS_ROOT', '/datasets'))
-_TEMP_DIR = Path(os.environ.get('TEMP_DIR', '/tmp'))
 
 
 def _use_ssl() -> bool:
@@ -116,7 +118,7 @@ def _save_index_snapshot(engine: str, target_host: str, index_name: str,
     except Exception as e:
         logger.warning(f'Index snapshot failed for {index_name}: {e}')
 
-def _fetch_node_stats(target_host: str) -> Optional[Dict]:
+def _fetch_node_stats(target_host: str, error_callback=None) -> Optional[Dict]:
     """Snapshot _nodes/stats from the OpenSearch cluster via REST API."""
     try:
         url = f"{_base_url(target_host)}/_nodes/stats/jvm,os,process,fs,thread_pool,indices"
@@ -125,57 +127,12 @@ def _fetch_node_stats(target_host: str) -> Optional[Dict]:
         return resp.json()
     except Exception as e:
         logging.getLogger(__name__).warning(f"Could not fetch _nodes/stats: {e}")
+        if error_callback is not None:
+            error_callback(str(e))
         return None
 
 
-def _diff_node_stats(before: Dict, after: Dict) -> Dict:
-    """Diff two _nodes/stats snapshots, returning deltas for counter fields."""
-    result = {}
-    for node_id, after_node in after.get('nodes', {}).items():
-        before_node = before.get('nodes', {}).get(node_id, {})
-        name = after_node.get('name', node_id)
-
-        def delta(path: list):
-            """Walk a dotted path and return after - before for numeric values."""
-            a, b = after_node, before_node
-            for key in path:
-                a = a.get(key, {}) if isinstance(a, dict) else {}
-                b = b.get(key, {}) if isinstance(b, dict) else {}
-            return (a - b) if isinstance(a, (int, float)) and isinstance(b, (int, float)) else a
-
-        result[name] = {
-            'jvm': {
-                'heap_used_percent':      after_node.get('jvm', {}).get('mem', {}).get('heap_used_percent'),
-                'heap_used_mb':           round(after_node.get('jvm', {}).get('mem', {}).get('heap_used_in_bytes', 0) / 1048576, 1),
-                'uptime_ms':              after_node.get('jvm', {}).get('uptime_in_millis'),
-                'gc_young_count_delta':   delta(['jvm', 'gc', 'collectors', 'young', 'collection_count']),
-                'gc_young_time_ms_delta': delta(['jvm', 'gc', 'collectors', 'young', 'collection_time_in_millis']),
-                'gc_old_count_delta':     delta(['jvm', 'gc', 'collectors', 'old', 'collection_count']),
-                'gc_old_time_ms_delta':   delta(['jvm', 'gc', 'collectors', 'old', 'collection_time_in_millis']),
-            },
-            'os': {
-                'cpu_percent':     after_node.get('os', {}).get('cpu', {}).get('percent'),
-                'load_1m':         after_node.get('os', {}).get('cpu', {}).get('load_average', {}).get('1m'),
-                'mem_used_percent': after_node.get('os', {}).get('mem', {}).get('used_percent'),
-            },
-            'indices': {
-                'search_query_count_delta':   delta(['indices', 'search', 'query_total']),
-                'search_query_time_ms_delta': delta(['indices', 'search', 'query_time_in_millis']),
-                'search_fetch_count_delta':   delta(['indices', 'search', 'fetch_total']),
-                'indexing_count_delta':       delta(['indices', 'indexing', 'index_total']),
-                'indexing_time_ms_delta':     delta(['indices', 'indexing', 'index_time_in_millis']),
-            },
-            'thread_pool': {
-                'search_queue':    after_node.get('thread_pool', {}).get('search', {}).get('queue'),
-                'search_rejected': delta(['thread_pool', 'search', 'rejected']),
-                'write_queue':     after_node.get('thread_pool', {}).get('write', {}).get('queue'),
-                'write_rejected':  delta(['thread_pool', 'write', 'rejected']),
-            },
-        }
-    return result
-
 logger = logging.getLogger(__name__)
-
 # Params consumed by the runner itself — must never be forwarded to OSB as workload
 # params because the workload loader raises WorkloadConfigError on unknown parameters.
 _RUNNER_ONLY_KEYS = frozenset({'client_timeout', 'ingest_max_attempts'})
@@ -191,9 +148,7 @@ class BenchmarkRunner:
         self.datasets_root = _DATASETS_ROOT
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self.metrics_collector = None
-        self.metrics_thread = None
-        self.profiler_thread: Optional[threading.Thread] = None
-        self._profiler_stop = threading.Event()
+        self.profiler = AsyncProfiler()
         # Maps job_id -> (Popen process, cancel_event) for active benchmarks
         self._active: Dict[str, tuple] = {}
         self._active_lock = threading.Lock()
@@ -388,47 +343,47 @@ class BenchmarkRunner:
     # ── 3. Per-sweep start ────────────────────────────────────────────────────
 
     def _start_metrics_collection(
-        self,
-        engine: str,
-        target_host: str,
-        sweep_results_dir: Path,
-        dataset: str,
-        scenario: str,
-        sweep_idx: int,
+        self, engine: str, target_host: str, sweep_results_dir: Path,
+        dataset: str, scenario: str, sweep_idx: int,
     ) -> None:
-        """Initialise and start the K8s metrics collector in a background thread."""
-        if os.environ.get('ENABLE_K8S_METRICS', 'true').lower() != 'true':
-            logger.info("Kubernetes metrics collection disabled")
-            return
-
-        namespace = get_os_namespace(engine)
-        logger.info(f"📊 Initializing metrics collection for namespace: {namespace}")
+        if self.metrics_collector is not None:
+            if not self._stop_metrics_collection():
+                message = (
+                    "Previous metrics collection is still running; "
+                    "skipping metrics collection for this sweep"
+                )
+                logger.warning(message)
+                trace_event(
+                    sweep_results_dir,
+                    "metrics_collection_skipped",
+                    reason="previous_collector_still_running",
+                    dataset=dataset,
+                    scenario=scenario,
+                    sweep=sweep_idx,
+                )
+                return
+        # Keep metrics best-effort: initialization, tracing, or thread startup
+        # must not prevent the benchmark itself from running.
         try:
-            self.metrics_collector = K8sMetricsCollector(
-                namespace=namespace,
-                results_dir=sweep_results_dir,
-                enabled=True,
-                opensearch_host=target_host,
+            collector = MetricsCollector(
+                engine=engine, target_host=target_host, results_dir=sweep_results_dir,
+                fetch_node_stats=_fetch_node_stats,
             )
-            logger.info("✓ Metrics collector initialized")
+            self.metrics_collector = collector
+            collector.start(dataset=dataset, scenario=scenario, sweep=sweep_idx)
         except Exception as e:
-            logger.warning(f"Failed to initialize metrics collector: {e}")
-            self.metrics_collector = None
-            return
-
-        scenario_name = f"{dataset}-{scenario}-sweep{sweep_idx}"
-        metrics_collector = self.metrics_collector
-
-        def collect_metrics():
+            logger.warning("Could not start metrics collection: %s", e, exc_info=True)
             try:
-                metrics_collector.start_collection(scenario_name=scenario_name, interval=10, duration=None)
-                metrics_collector.save_metrics(scenario_name)
-            except Exception as e:
-                logger.error(f"Error in metrics collection thread: {e}")
-
-        self.metrics_thread = threading.Thread(target=collect_metrics, daemon=True)
-        self.metrics_thread.start()
-        logger.info("📊 Metrics collection started in background.")
+                trace_event(
+                    sweep_results_dir,
+                    "metrics_collection_start_failed",
+                    error=str(e),
+                    dataset=dataset,
+                    scenario=scenario,
+                    sweep=sweep_idx,
+                )
+            except Exception:
+                logger.debug("Could not write metrics start failure trace", exc_info=True)
 
     def _clear_benchmark_logs(self):
         """Clear benchmark log files and reset logging.json before each run."""
@@ -830,7 +785,7 @@ class BenchmarkRunner:
                 server_stats = {
                     'captured_at_start': start_time.isoformat(),
                     'captured_at_end':   end_time.isoformat(),
-                    'node_deltas':       _diff_node_stats(stats_before, stats_after),
+                    'node_deltas':       diff_node_stats(stats_before, stats_after),
                     'snapshots':         {'before': stats_before, 'after': stats_after},
                 }
                 with open(sweep_results_dir / 'server_stats.json', 'w') as f:
@@ -838,107 +793,19 @@ class BenchmarkRunner:
             except Exception as e:
                 logger.warning(f"Failed to save server_stats: {e}")
 
-    def _stop_metrics_collection(self) -> None:
-        """Stop the background metrics thread and wait for it to finish."""
-        if self.metrics_collector and self.metrics_thread:
-            logger.info("📊 Stopping metrics collection...")
-            try:
-                self.metrics_collector.stop_collection()
-                self.metrics_thread.join(timeout=30)
-            except Exception as e:
-                logger.error(f"Error stopping metrics collection: {e}")
-            finally:
-                self.metrics_thread = None
+    def _stop_metrics_collection(self) -> bool:
+        if self.metrics_collector is None:
+            return True
+        try:
+            if self.metrics_collector.stop():
+                self.metrics_collector = None
+                return True
+        except Exception as e:
+            logger.warning("Could not stop metrics collection cleanly: %s", e, exc_info=True)
+        return False
 
     def _start_profiling(self, engine: str, results_dir: Path, duration: int = 60) -> None:
-        """Start async-profiler on a dedicated thread that owns the full lifecycle:
-        start → wait(duration) → stop → collect flame graphs.
-
-        The wait is interruptible — _stop_profiling() sets _profiler_stop so the
-        thread wakes early when OSB finishes before duration elapses, then still
-        collects whatever was captured. No shared mutable state, no locks needed.
-        """
-        namespace = get_os_namespace(engine)
-        logger.info(f"🔍 [profiling] Starting async-profiler on {namespace} (duration: up to {duration}s)")
-        self._profiler_stop.clear()
-        try:
-            pods_out = subprocess.run(
-                ['kubectl', 'get', 'pods', '-n', namespace,
-                 '-l', 'app=opensearch-data',
-                 '-o', 'jsonpath={.items[*].metadata.name}'],
-                capture_output=True, text=True, timeout=15,
-            )
-            pods = pods_out.stdout.split() if pods_out.returncode == 0 else []
-        except Exception as e:
-            logger.warning(f"[profiling] Could not list pods in {namespace}: {e}")
-            return
-
-        if not pods:
-            logger.warning(f"[profiling] No opensearch-data pods found in {namespace} — skipping")
-            return
-
-        def _run_profiler():
-            # Start asprof on every pod
-            started = []
-            for pod in pods:
-                try:
-                    r = subprocess.run(
-                        ['kubectl', 'exec', pod, '-c', 'opensearch', '-n', namespace, '--',
-                         '/usr/share/opensearch/async-profiler/bin/asprof',
-                         'start', '--event', 'cpu', '1'],   # PID 1 = JVM in container
-                        capture_output=True, text=True, timeout=30,
-                    )
-                    if r.returncode == 0:
-                        logger.info(f"[profiling] Started on {pod}")
-                        started.append(pod)
-                    else:
-                        logger.warning(f"[profiling] asprof start failed on {pod}: {r.stderr.strip()}")
-                except Exception as e:
-                    logger.warning(f"[profiling] Could not start profiler on {pod}: {e}")
-
-            if not started:
-                logger.warning("[profiling] No pods started — nothing to collect")
-                return
-
-            logger.info(f"[profiling] Running on {len(started)}/{len(pods)} pods in {namespace} for up to {duration}s")
-            # Wait up to duration seconds, but wake immediately if OSB finishes early
-            self._profiler_stop.wait(timeout=duration)
-            elapsed = "early" if self._profiler_stop.is_set() else f"{duration}s elapsed"
-            logger.info(f"[profiling] {elapsed} — collecting flame graphs")
-
-            # Stop asprof and copy flame graphs
-            profiling_dir = results_dir / 'profiling'
-            profiling_dir.mkdir(parents=True, exist_ok=True)
-
-            for pod in started:
-                remote_path = str(_TEMP_DIR / f'flamegraph-{pod}.html')
-                local_path  = profiling_dir / f'{pod}-flamegraph.html'
-                try:
-                    r = subprocess.run(
-                        ['kubectl', 'exec', pod, '-c', 'opensearch', '-n', namespace, '--',
-                         '/usr/share/opensearch/async-profiler/bin/asprof',
-                         'stop', '--output', 'flamegraph', '--file', remote_path, '1'],
-                        capture_output=True, text=True, timeout=60,
-                    )
-                    if r.returncode != 0:
-                        logger.warning(f"[profiling] asprof stop failed on {pod}: {r.stderr.strip()}")
-                        continue
-
-                    cp = subprocess.run(
-                        ['kubectl', 'cp',
-                         f'{namespace}/{pod}:{remote_path}', str(local_path),
-                         '-c', 'opensearch'],
-                        capture_output=True, text=True, timeout=60,
-                    )
-                    if cp.returncode == 0:
-                        logger.info(f"[profiling] Flame graph saved: {local_path}")
-                    else:
-                        logger.warning(f"[profiling] kubectl cp failed for {pod}: {cp.stderr.strip()}")
-                except Exception as e:
-                    logger.warning(f"[profiling] Error collecting from {pod}: {e}")
-
-        self.profiler_thread = threading.Thread(target=_run_profiler, daemon=True)
-        self.profiler_thread.start()
+        self.profiler.start(engine, results_dir, duration)
 
     def _check_and_dump_heap(
         self,
@@ -1002,18 +869,7 @@ class BenchmarkRunner:
                     logger.warning(f"[heap-dump] Could not save heap dump request for {node_name}: {e}")
 
     def _stop_profiling(self) -> None:
-        """Signal the profiler thread to stop waiting and collect, then join it.
-        No-op if profiling was not started.
-        """
-        if self.profiler_thread is not None:
-            logger.info("🔍 [profiling] Stopping profiler and collecting flame graphs...")
-            self._profiler_stop.set()   # wake the thread early if still sleeping
-            # Cap the wait — asprof stop + kubectl cp per pod, 60s each, up to 3 pods
-            self.profiler_thread.join(timeout=200)
-            if self.profiler_thread.is_alive():
-                logger.warning("[profiling] profiler thread did not finish in time — continuing")
-            self.profiler_thread = None
-
+        self.profiler.stop()
 
     def _add_run_context(self, test_run_data: Dict[str, Any], ctx: 'RunContext') -> Dict[str, Any]:
         """
@@ -1255,25 +1111,47 @@ class BenchmarkRunner:
             env        = {**os.environ, 'TERM': 'dumb', 'BENCHMARK_HOME': str(self.benchmark_home)}
             active_key = job_id.split('/')[0] if '/' in job_id else job_id
 
+            run_root = self.results_dir / job_id
+            trace_event(run_root, "run_started", job_id=job_id, dataset=dataset,
+                         engine=engine, scenario=scenario, sweeps=len(sweeps),
+                         metrics_enabled=enable_metrics,
+                         profiling_enabled=enable_profiling)
+
             all_results = []
             for idx, ctx in enumerate(sweeps, 1):
                 if cancel_event and cancel_event.is_set():
                     logger.info(f"Job {job_id}: cancellation requested before sweep {idx}")
+                    trace_event(run_root, "run_cancelled_before_sweep", sweep=idx)
                     break
 
                 logger.info(f"Running sweep {idx}/{len(sweeps)}: dataset={dataset}, engine={engine}, scenario={scenario}")
+                trace_event(ctx.results_dir, "sweep_started", job_id=job_id,
+                             dataset=dataset, engine=engine, scenario=scenario,
+                             sweep=idx, resolved_param_keys=sorted(ctx.params))
 
                 if not self.config.seed_gcs_cache_files(dataset, ctx.params):
+                    trace_event(ctx.results_dir, "sweep_failed", phase="seed_dataset_cache",
+                                 error="Failed to seed required GCS cache files")
+                    trace_event(run_root, "run_finished", status="failed",
+                                 failed_phase="seed_dataset_cache", sweep=idx)
                     return {
                         'status': 'failed',
                         'error': f'Failed to seed required GCS cache files for sweep {idx}.',
                     }
 
                 if ctx.dataset_config and not self.config.download_dataset_files(dataset, ctx.params):
+                    trace_event(ctx.results_dir, "sweep_failed", phase="download_dataset",
+                                 error="Failed to download dataset files")
+                    trace_event(run_root, "run_finished", status="failed",
+                                 failed_phase="download_dataset", sweep=idx)
                     return {'status': 'failed', 'error': f'Failed to download dataset files for sweep {idx}.'}
 
                 logger.info(f"Checking cluster health for {engine}...")
-                if not self._check_cluster_health(ctx.target_host):
+                cluster_healthy = self._check_cluster_health(ctx.target_host)
+                trace_event(ctx.results_dir, "cluster_health_checked", healthy=cluster_healthy)
+                if not cluster_healthy:
+                    trace_event(ctx.results_dir, "sweep_failed", phase="cluster_health",
+                                 error="Cluster is not ready")
                     all_results.append({
                         'status': 'failed', 'error': f'Cluster {ctx.target_host} is not ready.',
                         'exit_code': -1, 'sweep_index': idx, 'sweep_params': ctx.sweep_params,
@@ -1283,12 +1161,18 @@ class BenchmarkRunner:
 
                 if enable_metrics:
                     self._start_metrics_collection(engine, ctx.target_host, ctx.results_dir, dataset, scenario, idx)
+                else:
+                    trace_event(ctx.results_dir, "metrics_collection_skipped", reason="disabled_for_run")
                 if enable_profiling:
                     self._start_profiling(engine, ctx.results_dir, profiling_duration)
 
                 self._clear_benchmark_logs()
                 cmd = self._build_osb_command(ctx, scenario, dataset, engine)
                 logger.info(f"Command: {' '.join(cmd)}")
+                trace_event(ctx.results_dir, "benchmark_process_starting",
+                             executable=cmd[0], procedure=scenario,
+                             workload_path=ctx.workload_path,
+                             workload_params_file=str(ctx.results_dir / "workload-params.json"))
 
                 start_time   = datetime.utcnow()
                 stats_before = _fetch_node_stats(ctx.target_host)
@@ -1296,8 +1180,13 @@ class BenchmarkRunner:
 
                 with self._log_level_override(log_level):
                     try:
-                        proc   = self._launch_process(cmd, env, active_key, cancel_event)
-                        result = self._poll_until_done(proc, cmd, job_id, active_key, ctx.target_host, cancel_event, engine=engine, results_dir=ctx.results_dir)
+                        with RunTrace(ctx.results_dir, job_id=job_id, dataset=dataset,
+                                      engine=engine, scenario=scenario, sweep=idx) as trace:
+                            with trace.span("benchmark_process", procedure=scenario):
+                                proc = self._launch_process(cmd, env, active_key, cancel_event)
+                                result = self._poll_until_done(proc, cmd, job_id, active_key, ctx.target_host, cancel_event, engine=engine, results_dir=ctx.results_dir)
+                            trace.event("benchmark_process_finished",
+                                        exit_code=result.returncode if result else None)
                     finally:
                         end_time = datetime.utcnow()
                         self._save_server_stats(ctx.results_dir, start_time, end_time, ctx.target_host, stats_before)
@@ -1307,6 +1196,8 @@ class BenchmarkRunner:
                 duration = (end_time - start_time).total_seconds()
 
                 if result is None:
+                    trace_event(ctx.results_dir, "sweep_failed", phase="benchmark_process",
+                                 error="Process failed to initialize")
                     all_results.append({
                         'status': 'failed', 'error': 'Process failed to initialize',
                         'sweep_index': idx, 'sweep_params': ctx.sweep_params,
@@ -1315,6 +1206,10 @@ class BenchmarkRunner:
                     continue
 
                 self._download_artifacts(result.stdout, ctx.results_dir, ctx, stderr=result.stderr)
+                trace_event(ctx.results_dir, "artifacts_collected",
+                             test_run=(ctx.results_dir / "test_run.json").exists(),
+                             benchmark_log=(ctx.results_dir / "benchmark.log").exists(),
+                             metrics_file=(ctx.results_dir / "k8s_metrics.json").exists())
 
                 is_cancelled = (cancel_event and cancel_event.is_set()) or result.returncode == -9
                 # Snapshot from this sweep's resolved RunContext, so telemetry
@@ -1337,15 +1232,26 @@ class BenchmarkRunner:
                     'stdout_tail':      result.stdout[-5000:] if result.stdout else '',
                     'stderr_tail':      result.stderr[-5000:] if result.stderr else '',
                 })
+                trace_event(ctx.results_dir, "sweep_finished",
+                             status="cancelled" if is_cancelled else ("completed" if result.returncode == 0 else "failed"),
+                             exit_code=result.returncode, duration_seconds=duration)
 
                 if is_cancelled:
                     _kill_proc_group(proc)
                     break
 
-            return self._aggregate_results(all_results, job_id)
+            summary = self._aggregate_results(all_results, job_id)
+            trace_event(run_root, "run_finished", status=summary.get("status"),
+                         total_sweeps=summary.get("total_sweeps"),
+                         failed_sweeps=summary.get("failed_sweeps"),
+                         cancelled_sweeps=summary.get("cancelled_sweeps"))
+            return summary
 
         except Exception as e:
             logger.error(f"Benchmark execution error: {e}", exc_info=True)
+            trace_job_id = job_id if job_id is not None else str(uuid.uuid4())
+            trace_event(self.results_dir / trace_job_id, "run_failed", phase="benchmark_execution",
+                         error=str(e))
             return {'status': 'error', 'error': str(e)}
 
     # ------------------------------------------------------------------
@@ -1467,6 +1373,10 @@ class BenchmarkRunner:
         if job_id is None:
             job_id = str(uuid.uuid4())
 
+        trace_dir = self.results_dir / job_id
+        trace_event(trace_dir, "ingest_started", job_id=job_id, dataset=dataset,
+                     engine=engine, metrics_enabled=enable_metrics)
+
         wp           = workload_params or {}
         expected     = wp.get("target_index_num_vectors")
         index        = wp.get("target_index_name")
@@ -1476,13 +1386,18 @@ class BenchmarkRunner:
         # No verification params → plain ingest, no retry logic needed
         if not expected or not index:
             logger.info("target_index_num_vectors / target_index_name not set — skipping doc-count verification")
-            return self.run_benchmark(
+            trace_event(trace_dir, "ingest_verification_unavailable",
+                         reason="target_index_num_vectors or target_index_name missing")
+            result = self.run_benchmark(
                 dataset, engine, scenario="bulk-ingest-data",
                 job_id=job_id, enable_profiling=enable_profiling,
                 profiling_duration=profiling_duration,
                 enable_metrics=enable_metrics, workload_params=workload_params,
                 cancel_event=cancel_event, log_level=log_level,
             )
+            trace_event(trace_dir, "ingest_finished", status=result.get("status"),
+                         verification="unavailable", results_dir=result.get("results_dir"))
+            return result
 
         # ----------------------------------------------------------------
         # Pre-flight check: wait for stable count — skip ingest if already complete.
@@ -1492,10 +1407,18 @@ class BenchmarkRunner:
         # ----------------------------------------------------------------
         dataset_format = self.config.get_dataset_config(dataset).get('format', '')
         pre_count = self._wait_for_stable_count(target_host, index, expected)
+        trace_event(trace_dir, "ingest_preflight_checked", index=index,
+                     expected_docs=expected, actual_docs=pre_count,
+                     dataset_format=dataset_format)
         if pre_count is not None and pre_count >= expected and dataset_format != 'parquet':
             logger.info(
                 f"Index [{index}] already has {pre_count}/{expected} docs — skipping ingest."
             )
+            trace_event(trace_dir, "ingest_skipped", reason="index_already_complete",
+                         expected_docs=expected, actual_docs=pre_count)
+            trace_event(trace_dir, "metrics_collection_skipped",
+                         reason="ingest_skipped_because_index_already_complete")
+            trace_event(trace_dir, "ingest_finished", status="completed", skipped=True)
             return {
                 "status":          "completed",
                 "ingest_attempts": 0,
@@ -1514,9 +1437,12 @@ class BenchmarkRunner:
 
         for attempt in range(1, max_attempts + 1):
             if cancel_event and cancel_event.is_set():
+                trace_event(trace_dir, "ingest_cancelled", before_attempt=attempt)
                 break
 
             logger.info(f"Ingest attempt {attempt}/{max_attempts}: dataset={dataset} engine={engine} index={index}")
+            trace_event(trace_dir, "ingest_attempt_started", attempt=attempt,
+                         max_attempts=max_attempts, index=index)
 
             # On retry: wipe and re-create the index for a clean slate
             if attempt > 1:
@@ -1530,6 +1456,9 @@ class BenchmarkRunner:
                 )
                 if create_result.get("status") != "completed":
                     logger.error(f"create-index failed on attempt {attempt}: {create_result.get('error')}")
+                    trace_event(trace_dir, "retry_index_creation_failed", attempt=attempt,
+                                 error=create_result.get("error"),
+                                 results_dir=create_result.get("results_dir"))
                     all_attempt_results.append(create_result)
                     break
 
@@ -1543,6 +1472,10 @@ class BenchmarkRunner:
                 cancel_event=cancel_event, log_level=log_level,
             )
             all_attempt_results.append(ingest_result)
+            trace_event(trace_dir, "ingest_attempt_benchmark_finished", attempt=attempt,
+                         status=ingest_result.get("status"),
+                         results_dir=ingest_result.get("results_dir"),
+                         error=ingest_result.get("error"))
 
             if ingest_result.get("status") != "completed":
                 logger.error(f"bulk-ingest-data failed on attempt {attempt}: {ingest_result.get('error')}")
@@ -1550,6 +1483,8 @@ class BenchmarkRunner:
 
             # Wait for the count to stabilise before deciding whether to retry
             actual = self._wait_for_stable_count(target_host, index, expected)
+            trace_event(trace_dir, "ingest_attempt_count_checked", attempt=attempt,
+                         expected_docs=expected, actual_docs=actual)
             if actual is None:
                 logger.warning(f"Could not verify doc count on attempt {attempt} — accepting ingest result")
                 break
@@ -1585,6 +1520,9 @@ class BenchmarkRunner:
                 f"expected {expected} docs in [{index}], got {final_actual}."
             )
 
+        trace_event(trace_dir, "ingest_finished", status=final_status,
+                     attempts=len(all_attempt_results), expected_docs=expected,
+                     actual_docs=final_actual)
         return {
             **last,
             "status":          final_status,
