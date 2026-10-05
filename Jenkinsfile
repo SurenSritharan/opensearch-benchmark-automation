@@ -755,8 +755,7 @@ print(json.dumps(s))
                                         if (hasFirstRunSteps && runFirstRunSteps && restartAfterBuild) {
                                             sh """
                                                 echo "Restarting cluster ${ns} after build to ensure cold start for search..."
-                                                gke-manifest/deploy-namespace-cluster.sh ${ns} --version ${version} --node-size ${runSize} --force ${pluginUrlArg}
-                                                # pluginUrlArg carries the per-version URLs resolved above
+                                                gke-manifest/deploy-namespace-cluster.sh ${ns} --version ${version} --node-size ${runSize} --force ${ghePluginArg}
 
                                                 kubectl rollout status statefulset/opensearch-cluster-manager -n ${ns} --timeout=600s
 
