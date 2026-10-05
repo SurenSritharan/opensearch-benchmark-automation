@@ -1,5 +1,5 @@
 {
-  "description": "Dev build comparison — 3.8.0 release vs 3.8.0-dev from Fyre. Builds indexes once on 3.8.0, re-ingests on version change for 3.8.0-dev. Small node size only.",
+  "description": "Dev build comparison — custom dev build from GHE release asset first, then release baseline. Rebuilds index on each version. Cluster restarts after build for cold-start search. Small node only.",
   "engine": "__ENGINE__",
   "versions": ["3.8.0-dev_pr754", "3.8.0"],
   "node_sizes": ["small"],
@@ -8,10 +8,10 @@
   "stats_interval": 30,
   "params": { "corpus_size": "1m" },
   "first_run_steps": [
-    { "dataset": "cohere-wiki-en-768",       "scenario": "create-index",     "params": { "refresh_interval": -1, "min_batch_size_for_quantization": 100000, "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "16mb", "merge_scheduler_max_thread_count": 8, "use_derived_source": true } },
+    { "dataset": "cohere-wiki-en-768",       "scenario": "create-index",     "params": { "refresh_interval": -1, "min_batch_size_for_quantization": 100000, "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "16mb", "merge_scheduler_max_thread_count": 6, "merge_scheduler_auto_throttle": false, "use_derived_source": true } },
     { "dataset": "cohere-wiki-en-768",       "scenario": "bulk-ingest-data", "params": { "target_index_bulk_size": 200, "target_index_bulk_indexing_clients": 8 } },
     { "dataset": "cohere-wiki-en-768",       "scenario": "force-merge",      "params": { "client_timeout": 28800, "target_index_max_num_segments": 1 } },
-    { "dataset": "cohere-msmarco-1024",      "scenario": "create-index",     "params": { "refresh_interval": -1, "min_batch_size_for_quantization": 100000, "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "16mb", "merge_scheduler_max_thread_count": 8, "use_derived_source": true } },
+    { "dataset": "cohere-msmarco-1024",      "scenario": "create-index",     "params": { "refresh_interval": -1, "min_batch_size_for_quantization": 100000, "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "16mb", "merge_scheduler_max_thread_count": 6, "merge_scheduler_auto_throttle": false, "use_derived_source": true } },
     { "dataset": "cohere-msmarco-1024",      "scenario": "bulk-ingest-data", "params": { "target_index_bulk_size": 200, "target_index_bulk_indexing_clients": 8 } },
     { "dataset": "cohere-msmarco-1024",      "scenario": "force-merge",      "params": { "client_timeout": 28800, "target_index_max_num_segments": 1 } }
   ],
