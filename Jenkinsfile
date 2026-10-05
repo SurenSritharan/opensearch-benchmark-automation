@@ -445,6 +445,7 @@ print(json.dumps(s))
 
                     sh "mkdir -p ${RESULTS_DIR}"
 
+                    def statsInterval         = params.STATS_INTERVAL?.trim() ?: (pipelineJson.stats_interval ? "${pipelineJson.stats_interval}" : "")
                     def redeploy              = params.REDEPLOY_CLUSTERS || pipelineJson.redeploy == true
                     def multiRun              = (pipelineJson.versions || pipelineJson.node_sizes) ? true : false
                     def hasFirstRunSteps      = pipelineJson.first_run_steps && pipelineJson.first_run_steps.size() > 0
@@ -734,7 +735,7 @@ print(json.dumps(s))
                                                 ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
-                                                ${params.STATS_INTERVAL?.trim() ? "--stats-interval ${params.STATS_INTERVAL.trim()}" : ""} \
+                                                ${statsInterval ? "--stats-interval ${statsInterval}" : ""} \
                                                 ${engine} \
                                                 2>&1 | tee benchmark-run-${engine}-${versionLabel}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
@@ -846,7 +847,7 @@ print(json.dumps(s))
                                                     ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
                                                     ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                     ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
-                                                    ${params.STATS_INTERVAL?.trim() ? "--stats-interval ${params.STATS_INTERVAL.trim()}" : ""} \
+                                                    ${statsInterval ? "--stats-interval ${statsInterval}" : ""} \
                                                     ${engine} \
                                                     2>&1 | tee benchmark-run-${engine}-${versionLabel}-${runSize}-search.log
                                                 PIPE_RC=\${PIPESTATUS[0]}
