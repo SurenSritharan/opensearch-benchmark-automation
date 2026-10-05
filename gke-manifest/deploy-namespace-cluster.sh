@@ -17,9 +17,10 @@
 #   3. Add a RoleBinding in jenkins-agent-rbac.yaml for that namespace
 #   4. Run this script — no other changes needed
 #
-# Usage: ./deploy-namespace-cluster.sh <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs]
+# Usage: ./deploy-namespace-cluster.sh <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs] [--ghe-tag TAG --ghe-token TOKEN]
 # Example: ./deploy-namespace-cluster.sh os-jvector-acl
-# Example: ./deploy-namespace-cluster.sh os-jvector-acl --version 3.7.0
+# Example: ./deploy-namespace-cluster.sh os-jvector-acl --version 3.8.0
+# Example: ./deploy-namespace-cluster.sh os-jvector-acl --version 3.8.0-dev_pr754 --ghe-tag 3.8.0-dev_pr754 --ghe-token $GHE_TOKEN
 # Example: ./deploy-namespace-cluster.sh os-jvector-acl --delete-pvcs
 
 set -e
@@ -29,12 +30,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 NAMESPACE=$1
 OPENSEARCH_VERSION="3.7.0"  # Default version
+GHE_TAG=""
+GHE_TOKEN=""
 FORCE_FLAG=""
 DELETE_PVCS=false
 NODE_SIZE="small"
 
 if [ -z "$NAMESPACE" ]; then
-    echo "Usage: $0 <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs]"
+    echo "Usage: $0 <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs] [--ghe-tag TAG --ghe-token TOKEN]"
     echo ""
     echo "Namespace format:  os-<engine>  or  os-develop-<engine>"
     echo "  <engine> is any slug, e.g. jvector, faiss, lucene, acl-jvector"
@@ -42,9 +45,12 @@ if [ -z "$NAMESPACE" ]; then
     echo ""
     echo "Options:"
     echo "  --version VER              OpenSearch version to deploy (default: 3.7.0)"
+    echo "                             Use a -dev suffix (e.g. 3.8.0-dev) for pre-release builds."
     echo "  --node-size small|medium|large  Data node resource profile (default: small)"
     echo "  --force                    Skip confirmation prompts"
     echo "  --delete-pvcs              Delete PVCs (WARNING: destroys all indexed data and results)"
+    echo "  --ghe-tag TAG       GHE release tag for the jvector plugin (e.g. 3.8.0.0-dev_pr754)"
+    echo "  --ghe-token TOKEN       GHE personal access token. Required with --ghe-tag."
     exit 1
 fi
 
@@ -68,9 +74,17 @@ while [[ $# -gt 0 ]]; do
             DELETE_PVCS=true
             shift
             ;;
+        --ghe-tag)
+            GHE_TAG="$2"
+            shift 2
+            ;;
+        --ghe-token)
+            GHE_TOKEN="$2"
+            shift 2
+            ;;
         *)
             echo "Error: Unknown option '$1'"
-            echo "Usage: $0 <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs]"
+            echo "Usage: $0 <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs] [--ghe-tag TAG --ghe-token TOKEN]"
             exit 1
             ;;
     esac
@@ -102,12 +116,27 @@ if [[ ! "$NAMESPACE" =~ ^os(-develop)?-[a-z][a-z0-9-]+$ ]]; then
     exit 1
 fi
 
+# -dev versions: version label used in result tagging; Docker image uses the base version.
+# Matches any version containing '-dev' (e.g. 3.8.0-dev, 3.8.0-dev_pr754).
+IS_DEV=false
+OPENSEARCH_IMAGE_VERSION="$OPENSEARCH_VERSION"
+if [[ "$OPENSEARCH_VERSION" == *-dev* ]]; then
+    IS_DEV=true
+    OPENSEARCH_IMAGE_VERSION="${OPENSEARCH_VERSION%%-dev*}"
+fi
+
 echo "=========================================="
 echo "Deploying OpenSearch cluster"
 echo "=========================================="
-echo "Namespace:         $NAMESPACE"
+echo "Namespace:          $NAMESPACE"
 echo "OpenSearch Version: $OPENSEARCH_VERSION"
-echo "Node Size:         $NODE_SIZE  (cpu: $NODE_CPU_REQ/$NODE_CPU_LIM  mem: $NODE_MEM  heap: $NODE_HEAP)"
+if $IS_DEV; then
+    echo "Docker image:       opensearchproject/opensearch:${OPENSEARCH_IMAGE_VERSION}  (base for -dev)"
+fi
+if [ -n "$GHE_TAG" ]; then
+    echo "GHE tag:            $GHE_TAG"
+fi
+echo "Node Size:          $NODE_SIZE  (cpu: $NODE_CPU_REQ/$NODE_CPU_LIM  mem: $NODE_MEM  heap: $NODE_HEAP)"
 echo "=========================================="
 
 # Namespaces are pre-created by jenkins-agent-rbac.yaml (requires cluster-admin).
@@ -117,6 +146,28 @@ if ! kubectl get namespace $NAMESPACE &>/dev/null; then
     echo "ERROR: namespace '$NAMESPACE' does not exist."
     echo "       Apply gke-manifest/jenkins-agent-rbac.yaml with a cluster-admin account first."
     exit 1
+fi
+
+# ── ghe-token secret ─────────────────────────────────────────────────────────
+# Stores GHE_TOKEN, TAG, and FILE so the init container can download the asset
+# directly from api.github.ibm.com — no zip bytes transit through Kubernetes.
+if [ -n "$GHE_TAG" ]; then
+    if [ -z "$GHE_TOKEN" ]; then
+        echo "Error: --ghe-tag requires --ghe-token"
+        exit 1
+    fi
+    echo "Storing jvector plugin credentials in 'ghe-token' secret in $NAMESPACE (tag: $GHE_TAG)..."
+    kubectl create secret generic ghe-token \
+        --from-literal=GHE_TOKEN="$GHE_TOKEN" \
+        --from-literal=TAG="$GHE_TAG" \
+        -n "$NAMESPACE" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    echo "✅ ghe-token secret updated in $NAMESPACE"
+else
+    # Ensure the secret exists but empty so the init container mount doesn't fail.
+    kubectl create secret generic ghe-token \
+        -n "$NAMESPACE" \
+        --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null || true
 fi
 
 # Clean up existing resources for fresh deployment
@@ -276,7 +327,7 @@ if [[ "$NAMESPACE" =~ jvector ]]; then
 
     echo "1. Deploying cluster manager..."
     sed -e "s/\${NAMESPACE}/$NAMESPACE/g" \
-        -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+        -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_IMAGE_VERSION/g" \
         "$MANAGER_MANIFEST" | kubectl apply -n $NAMESPACE -f -
 
     echo "2. Waiting for cluster manager to be ready..."
@@ -284,7 +335,7 @@ if [[ "$NAMESPACE" =~ jvector ]]; then
 
     echo "3. Deploying data nodes..."
     sed -e "s/\${NAMESPACE}/$NAMESPACE/g" \
-        -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_VERSION/g" \
+        -e "s/\${OPENSEARCH_VERSION}/$OPENSEARCH_IMAGE_VERSION/g" \
         -e "s/\${NODE_CPU_REQ}/$NODE_CPU_REQ/g" \
         -e "s/\${NODE_CPU_LIM}/$NODE_CPU_LIM/g" \
         -e "s/\${NODE_MEM}/$NODE_MEM/g" \

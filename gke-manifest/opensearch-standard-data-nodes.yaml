@@ -184,23 +184,30 @@ spec:
             - bash
             - -c
             - |
-              set -e
+              set -euo pipefail
+              shopt -s nullglob
+
               echo "Staging base OpenSearch plugins for version ${OPENSEARCH_VERSION}..."
               cp -r /usr/share/opensearch/plugins/* /mnt/plugins/
 
+              # --- Prometheus Exporter ---
               echo "Downloading and installing Prometheus Exporter..."
-              curl -sL "https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/${PROMETHEUS_PLUGIN_VERSION}/prometheus-exporter-${PROMETHEUS_PLUGIN_VERSION}.zip" -o /tmp/prometheus-exporter.zip
+              curl -sSfL "https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/${PROMETHEUS_PLUGIN_VERSION}/prometheus-exporter-${PROMETHEUS_PLUGIN_VERSION}.zip" -o /tmp/prometheus-exporter.zip
               mkdir -p /mnt/plugins/prometheus-exporter
               cd /mnt/plugins/prometheus-exporter
               jar xf /tmp/prometheus-exporter.zip
+              rm -f /tmp/prometheus-exporter.zip
               echo "Prometheus plugin installed successfully!"
 
+              # --- Repository GCS Plugin ---
               echo "Downloading and installing Repository GCS Plugin..."
-              curl -sL "https://artifacts.opensearch.org/releases/plugins/repository-gcs/${GCS_PLUGIN_VERSION}/repository-gcs-${GCS_PLUGIN_VERSION}.zip" -o /tmp/repository-gcs.zip
+              curl -sSfL "https://artifacts.opensearch.org/releases/plugins/repository-gcs/${GCS_PLUGIN_VERSION}/repository-gcs-${GCS_PLUGIN_VERSION}.zip" -o /tmp/repository-gcs.zip
               mkdir -p /mnt/plugins/repository-gcs
               cd /mnt/plugins/repository-gcs
               jar xf /tmp/repository-gcs.zip
+              rm -f /tmp/repository-gcs.zip
               echo "Repository GCS plugin installed successfully!"
+
           volumeMounts:
             - name: plugins
               mountPath: /mnt/plugins

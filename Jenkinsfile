@@ -58,6 +58,7 @@ pipeline {
                 'complete',
                 'search-all',
                 'search-compare',
+                'dev-compare',
                 'complete-5m-profile-ingest',
                 'search-all-overquery',
                 'openai-large-5m',
@@ -119,7 +120,7 @@ pipeline {
         string(
             name: 'OPENSEARCH_VERSION',
             defaultValue: '3.7.0',
-            description: 'OpenSearch version to deploy (used when REDEPLOY_CLUSTERS is true, or on first-time deploy). Use 3.5.0.2 for baseline, 3.6.0 for Derived Source, 3.7.0 for latest, 3.8.0 for NVQ.'
+            description: 'OpenSearch version to deploy (used when REDEPLOY_CLUSTERS is true, or on first-time deploy). Use 3.5.0.2 for baseline, 3.6.0 for Derived Source, 3.7.0 for latest, 3.8.0 for NVQ. Use a -dev suffix with a GHE tag (e.g. 3.8.0-dev_pr754) for custom jvector builds.'
         )
         booleanParam(
             name: 'DELETE_PVCS',
@@ -166,6 +167,7 @@ pipeline {
     environment {
         RESULTS_DIR = "results/${BUILD_ID}"
         KUBECONFIG  = "${env.WORKSPACE}/.kube/config"
+        GHE_TOKEN   = credentials('ghe-token')
     }
 
     // triggers {
@@ -420,8 +422,15 @@ print(json.dumps(s))
                     def pipeline     = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
                     def pipelineJson = readJSON file: "pipelines/${pipeline}.json"
 
-                    def rawVersions = pipelineJson.versions   ?: [params.OPENSEARCH_VERSION]
-                    def rawSizes    = pipelineJson.node_sizes ?: (pipelineJson.node_size ? [pipelineJson.node_size] : ['small'])
+                    // ── GHE tag resolution ────────────────────────────────────────────────
+                    // Versions containing '-dev' are GHE builds. The version string itself is
+                    // used as the GHE release tag (e.g. "3.8.0-dev_pr754").
+                    // The deploy script strips everything from '-dev' onward to get the Docker
+                    // image version (e.g. "3.8.0"), and stores the full string as the GHE tag.
+
+                    def rawVersions = (pipelineJson.versions ?: [params.OPENSEARCH_VERSION])
+                    // ── Build the runs list ───────────────────────────────────────────────
+                    def rawSizes = pipelineJson.node_sizes ?: (pipelineJson.node_size ? [pipelineJson.node_size] : ['small'])
                     def versionCounts = [:]
                     rawVersions.each { v -> versionCounts[v] = (versionCounts[v] ?: 0) + 1 }
                     def versionOccurrence = [:]
@@ -430,7 +439,8 @@ print(json.dumps(s))
                         def occ = (versionOccurrence[v] ?: 0) + 1
                         versionOccurrence[v] = occ
                         def versionLabel = (versionCounts[v] > 1) ? "${v}_run${occ}" : v
-                        rawSizes.each { s -> runs << [version: v, nodeSize: s, versionLabel: versionLabel] }
+                        def gheTag = v.contains('-dev') ? v : null
+                        rawSizes.each { s -> runs << [version: v, nodeSize: s, versionLabel: versionLabel, gheTag: gheTag] }
                     }
 
                     sh "mkdir -p ${RESULTS_DIR}"
@@ -540,7 +550,9 @@ print(json.dumps(s))
                                     engineFirstRun      = false
                                     lastVersion         = version
 
-                                    def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
+                                    def gheTag    = run.gheTag
+                                    def ghePluginArg = gheTag ? "--ghe-tag '${gheTag}' --ghe-token '${env.GHE_TOKEN}'" : ""
+                                    def runExtraArgs = "--version ${version} --node-size ${runSize} --force ${ghePluginArg}".trim()
                                     // PVC deletion rules:
                                     //   DELETE_PVCS=true  → always delete (explicit user override, e.g. corrupted data)
                                     //   hasFirstRunSteps  → delete only on the first run (automatic fresh-start)
@@ -742,7 +754,8 @@ print(json.dumps(s))
                                         if (hasFirstRunSteps && runFirstRunSteps && restartAfterBuild) {
                                             sh """
                                                 echo "Restarting cluster ${ns} after build to ensure cold start for search..."
-                                                gke-manifest/deploy-namespace-cluster.sh ${ns} --version ${version} --node-size ${runSize} --force
+                                                gke-manifest/deploy-namespace-cluster.sh ${ns} --version ${version} --node-size ${runSize} --force ${pluginUrlArg}
+                                                # pluginUrlArg carries the per-version URLs resolved above
 
                                                 kubectl rollout status statefulset/opensearch-cluster-manager -n ${ns} --timeout=600s
 
