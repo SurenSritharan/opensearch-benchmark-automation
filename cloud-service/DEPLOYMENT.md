@@ -219,12 +219,21 @@ The complete result tree copied from the pod's `/results` PVC into the repo at `
 
 ```
 results/<job_id>/<engine>/<scenario>/sweep-1/benchmark.log
+results/<job_id>/<engine>/<scenario>/sweep-1/automation.log
 results/<job_id>/<engine>/<scenario>/sweep-1/workload-params.json
 results/<job_id>/<engine>/<scenario>/sweep-1/k8s_metrics.json
 results/<job_id>/<engine>/<scenario>/sweep-1/server_stats.json
 results/<job_id>/<engine>/<scenario>/sweep-1/test_run.json
 results/<job_id>/<engine>/<scenario>/sweep-2/...
 ```
+
+`automation.log` is a per-run JSON Lines trace of orchestration events, including
+metrics collection, benchmark process lifecycle, artifacts, ingest retries,
+document-count checks, and final status. Orchestration warnings and errors
+emitted during metrics collection and benchmark process management are included
+in the trace; OSB's own output remains in `benchmark.log`. Ingest jobs
+also keep a parent-level trace at `results/<job_id>/automation.log` for preflight
+and retry decisions.
 
 ### Setup
 

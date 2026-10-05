@@ -1,12 +1,7 @@
 {
-  "description": "Parallel — wiki-768: fixed 500k concurrent ingest while searching, sweeping SEED size 100k / 500k / 1m (one run each). Search clients and ingest clients both fixed at 8 — the only variable is how many vectors are pre-loaded (seeded) before search begins.",
+  "description": "Parallel — wiki-768 at 1M: seed 1M + 500k concurrent ingest while searching. Single run at 8 search clients / 8 ingest clients.",
   "engine": "__ENGINE__",
-  "params": { "corpus_size": "1m", "search_clients": 8 },
-  "parameter_sweeps": [
-    { "name": "seed-100k", "params": { "seed_num_vectors": 100000 } },
-    { "name": "seed-500k", "params": { "seed_num_vectors": 500000 } },
-    { "name": "seed-1m",   "params": { "seed_num_vectors": 1000000 } }
-  ],
+  "params": { "corpus_size": "1m", "search_clients": 8, "seed_num_vectors": 1000000 },
   "steps": [
     { "dataset": "cohere-wiki-en-768", "scenario": "delete-index" },
     { "dataset": "cohere-wiki-en-768", "scenario": "create-index" },
