@@ -92,14 +92,22 @@ class K8sMetricsCollector:
             return None
 
     def _parse_cpu(self, cpu_str: str) -> float:
-        """Converts K8s CPU strings (e.g., '188m', '2') to float cores."""
+        """Converts K8s CPU strings (e.g., '188m', '4016641u', '2') to float cores."""
         if not cpu_str:
             return 0.0
+        
         if cpu_str.endswith('m'):
             return float(cpu_str[:-1]) / 1000.0
+        if cpu_str.endswith('u'):
+            return float(cpu_str[:-1]) / 1000000.0  # 1,000,000 microcores = 1 core
         if cpu_str.endswith('n'):
             return float(cpu_str[:-1]) / 1000000000.0
-        return float(cpu_str)
+            
+        try:
+            return float(cpu_str)
+        except ValueError:
+            logger.warning(f"Unrecognised CPU quantity {cpu_str!r} — defaulting to 0")
+            return 0.0
 
     def _parse_memory_to_mi(self, mem_str: str) -> float:
         """Converts K8s memory quantity strings to float MiB.
