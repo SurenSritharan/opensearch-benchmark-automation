@@ -419,7 +419,7 @@ print(json.dumps(s))
                         done
                     """
 
-                    def pipeline     = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
+                    def pipeline     = getPipeline()
                     def pipelineJson = readJSON file: "pipelines/${pipeline}.json"
 
                     // ── GHE tag resolution ────────────────────────────────────────────────
@@ -958,7 +958,7 @@ print(json.dumps(s))
                 script {
                     def engines  = getEngines()
                     def apiUrl   = getApiUrl()
-                    def pipeline = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
+                    def pipeline = getPipeline()
 
                     sh """
                         cat > ${RESULTS_DIR}/BUILD_SUMMARY.txt << EOF
@@ -1159,9 +1159,17 @@ def getApiUrl() {
     return isProd() ? 'http://34.132.114.18' : 'http://136.116.139.175'
 }
 
+def getPipeline() {
+    // PIPELINE_OVERRIDE wins over the PIPELINE choice. Accept either a bare name
+    // or one with a trailing ".json" so both "foo" and "foo.json" resolve to
+    // pipelines/foo.json.
+    def pipeline = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
+    return pipeline?.replaceFirst(/\.json$/, '')
+}
+
 def getEngines() {
     // ACL pipelines always run on jvector-acl — ENGINE_TARGET is ignored.
-    def pipeline = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
+    def pipeline = getPipeline()
     if (pipeline?.startsWith('acl-')) {
         return ['jvector-acl']
     }
