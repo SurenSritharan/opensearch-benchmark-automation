@@ -1,0 +1,18 @@
+{
+  "description": "Concurrent bulk-ingest + search with refresh ACTIVE — sweeps refresh_interval 5s/10s/15s at 1M, seed 500k. A/B against bulk-ingest-and-search (refresh off).",
+  "engine": "__ENGINE__",
+  "params": {
+    "corpus_size": "1m",
+    "seed_num_vectors": 500000
+  },
+  "parameter_sweeps": [
+    { "params": { "refresh_interval": "5s" } },
+    { "params": { "refresh_interval": "10s" } },
+    { "params": { "refresh_interval": "15s" } }
+  ],
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "delete-index" },
+    { "dataset": "cohere-wiki-en-768", "scenario": "create-index", "params": { "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "16mb", "merge_scheduler_max_thread_count": 2 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-and-search", "params": { "query_k": 100 } }
+  ]
+}

@@ -552,7 +552,7 @@ print(json.dumps(s))
                                     lastVersion         = version
 
                                     def gheTag    = run.gheTag
-                                    def ghePluginArg = gheTag ? "--ghe-tag '${gheTag}' --ghe-token '${env.GHE_TOKEN}'" : ""
+                                    def ghePluginArg = gheTag ? "--ghe-tag ${gheTag} --ghe-token \$GHE_TOKEN" : ""
                                     def runExtraArgs = "--version ${version} --node-size ${runSize} --force ${ghePluginArg}".trim()
                                     // PVC deletion rules:
                                     //   DELETE_PVCS=true  → always delete (explicit user override, e.g. corrupted data)

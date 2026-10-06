@@ -263,6 +263,8 @@ class K8sMetricsCollector:
                         total_pod_cpu_m += int(cpu_str[:-1])
                     elif cpu_str.endswith('n'):
                         total_pod_cpu_m += int(cpu_str[:-1]) // 1000000
+                    elif cpu_str.endswith('u'):
+                        total_pod_cpu_m += int(cpu_str[:-1]) // 1000
                     else:
                         total_pod_cpu_m += int(float(cpu_str) * 1000)
                         
