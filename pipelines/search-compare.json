@@ -1,7 +1,7 @@
 {
   "description": "Version comparison — build index once on first run, search on all versions and node sizes (wiki + msmarco 1M + 5M + 10M + parquet wiki 1M + openai-1536 5M + dbpedia-3072 1M)",
   "engine": "__ENGINE__",
-  "versions": ["3.7.0", "3.8.0", "3.8.0-dev"],
+  "versions": ["3.7.0", "3.8.0", "3.8.0-dev_pr754"],
   "node_sizes": ["small", "medium"],
   "rebuild_on_version_change": true,
   "restart_after_build": true,
