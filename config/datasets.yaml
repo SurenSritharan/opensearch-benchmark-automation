@@ -122,7 +122,7 @@ datasets:
           number_of_repetitions: 1000
           warmup_time_period: 60
           time_period: 300
-          hnsw_ef_search: 128
+          ef_search: 128
           search_clients: 8
 
         # synthetic make_blobs queries — no corpus file or ground truth, supports any scale
@@ -134,7 +134,7 @@ datasets:
             _source: false
           warmup_time_period: 60
           time_period: 300
-          hnsw_ef_search: 128
+          ef_search: 128
           # query_k and target_index_dimension should be passed at runtime
 
         # concurrent ingest + search — runs both simultaneously and measures
@@ -151,13 +151,14 @@ datasets:
           query_data_set_corpus: "{{corpus_name}}"
           neighbors_data_set_format: "hdf5"
           neighbors_data_set_corpus: "{{corpus_name}}"
+          number_of_repetitions: 1000
           query_body:
             docvalue_fields: ["_id"]
             stored_fields: "_none_"
             _source: false
           warmup_time_period: 60
           time_period: 300
-          hnsw_ef_search: 128
+          ef_search: 128
           search_clients: 8
 
   cohere-msmarco-1024:
@@ -267,7 +268,7 @@ datasets:
             _source: false
           warmup_time_period: 60
           time_period: 300
-          hnsw_ef_search: 128
+          ef_search: 128
           search_clients: 8
 
   cohere-wiki-parquet-1024:
@@ -347,9 +348,9 @@ datasets:
           # automatically — no need to set them here unless overriding.
           warmup_time_period: 60
           time_period: 300
-          hnsw_ef_search: 128
+          ef_search: 128
           query_k: 10
-          search_clients: 1
+          search_clients: 8
           detailed_results: true
 
       - name: "create-search-pipeline"
@@ -367,9 +368,9 @@ datasets:
         params:
           warmup_time_period: 60
           time_period: 300
-          hnsw_ef_search: 128
+          ef_search: 128
           query_k: 10
-          search_clients: 1
+          search_clients: 8
           search_pipeline: "hybrid-search-pipeline"
           hybrid_text_field: "text"
           detailed_results: true
@@ -447,9 +448,9 @@ datasets:
         params:
           warmup_time_period: 60
           time_period: 300
-          hnsw_ef_search: 128
+          ef_search: 128
           query_k: 10
-          search_clients: 1
+          search_clients: 8
           detailed_results: true
 
       - name: "create-search-pipeline"
@@ -467,9 +468,9 @@ datasets:
         params:
           warmup_time_period: 60
           time_period: 300
-          hnsw_ef_search: 128
+          ef_search: 128
           query_k: 10
-          search_clients: 1
+          search_clients: 8
           search_pipeline: "hybrid-search-pipeline"
           hybrid_text_field: "text"
           detailed_results: true
@@ -546,9 +547,9 @@ datasets:
         params:
           warmup_time_period: 60
           time_period: 300
-          hnsw_ef_search: 128
+          ef_search: 128
           query_k: 10
-          search_clients: 1
+          search_clients: 8
           detailed_results: true
 
   dbpedia-openai3-3072:
@@ -624,7 +625,7 @@ datasets:
         params:
           warmup_time_period: 60
           time_period: 300
-          hnsw_ef_search: 128
+          ef_search: 128
           query_k: 10
-          search_clients: 1
+          search_clients: 8
           detailed_results: true
