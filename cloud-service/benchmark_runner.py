@@ -483,6 +483,7 @@ class BenchmarkRunner:
             'dimension':      ctx.dataset_config.get('dimension'),
             'space_type':     ctx.dataset_config.get('space_type'),
             'query_k':        ctx.params.get('query_k'),
+            'hnsw_m':         ctx.params.get('hnsw_m'),
             'ef_search':      ctx.params.get('ef_search'),
             'search_clients': ctx.params.get('search_clients'),
             'method_name':    ctx.params.get('method_name'),
