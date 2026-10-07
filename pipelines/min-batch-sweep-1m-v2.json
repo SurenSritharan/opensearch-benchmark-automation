@@ -1,8 +1,17 @@
 {
-  "description": "min_batch_size_for_quantization sweep at fixed 1M — four thresholds: 10000, 25000, 50000, 100000. Cohere Wiki 1M only. Each threshold runs the full ingest + search flow; step labels encode the threshold for easy result comparison.",
+  "description": "min_batch_size_for_quantization sweep at fixed 1M — five thresholds: 1024 (default), 10000, 25000, 50000, 100000. Cohere Wiki 1M only. Each threshold runs the full ingest + search flow at k=10 and k=100; step labels encode the threshold for easy result comparison.",
   "engine": "__ENGINE__",
   "params": { "corpus_size": "1m" },
   "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "delete-index",     "label": "1m-1024-delete-index",        "params": { "min_batch_size_for_quantization": 1024   } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "create-index",     "label": "1m-1024-create-index",        "params": { "min_batch_size_for_quantization": 1024   } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-data", "label": "1m-1024-bulk-ingest-data",    "params": { "min_batch_size_for_quantization": 1024   } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index",    "label": "1m-1024-refresh-index",       "params": { "min_batch_size_for_quantization": 1024   } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "force-merge",      "label": "1m-1024-force-merge",         "params": { "min_batch_size_for_quantization": 1024   } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index",    "label": "1m-1024-refresh-index-2",     "params": { "min_batch_size_for_quantization": 1024   } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search",    "label": "1m-1024-vector-search-k100",  "params": { "min_batch_size_for_quantization": 1024,   "query_k": 100 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search",    "label": "1m-1024-vector-search-k10",   "params": { "min_batch_size_for_quantization": 1024,   "query_k": 10  } },
+
     { "dataset": "cohere-wiki-en-768", "scenario": "delete-index",     "label": "1m-10000-delete-index",       "params": { "min_batch_size_for_quantization": 10000  } },
     { "dataset": "cohere-wiki-en-768", "scenario": "create-index",     "label": "1m-10000-create-index",       "params": { "min_batch_size_for_quantization": 10000  } },
     { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-data", "label": "1m-10000-bulk-ingest-data",   "params": { "min_batch_size_for_quantization": 10000  } },
