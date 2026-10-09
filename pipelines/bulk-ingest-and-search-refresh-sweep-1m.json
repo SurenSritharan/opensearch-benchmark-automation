@@ -7,9 +7,16 @@
   },
   "parameter_sweeps": [
     { "params": { "refresh_interval": "5s" } },
+    { "params": { "refresh_interval": "5s" } },
+    { "params": { "refresh_interval": "5s" } },
     { "params": { "refresh_interval": "10s" } },
+    { "params": { "refresh_interval": "10s" } },
+    { "params": { "refresh_interval": "10s" } },
+    { "params": { "refresh_interval": "15s" } },
+    { "params": { "refresh_interval": "15s" } },
     { "params": { "refresh_interval": "15s" } }
   ],
+
   "steps": [
     { "dataset": "cohere-wiki-en-768", "scenario": "delete-index" },
     { "dataset": "cohere-wiki-en-768", "scenario": "create-index", "params": { "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "16mb", "merge_scheduler_max_thread_count": 2 } },
