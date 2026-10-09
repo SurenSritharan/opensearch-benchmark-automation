@@ -1,7 +1,7 @@
 {
   "description": "Dev build comparison — custom dev build from GHE release asset first, then release baseline. Rebuilds index on each version. Cluster restarts after build for cold-start search. Small node only.",
   "engine": "__ENGINE__",
-  "versions": ["3.8.0-dev_pr754", "3.8.0"],
+  "versions": ["3.8.0-dev_pr754-v2", "3.8.0"],
   "node_sizes": ["small"],
   "rebuild_on_version_change": true,
   "restart_after_build": true,
