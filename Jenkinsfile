@@ -81,6 +81,7 @@ pipeline {
                 'dbpedia-parquet-1m',
                 'complete-5m-test',
                 'bulk-ingest-and-search',
+                'bulk-ingest-and-search-refresh-sweep-1m.json',
                 //Created for comparison with sequential vs parallel runs
                 'sequential',
                 'parallel',
