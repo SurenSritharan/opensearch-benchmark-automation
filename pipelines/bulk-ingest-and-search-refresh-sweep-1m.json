@@ -6,9 +6,9 @@
     "seed_num_vectors": 1000000
   },
   "parameter_sweeps": [
-    { "params": { "refresh_interval": "30s" } },
-    { "params": { "refresh_interval": "60s" } },
-    { "params": { "refresh_interval": "90s" } }
+    { "params": { "refresh_interval": "5s" } },
+    { "params": { "refresh_interval": "10s" } },
+    { "params": { "refresh_interval": "15s" } }
   ],
 
   "steps": [
