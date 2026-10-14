@@ -3,7 +3,7 @@
   "engine": "__ENGINE__",
   "params": {
     "corpus_size": "1m",
-    "seed_num_vectors": 1000000
+    "seed_num_vectors": 500000
   },
   "parameter_sweeps": [
     { "params": { "refresh_interval": "-1" } },
