@@ -114,8 +114,8 @@ spec:
             echo "Setting up directories..."
             mkdir -p /datasets/opensearch-benchmark /datasets/gt /results /opt/benchmark-src /app
             
-            echo "Cloning OpenSearch Benchmark..."
-            git clone --depth 1 https://github.com/SurenSritharan/opensearch-benchmark /opt/benchmark-src
+            echo "Cloning OpenSearch Benchmark (branch: ${OSB_BRANCH})..."
+            git clone --depth 1 --branch ${OSB_BRANCH} https://github.com/SurenSritharan/opensearch-benchmark /opt/benchmark-src
             cd /opt/benchmark-src
             pip install -e .
             
@@ -180,6 +180,8 @@ spec:
           value: "1"
         - name: DB_PATH
           value: "/workspace/jobs.db"
+        - name: OSB_BRANCH
+          value: "${OSB_BRANCH}"
         
         resources:
           requests:

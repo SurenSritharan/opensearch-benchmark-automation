@@ -123,6 +123,11 @@ pipeline {
             defaultValue: '3.7.0',
             description: 'OpenSearch version to deploy (used when REDEPLOY_CLUSTERS is true, or on first-time deploy). Use 3.5.0.2 for baseline, 3.6.0 for Derived Source, 3.7.0 for latest, 3.8.0 for NVQ. Use a -dev suffix with a GHE tag (e.g. 3.8.0-dev_pr754) for custom jvector builds.'
         )
+        string(
+            name: 'OSB_BRANCH',
+            defaultValue: 'main',
+            description: 'Branch of opensearch-benchmark to clone on the worker pod. Use "develop" to test pre-release benchmark changes.'
+        )
         booleanParam(
             name: 'DELETE_PVCS',
             defaultValue: false,
@@ -474,6 +479,7 @@ print(json.dumps(s))
                                         export ENGINE="${engine}"
                                         export NAMESPACE="${apiNs}"
                                         export AUTOMATION_BRANCH="${automationBranch}"
+                                        export OSB_BRANCH="${params.OSB_BRANCH ?: 'main'}"
                                         export WORKER_STORAGE_CLAIM="${workerStorageClaim}"
                                         export OS_NAMESPACE="${getNamespace(engine)}"
                                         MANIFEST=\$(envsubst < gke-manifest/opensearch-benchmark-worker-template.yaml)
