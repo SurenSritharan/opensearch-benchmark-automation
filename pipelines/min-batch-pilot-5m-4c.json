@@ -1,0 +1,11 @@
+{
+  "description": "PILOT 2: 5M Cohere Wiki, min_batch_size_for_quantization=1024 (default), 4 bulk clients. Ingest + refresh only. Compare p99/max latency and docs/s (docs / duration) against the 8-client pilot (p99 48.9s, max 312s, 1424 docs/s) to see where stalls start. Capture _cat/segments and PQ log lines as in pilot 1.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "5m" },
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "delete-index",     "label": "5m-1024-4c-delete-index",  "params": { "min_batch_size_for_quantization": 1024 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "create-index",     "label": "5m-1024-4c-create-index",  "params": { "min_batch_size_for_quantization": 1024 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-data", "label": "5m-1024-4c-bulk-ingest",   "params": { "min_batch_size_for_quantization": 1024, "target_index_bulk_indexing_clients": 4 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index",    "label": "5m-1024-4c-refresh-index", "params": { "min_batch_size_for_quantization": 1024 } }
+  ]
+}
