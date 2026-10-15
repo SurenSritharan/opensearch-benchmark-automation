@@ -128,6 +128,11 @@ pipeline {
             defaultValue: 'main',
             description: 'Branch of opensearch-benchmark to clone on the worker pod. Use "develop" to test pre-release benchmark changes.'
         )
+        string(
+            name: 'OSB_WORKLOADS_BRANCH',
+            defaultValue: 'main',
+            description: 'Branch of opensearch-benchmark-workloads to clone on the worker pod. Use a feature branch to test workload changes.'
+        )
         booleanParam(
             name: 'DELETE_PVCS',
             defaultValue: false,
@@ -480,6 +485,7 @@ print(json.dumps(s))
                                         export NAMESPACE="${apiNs}"
                                         export AUTOMATION_BRANCH="${automationBranch}"
                                         export OSB_BRANCH="${params.OSB_BRANCH ?: 'main'}"
+                                        export OSB_WORKLOADS_BRANCH="${params.OSB_WORKLOADS_BRANCH ?: 'main'}"
                                         export WORKER_STORAGE_CLAIM="${workerStorageClaim}"
                                         export OS_NAMESPACE="${getNamespace(engine)}"
                                         MANIFEST=\$(envsubst < gke-manifest/opensearch-benchmark-worker-template.yaml)
