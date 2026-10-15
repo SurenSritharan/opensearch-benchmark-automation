@@ -95,7 +95,7 @@ done
 # JVM heap is always ~half of RAM (standard OpenSearch recommendation).
 case "$NODE_SIZE" in
     small)
-        NODE_CPU_REQ="7000m";  NODE_CPU_LIM="8000m";  NODE_MEM="27Gi";  NODE_HEAP="13g" ;;
+        NODE_CPU_REQ="7000m";  NODE_CPU_LIM="8000m";  NODE_MEM="32Gi";  NODE_HEAP="16g" ;;
     medium)
         NODE_CPU_REQ="14000m"; NODE_CPU_LIM="16000m"; NODE_MEM="54Gi";  NODE_HEAP="26g" ;;
     large)
