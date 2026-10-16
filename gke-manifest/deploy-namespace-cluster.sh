@@ -122,15 +122,10 @@ if [[ ! "$NAMESPACE" =~ ^os(-develop)?-[a-z][a-z0-9-]+$ ]]; then
     exit 1
 fi
 
-# Develop namespaces default to 1 data replica to conserve GCE node-pool capacity.
-# Prod namespaces default to 3 for full HA and benchmark validity.
-# --data-replicas overrides both defaults.
+# Default to 3 data replicas for all namespaces.
+# --data-replicas overrides this default.
 if [ -z "$NUM_DATA_REPLICAS" ]; then
-    if [[ "$NAMESPACE" =~ ^os-develop- ]]; then
-        NUM_DATA_REPLICAS=1
-    else
-        NUM_DATA_REPLICAS=3
-    fi
+    NUM_DATA_REPLICAS=3
 fi
 echo "Data replicas: $NUM_DATA_REPLICAS"
 
