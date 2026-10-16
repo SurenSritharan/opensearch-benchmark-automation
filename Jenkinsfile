@@ -133,6 +133,11 @@ pipeline {
             defaultValue: 'main',
             description: 'Branch of opensearch-benchmark-workloads to clone on the worker pod. Use a feature branch to test workload changes.'
         )
+        string(
+            name: 'NUM_DATA_REPLICAS',
+            defaultValue: '',
+            description: 'Number of OpenSearch data node replicas. Leave blank to use the namespace default (develop=1, prod=3). Set to 3 on a develop namespace for a full-scale test.'
+        )
         booleanParam(
             name: 'DELETE_PVCS',
             defaultValue: false,
@@ -572,6 +577,7 @@ print(json.dumps(s))
                                     //   hasFirstRunSteps  → delete only on the first run (automatic fresh-start)
                                     //   all other runs    → preserve PVCs so indexed data is reused
                                     if (params.DELETE_PVCS || (isFirstRun && hasFirstRunSteps)) { runExtraArgs += " --delete-pvcs" }
+                                    if (params.NUM_DATA_REPLICAS?.trim()) { runExtraArgs += " --data-replicas ${params.NUM_DATA_REPLICAS.trim()}" }
 
                                     stage("${engine} / ${versionLabel} / ${runSize} — Prepare Cluster") {
                                         // ── a) Scale up or deploy this engine's cluster ────

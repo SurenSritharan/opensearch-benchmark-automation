@@ -63,10 +63,15 @@ scale_up_namespace() {
         kubectl scale statefulset opensearch-cluster-manager --replicas=1 -n $ns
     fi
 
-    # Scale up data nodes
+    # Scale up data nodes — develop namespaces use 1 replica to conserve capacity
     if kubectl get statefulset opensearch-data -n $ns &> /dev/null; then
-        echo "  📈 Scaling up opensearch-data to 3 replicas..."
-        kubectl scale statefulset opensearch-data --replicas=3 -n $ns
+        if [[ "$ns" =~ ^os-develop- ]]; then
+            DATA_REPLICAS=1
+        else
+            DATA_REPLICAS=3
+        fi
+        echo "  📈 Scaling up opensearch-data to $DATA_REPLICAS replica(s)..."
+        kubectl scale statefulset opensearch-data --replicas=$DATA_REPLICAS -n $ns
     fi
 
     # Wait for pods to be Ready
