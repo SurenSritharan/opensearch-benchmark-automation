@@ -123,6 +123,21 @@ pipeline {
             defaultValue: '3.7.0',
             description: 'OpenSearch version to deploy (used when REDEPLOY_CLUSTERS is true, or on first-time deploy). Use 3.5.0.2 for baseline, 3.6.0 for Derived Source, 3.7.0 for latest, 3.8.0 for NVQ. Use a -dev suffix with a GHE tag (e.g. 3.8.0-dev_pr754) for custom jvector builds.'
         )
+        string(
+            name: 'OSB_BRANCH',
+            defaultValue: 'main',
+            description: 'Branch of opensearch-benchmark to clone on the worker pod. Use "develop" to test pre-release benchmark changes.'
+        )
+        string(
+            name: 'OSB_WORKLOADS_BRANCH',
+            defaultValue: 'main',
+            description: 'Branch of opensearch-benchmark-workloads to clone on the worker pod. Use a feature branch to test workload changes.'
+        )
+        string(
+            name: 'NUM_DATA_REPLICAS',
+            defaultValue: '',
+            description: 'Number of OpenSearch data node replicas. Leave blank to use the namespace default (develop=1, prod=3). Set to 3 on a develop namespace for a full-scale test.'
+        )
         booleanParam(
             name: 'DELETE_PVCS',
             defaultValue: false,
@@ -474,6 +489,8 @@ print(json.dumps(s))
                                         export ENGINE="${engine}"
                                         export NAMESPACE="${apiNs}"
                                         export AUTOMATION_BRANCH="${automationBranch}"
+                                        export OSB_BRANCH="${params.OSB_BRANCH ?: 'main'}"
+                                        export OSB_WORKLOADS_BRANCH="${params.OSB_WORKLOADS_BRANCH ?: 'main'}"
                                         export WORKER_STORAGE_CLAIM="${workerStorageClaim}"
                                         export OS_NAMESPACE="${getNamespace(engine)}"
                                         MANIFEST=\$(envsubst < gke-manifest/opensearch-benchmark-worker-template.yaml)
@@ -546,9 +563,13 @@ print(json.dumps(s))
                                     def runKey          = "${versionLabel}/${runSize}"
                                     def isFirstRun      = engineFirstRun
                                     def isVersionChange = !isFirstRun && (version != lastVersion)
-                                    // Run first_run_steps when: it's the first run, or the version changed
-                                    // and rebuild_on_version_change is set in the pipeline JSON.
-                                    def runFirstRunSteps = isFirstRun || (isVersionChange && rebuildOnVersionChange)
+                                    // PVCs are deleted when: DELETE_PVCS=true (explicit override) OR it is the
+                                    // first run and the pipeline defines first_run_steps (automatic fresh-start).
+                                    // When PVCs are deleted on a non-first run (DELETE_PVCS=true), treat it as a
+                                    // first run for first_run_steps so indices are rebuilt rather than searched
+                                    // against empty shards.
+                                    def pvcsWillBeDeleted = params.DELETE_PVCS || (isFirstRun && hasFirstRunSteps)
+                                    def runFirstRunSteps = isFirstRun || (isVersionChange && rebuildOnVersionChange) || (params.DELETE_PVCS && hasFirstRunSteps)
                                     engineFirstRun      = false
                                     lastVersion         = version
 
@@ -559,7 +580,8 @@ print(json.dumps(s))
                                     //   DELETE_PVCS=true  → always delete (explicit user override, e.g. corrupted data)
                                     //   hasFirstRunSteps  → delete only on the first run (automatic fresh-start)
                                     //   all other runs    → preserve PVCs so indexed data is reused
-                                    if (params.DELETE_PVCS || (isFirstRun && hasFirstRunSteps)) { runExtraArgs += " --delete-pvcs" }
+                                    if (pvcsWillBeDeleted) { runExtraArgs += " --delete-pvcs" }
+                                    if (params.NUM_DATA_REPLICAS?.trim()) { runExtraArgs += " --data-replicas ${params.NUM_DATA_REPLICAS.trim()}" }
 
                                     stage("${engine} / ${versionLabel} / ${runSize} — Prepare Cluster") {
                                         // ── a) Scale up or deploy this engine's cluster ────

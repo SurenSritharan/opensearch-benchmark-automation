@@ -17,11 +17,12 @@
 #   3. Add a RoleBinding in jenkins-agent-rbac.yaml for that namespace
 #   4. Run this script — no other changes needed
 #
-# Usage: ./deploy-namespace-cluster.sh <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs] [--ghe-tag TAG --ghe-token TOKEN]
+# Usage: ./deploy-namespace-cluster.sh <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs] [--ghe-tag TAG --ghe-token TOKEN] [--data-replicas N]
 # Example: ./deploy-namespace-cluster.sh os-jvector-acl
 # Example: ./deploy-namespace-cluster.sh os-jvector-acl --version 3.8.0
 # Example: ./deploy-namespace-cluster.sh os-jvector-acl --version 3.8.0-dev_pr754 --ghe-tag 3.8.0-dev_pr754 --ghe-token $GHE_TOKEN
 # Example: ./deploy-namespace-cluster.sh os-jvector-acl --delete-pvcs
+# Example: ./deploy-namespace-cluster.sh os-develop-jvector --data-replicas 3
 
 set -e
 
@@ -35,9 +36,10 @@ GHE_TOKEN=""
 FORCE_FLAG=""
 DELETE_PVCS=false
 NODE_SIZE="small"
+NUM_DATA_REPLICAS=""  # Empty = auto-derive from namespace (develop=1, prod=3)
 
 if [ -z "$NAMESPACE" ]; then
-    echo "Usage: $0 <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs] [--ghe-tag TAG --ghe-token TOKEN]"
+    echo "Usage: $0 <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs] [--ghe-tag TAG --ghe-token TOKEN] [--data-replicas N]"
     echo ""
     echo "Namespace format:  os-<engine>  or  os-develop-<engine>"
     echo "  <engine> is any slug, e.g. jvector, faiss, lucene, acl-jvector"
@@ -82,9 +84,13 @@ while [[ $# -gt 0 ]]; do
             GHE_TOKEN="$2"
             shift 2
             ;;
+        --data-replicas)
+            NUM_DATA_REPLICAS="$2"
+            shift 2
+            ;;
         *)
             echo "Error: Unknown option '$1'"
-            echo "Usage: $0 <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs] [--ghe-tag TAG --ghe-token TOKEN]"
+            echo "Usage: $0 <namespace> [--version VERSION] [--node-size small|medium|large] [--force] [--delete-pvcs] [--ghe-tag TAG --ghe-token TOKEN] [--data-replicas N]"
             exit 1
             ;;
     esac
@@ -115,6 +121,13 @@ if [[ ! "$NAMESPACE" =~ ^os(-develop)?-[a-z][a-z0-9-]+$ ]]; then
     echo "       where <engine> is a slug like jvector, faiss, lucene, acl-jvector"
     exit 1
 fi
+
+# Default to 3 data replicas for all namespaces.
+# --data-replicas overrides this default.
+if [ -z "$NUM_DATA_REPLICAS" ]; then
+    NUM_DATA_REPLICAS=3
+fi
+echo "Data replicas: $NUM_DATA_REPLICAS"
 
 # -dev versions: version label used in result tagging; Docker image uses the base version.
 # Matches any version containing '-dev' (e.g. 3.8.0-dev, 3.8.0-dev_pr754).
@@ -340,6 +353,7 @@ if [[ "$NAMESPACE" =~ jvector ]]; then
         -e "s/\${NODE_CPU_LIM}/$NODE_CPU_LIM/g" \
         -e "s/\${NODE_MEM}/$NODE_MEM/g" \
         -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
+        -e "s/\${NUM_DATA_REPLICAS}/$NUM_DATA_REPLICAS/g" \
         "$DATA_MANIFEST" | kubectl apply -n $NAMESPACE -f -
 
     echo "4. Waiting for data nodes to be ready..."
@@ -365,6 +379,7 @@ else
         -e "s/\${NODE_CPU_LIM}/$NODE_CPU_LIM/g" \
         -e "s/\${NODE_MEM}/$NODE_MEM/g" \
         -e "s/\${NODE_HEAP}/$NODE_HEAP/g" \
+        -e "s/\${NUM_DATA_REPLICAS}/$NUM_DATA_REPLICAS/g" \
         "$SCRIPT_DIR/opensearch-standard-data-nodes.yaml" | kubectl apply -n $NAMESPACE -f -
 
     echo "4. Waiting for data nodes to be ready..."

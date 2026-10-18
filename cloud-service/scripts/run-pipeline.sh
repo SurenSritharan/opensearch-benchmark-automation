@@ -234,12 +234,16 @@ while IFS= read -r pipeline_sweep; do
         [ -n "$query_k" ] && label="${label}-k${query_k}"
       fi
 
-      # Append an optional sweep name to make this result context identifiable.
-      sweep_name=$(echo "$sweep_entry" | jq -r '.name // ""')
-      if [ -n "$sweep_name" ]; then
-        sweep_slug=$(printf '%s' "$sweep_name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
-        [ -n "$sweep_slug" ] && label="${label}-${sweep_slug}"
-      fi
+      # Append optional sweep names (pipeline-level, then step-level) to make
+      # this result context identifiable.
+      for sweep_name in \
+        "$(echo "$pipeline_sweep" | jq -r '.name // ""')" \
+        "$(echo "$sweep_entry" | jq -r '.name // ""')"; do
+        if [ -n "$sweep_name" ]; then
+          sweep_slug=$(printf '%s' "$sweep_name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+          [ -n "$sweep_slug" ] && label="${label}-${sweep_slug}"
+        fi
+      done
 
       # Deduplicate: if this label has appeared before, append an occurrence counter.
       # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.
