@@ -1,9 +1,9 @@
 {
-  "description": "Version comparison — build index once on first run, search on all versions and node sizes (wiki + msmarco 1M + 5M + 10M + parquet wiki 1M + openai-1536 5M + dbpedia-3072 1M)",
+  "description": "Version comparison — wipe PVCs and rebuild on small at each version change, search on all versions and node sizes (wiki + msmarco 1M + 5M + 10M + parquet wiki 1M + openai-1536 5M + dbpedia-3072 1M)",
   "engine": "__ENGINE__",
   "versions": ["3.8.0-dev_pr754-v2", "3.9.0"],
   "node_sizes": ["small", "medium"],
-  "rebuild_on_version_change": true,
+  "delete_pvcs_on_version_change": true,
   "restart_after_build": true,
   "first_run_steps": [
     { "dataset": "cohere-wiki-en-768",       "scenario": "create-index",     "params": { "corpus_size": "1m",  "refresh_interval": -1, "max_merged_segment": "50gb", "segments_per_tier": 6, "translog_flush_threshold_size": "1gb", "floor_segment": "16mb", "merge_scheduler_max_thread_count": 8 } },

@@ -468,7 +468,15 @@ print(json.dumps(s))
                     // When true, first_run_steps re-execute on every version change (not just the
                     // first run). Useful when you want ingest perf data for each version, not just
                     // search. PVCs are still preserved — create-index + bulk-ingest overwrite in-place.
-                    def rebuildOnVersionChange = pipelineJson.rebuild_on_version_change == true
+                    def rebuildOnVersionChange  = pipelineJson.rebuild_on_version_change == true
+                    // When true, PVCs are wiped and first_run_steps re-execute on every version or
+                    // size change. Complements rebuild_on_version_change (in-place re-ingest without
+                    // a disk wipe) — both can coexist independently.
+                    def deletePvcsOnChange      = pipelineJson.delete_pvcs_on_change == true
+                    // When true, PVCs are wiped and first_run_steps re-execute on version change only.
+                    // Size changes keep the PVCs, so every node size searches the index built by the
+                    // first size for that version.
+                    def deletePvcsOnVersionChange = pipelineJson.delete_pvcs_on_version_change == true
                     // When true, the cluster is restarted after first_run_steps complete and before
                     // the first search run — ensures all version/size comparisons start from the
                     // same cold JVM/cache state.
@@ -552,9 +560,13 @@ print(json.dumps(s))
                                 //     Cluster is redeployed with new resources/version. PVCs are PRESERVED —
                                 //     indexes on disk are reused as-is. Only search steps execute.
                                 //
-                                //   DELETE_PVCS=true overrides the above and always deletes PVCs on every run.
+                                //   DELETE_PVCS=true          → always wipe PVCs on every run
+                                //   delete_pvcs_on_change     → wipe PVCs on every version or size change
+                                //   delete_pvcs_on_version_change → wipe PVCs on version change only
+                                //   rebuild_on_version_change → re-run first_run_steps in-place (no PVC wipe)
                                 def engineFirstRun = true
                                 def lastVersion    = null
+                                def lastSize       = null
                                 runs.each { run ->
                                     if (currentBuild.currentResult == 'ABORTED') { return }
                                     def version         = run.version
@@ -563,23 +575,32 @@ print(json.dumps(s))
                                     def runKey          = "${versionLabel}/${runSize}"
                                     def isFirstRun      = engineFirstRun
                                     def isVersionChange = !isFirstRun && (version != lastVersion)
-                                    // PVCs are deleted when: DELETE_PVCS=true (explicit override) OR it is the
-                                    // first run and the pipeline defines first_run_steps (automatic fresh-start).
-                                    // When PVCs are deleted on a non-first run (DELETE_PVCS=true), treat it as a
-                                    // first run for first_run_steps so indices are rebuilt rather than searched
-                                    // against empty shards.
-                                    def pvcsWillBeDeleted = params.DELETE_PVCS || (isFirstRun && hasFirstRunSteps)
-                                    def runFirstRunSteps = isFirstRun || (isVersionChange && rebuildOnVersionChange) || (params.DELETE_PVCS && hasFirstRunSteps)
+                                    def isSizeChange    = !isFirstRun && (runSize != lastSize)
+                                    def isAnyChange     = isVersionChange || isSizeChange
+                                    // PVC deletion rules (priority order):
+                                    //   1. DELETE_PVCS=true          → always wipe (Jenkins param override)
+                                    //   2. isFirstRun + first_run_steps → wipe on first run (automatic fresh start)
+                                    //   3. delete_pvcs_on_change     → wipe on every version or size change
+                                    //   4. delete_pvcs_on_version_change → wipe on version change only
+                                    def pvcsWillBeDeleted = params.DELETE_PVCS \
+                                        || (isFirstRun && hasFirstRunSteps) \
+                                        || (isAnyChange && deletePvcsOnChange) \
+                                        || (isVersionChange && deletePvcsOnVersionChange)
+                                    // first_run_steps execution rules:
+                                    //   1. isFirstRun                        → always on first run
+                                    //   2. rebuild_on_version_change         → in-place re-ingest on version change
+                                    //   3. pvcsWillBeDeleted on non-first run → must rebuild after disk wipe
+                                    def runFirstRunSteps = isFirstRun \
+                                        || (isVersionChange && rebuildOnVersionChange) \
+                                        || (!isFirstRun && pvcsWillBeDeleted && hasFirstRunSteps)
                                     engineFirstRun      = false
                                     lastVersion         = version
+                                    lastSize            = runSize
 
                                     def gheTag    = run.gheTag
                                     def ghePluginArg = gheTag ? "--ghe-tag ${gheTag} --ghe-token \$GHE_TOKEN" : ""
                                     def runExtraArgs = "--version ${version} --node-size ${runSize} --force ${ghePluginArg}".trim()
-                                    // PVC deletion rules:
-                                    //   DELETE_PVCS=true  → always delete (explicit user override, e.g. corrupted data)
-                                    //   hasFirstRunSteps  → delete only on the first run (automatic fresh-start)
-                                    //   all other runs    → preserve PVCs so indexed data is reused
+                                    // PVC deletion — see pvcsWillBeDeleted above for full rules
                                     if (pvcsWillBeDeleted) { runExtraArgs += " --delete-pvcs" }
                                     if (params.NUM_DATA_REPLICAS?.trim()) { runExtraArgs += " --data-replicas ${params.NUM_DATA_REPLICAS.trim()}" }
 
