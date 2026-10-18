@@ -563,9 +563,13 @@ print(json.dumps(s))
                                     def runKey          = "${versionLabel}/${runSize}"
                                     def isFirstRun      = engineFirstRun
                                     def isVersionChange = !isFirstRun && (version != lastVersion)
-                                    // Run first_run_steps when: it's the first run, or the version changed
-                                    // and rebuild_on_version_change is set in the pipeline JSON.
-                                    def runFirstRunSteps = isFirstRun || (isVersionChange && rebuildOnVersionChange)
+                                    // PVCs are deleted when: DELETE_PVCS=true (explicit override) OR it is the
+                                    // first run and the pipeline defines first_run_steps (automatic fresh-start).
+                                    // When PVCs are deleted on a non-first run (DELETE_PVCS=true), treat it as a
+                                    // first run for first_run_steps so indices are rebuilt rather than searched
+                                    // against empty shards.
+                                    def pvcsWillBeDeleted = params.DELETE_PVCS || (isFirstRun && hasFirstRunSteps)
+                                    def runFirstRunSteps = isFirstRun || (isVersionChange && rebuildOnVersionChange) || (params.DELETE_PVCS && hasFirstRunSteps)
                                     engineFirstRun      = false
                                     lastVersion         = version
 
@@ -576,7 +580,7 @@ print(json.dumps(s))
                                     //   DELETE_PVCS=true  → always delete (explicit user override, e.g. corrupted data)
                                     //   hasFirstRunSteps  → delete only on the first run (automatic fresh-start)
                                     //   all other runs    → preserve PVCs so indexed data is reused
-                                    if (params.DELETE_PVCS || (isFirstRun && hasFirstRunSteps)) { runExtraArgs += " --delete-pvcs" }
+                                    if (pvcsWillBeDeleted) { runExtraArgs += " --delete-pvcs" }
                                     if (params.NUM_DATA_REPLICAS?.trim()) { runExtraArgs += " --data-replicas ${params.NUM_DATA_REPLICAS.trim()}" }
 
                                     stage("${engine} / ${versionLabel} / ${runSize} — Prepare Cluster") {
