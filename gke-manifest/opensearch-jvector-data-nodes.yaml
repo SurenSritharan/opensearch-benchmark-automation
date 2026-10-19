@@ -177,6 +177,8 @@ spec:
           env:
             - name: JVECTOR_PLUGIN_VERSION
               value: "${OPENSEARCH_VERSION}.0"
+            - name: NEURAL_SEARCH_JVECTOR_VERSION
+              value: "${OPENSEARCH_VERSION}.0"
             - name: PROMETHEUS_PLUGIN_VERSION
               value: "${OPENSEARCH_VERSION}.0"
             - name: GCS_PLUGIN_VERSION
@@ -235,6 +237,15 @@ spec:
                 rm -f /tmp/jvector.zip
               fi
               echo "JVector plugin installed successfully!"
+
+              # --- Neural Search JVector Plugin ---
+              echo "Downloading and installing Neural Search JVector plugin..."
+              curl -sSfL "https://github.com/IBM/neural-search-jvector/releases/download/${NEURAL_SEARCH_JVECTOR_VERSION}/opensearch-neural-search-jvector-${NEURAL_SEARCH_JVECTOR_VERSION}.zip" -o /tmp/neural-search-jvector.zip
+              mkdir -p /mnt/plugins/opensearch-neural-search-jvector
+              cd /mnt/plugins/opensearch-neural-search-jvector
+              jar xf /tmp/neural-search-jvector.zip
+              rm -f /tmp/neural-search-jvector.zip
+              echo "Neural Search JVector plugin installed successfully!"
 
               # --- Prometheus Exporter ---
               echo "Downloading and installing Prometheus Exporter..."
