@@ -3,7 +3,7 @@
   "engine": "__ENGINE__",
   "versions": ["3.8.0-dev_pr754-v2", "3.8.0"],
   "node_sizes": ["small"],
-  "rebuild_on_version_change": true,
+  "delete_pvcs_on_version_change": true,
   "restart_after_build": true,
   "stats_interval": 30,
   "parameter_sweeps": [
