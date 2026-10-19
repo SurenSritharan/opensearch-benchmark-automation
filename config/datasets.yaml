@@ -629,3 +629,151 @@ datasets:
           query_k: 10
           search_clients: 8
           detailed_results: true
+
+  cohere-msmarco-v2.1-1024:
+    dimension: 1024
+    format: parquet
+    space_type: "cosinesimil"
+    description: >-
+      MS MARCO v2.1 (TREC-RAG 2024 corpus) with Cohere Embed English v3 passage
+      embeddings, real TREC queries, and NIST relevance judgments (qrels) — streamed
+      from HuggingFace parquet files. Supports OpenRAG-representative hybrid search
+      (vector / bm25 / hybrid / openrag-hybrid) scored with NDCG@10 as well as
+      Recall@k. See CohereLabs/msmarco-v2.1-embed-english-v3 on HuggingFace.
+    workload: "parquet"
+
+    # One HF shard is ~1.76M passages / ~4.1GB; 60 shards cover the full 113.5M
+    # corpus. Start small — each corpus_size here maps to num_vectors in workload.py,
+    # which simply stops once that many rows have been read from the shard list below.
+    supported_corpus_sizes: ["50k", "500k", "1m"]
+    supported_k_values: [10, 100]
+
+    # Real queries + qrels: a small file (~60MB), downloaded once per worker and
+    # read directly by workload.py's real_queries_file param (not streamed via HF).
+    data_dir: "cohere-msmarco-v2.1"
+    base_url: "https://huggingface.co/datasets/CohereLabs/msmarco-v2.1-embed-english-v3/resolve/main"
+    data_files:
+      - name: "queries.parquet"
+        url: "{{base_url}}/queries_parquet/queries.parquet"
+
+    # No gcs_cache_files — corpus is streamed directly from HuggingFace at runtime.
+    common_params:
+      target_index_name: "cohere-msmarco-v21-{{corpus_size}}"
+      queries_file: "gt/cohere-msmarco-v21-{{corpus_size}}-gt.json"
+      gcs_gt_bucket: "opensearch-benchmark-datasets"
+      target_index_dimension: 1024
+      target_field_name: "emb"
+      hf_repo_id: "CohereLabs/msmarco-v2.1-embed-english-v3"
+      hf_dataset_dir: "datasets/CohereLabs/msmarco-v2.1-embed-english-v3/passages_parquet"
+      # v2.1 schema differs from the Wikipedia/dbpedia parquet sets this workload
+      # was built for: id/text columns are named docid/segment, and url/title carry
+      # metadata we want for post-filtering.
+      id_column: "docid"
+      text_column: "segment"
+      title_column: "title"
+      extra_columns: ["url"]
+      derived_fields:
+        domain: "url"
+      include_pid: true
+      real_queries_file: "../cohere-msmarco-v2.1/queries.parquet"
+      qrel_id_separator: "#"
+
+    engine_params:
+      jvector:
+        engine: "jvector"
+      faiss:
+        engine: "faiss"
+      lucene:
+        engine: "lucene"
+
+    test_procedures:
+      - name: "delete-index"
+        params: {}
+
+      - name: "create-index"
+        params:
+          target_index_body: "indices/index.json"
+          target_index_primary_shards: 1
+          target_index_replica_shards: 0
+          target_index_space_type: "cosinesimil"
+          hnsw_ef_construction: 100
+          hnsw_m: 16
+          refresh_interval: "-1"
+          include_pid: true
+          keyword_fields: ["domain", "url"]
+        engine_params:
+          faiss:
+            method_name: "hnsw"
+          lucene:
+            method_name: "hnsw"
+          jvector:
+            method_name: "disk_ann"
+            mode: "on_disk"
+
+      - name: "bulk-ingest-data"
+        params:
+          target_index_bulk_size: 500
+          target_index_bulk_indexing_clients: 4
+          num_queries: 500
+          detailed_results: false
+        # Same DiskANN constraint as the other parquet datasets — single client,
+        # large batches, since concurrent writers starve JVector's graph build.
+        engine_params:
+          jvector:
+            target_index_bulk_size: 500
+            target_index_bulk_indexing_clients: 1
+
+      - name: "refresh-index"
+        params: {}
+
+      - name: "force-merge"
+        params:
+          target_index_max_num_segments: 1
+
+      - name: "vector-search"
+        params:
+          warmup_time_period: 60
+          time_period: 300
+          ef_search: 128
+          query_k: 10
+          search_clients: 8
+          detailed_results: true
+
+      - name: "bm25-search"
+        params:
+          warmup_time_period: 60
+          time_period: 300
+          query_k: 10
+          search_clients: 8
+          detailed_results: true
+
+      - name: "create-search-pipeline"
+        params:
+          search_pipeline: "hybrid-search-pipeline"
+          normalization_technique: "min_max"
+          bm25_weight: 0.3
+          knn_weight: 0.7
+
+      - name: "delete-search-pipeline"
+        params:
+          search_pipeline: "hybrid-search-pipeline"
+
+      - name: "hybrid-search"
+        params:
+          warmup_time_period: 60
+          time_period: 300
+          ef_search: 128
+          query_k: 10
+          search_clients: 8
+          search_pipeline: "hybrid-search-pipeline"
+          hybrid_text_field: "text"
+          detailed_results: true
+
+      - name: "openrag-hybrid-search"
+        params:
+          warmup_time_period: 60
+          time_period: 300
+          ef_search: 128
+          query_k: 10
+          search_clients: 8
+          detailed_results: true
