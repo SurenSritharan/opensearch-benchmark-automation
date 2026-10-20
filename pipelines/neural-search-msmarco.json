@@ -1,7 +1,8 @@
 {
-  "description": "Neural search on BEIR MSMARCO: deploy MiniLM embedding + cross-encoder re-ranker, ingest corpus, and benchmark semantic search with reranking.",
+  "description": "Neural search on BEIR MSMARCO — dense semantic search baseline followed by semantic search with cross-encoder re-ranking.",
   "engine": "__ENGINE__",
   "steps": [
+    { "dataset": "msmarco-neural-search", "scenario": "semantic-search" },
     { "dataset": "msmarco-neural-search", "scenario": "semantic-search-with-reranker" }
   ]
 }
