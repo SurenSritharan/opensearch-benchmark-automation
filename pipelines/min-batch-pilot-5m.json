@@ -1,0 +1,11 @@
+{
+  "description": "PILOT: 5M Cohere Wiki, min_batch_size_for_quantization=1024 (default), 8 bulk clients. Ingest + refresh only. Checks: error_rate==0 and doc count==5M, bulk p99 vs 1-client (~280ms at 1M), Cumulative merge count > 0 after ingest.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "5m" },
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "delete-index",     "label": "5m-1024-8c-delete-index",  "params": { "min_batch_size_for_quantization": 1024 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "create-index",     "label": "5m-1024-8c-create-index",  "params": { "min_batch_size_for_quantization": 1024 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-data", "label": "5m-1024-8c-bulk-ingest",   "params": { "min_batch_size_for_quantization": 1024, "target_index_bulk_indexing_clients": 8 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index",    "label": "5m-1024-8c-refresh-index", "params": { "min_batch_size_for_quantization": 1024 } }
+  ]
+}

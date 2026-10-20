@@ -1,0 +1,7 @@
+{
+  "description": "Neural search on Quora — dense semantic search only (smoke test). Latency/throughput only (no recall).",
+  "engine": "__ENGINE__",
+  "steps": [
+    { "dataset": "quora-neural-search", "scenario": "semantic-search", "params": { "ingest_percentage": 10, "iterations": 50, "warmup_iterations": 20 } }
+  ]
+}

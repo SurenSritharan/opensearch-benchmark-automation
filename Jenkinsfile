@@ -58,6 +58,7 @@ pipeline {
                 'complete',
                 'search-all',
                 'search-compare',
+                'dev-compare',
                 'complete-5m-profile-ingest',
                 'search-all-overquery',
                 'openai-large-5m',
@@ -78,8 +79,11 @@ pipeline {
                 'dbpedia-parquet-50k',
                 'dbpedia-parquet-500k',
                 'dbpedia-parquet-1m',
+                'neural-search-quora',
+                'neural-search-quora-semantic',
                 'complete-5m-test',
                 'bulk-ingest-and-search',
+                'bulk-ingest-and-search-refresh-sweep-1m.json',
                 //Created for comparison with sequential vs parallel runs
                 'sequential',
                 'parallel',
@@ -119,7 +123,22 @@ pipeline {
         string(
             name: 'OPENSEARCH_VERSION',
             defaultValue: '3.7.0',
-            description: 'OpenSearch version to deploy (used when REDEPLOY_CLUSTERS is true, or on first-time deploy). Use 3.5.0.2 for baseline, 3.6.0 for Derived Source, 3.7.0 for latest, 3.8.0 for NVQ.'
+            description: 'OpenSearch version to deploy (used when REDEPLOY_CLUSTERS is true, or on first-time deploy). Use 3.5.0.2 for baseline, 3.6.0 for Derived Source, 3.7.0 for latest, 3.8.0 for NVQ. Use a -dev suffix with a GHE tag (e.g. 3.8.0-dev_pr754) for custom jvector builds.'
+        )
+        string(
+            name: 'OSB_BRANCH',
+            defaultValue: 'main',
+            description: 'Branch of opensearch-benchmark to clone on the worker pod. Use "develop" to test pre-release benchmark changes.'
+        )
+        string(
+            name: 'OSB_WORKLOADS_BRANCH',
+            defaultValue: 'main',
+            description: 'Branch of opensearch-benchmark-workloads to clone on the worker pod. Use a feature branch to test workload changes.'
+        )
+        string(
+            name: 'NUM_DATA_REPLICAS',
+            defaultValue: '',
+            description: 'Number of OpenSearch data node replicas. Leave blank to use the namespace default (develop=1, prod=3). Set to 3 on a develop namespace for a full-scale test.'
         )
         booleanParam(
             name: 'DELETE_PVCS',
@@ -166,6 +185,7 @@ pipeline {
     environment {
         RESULTS_DIR = "results/${BUILD_ID}"
         KUBECONFIG  = "${env.WORKSPACE}/.kube/config"
+        GHE_TOKEN   = credentials('ghe-token')
     }
 
     // triggers {
@@ -417,11 +437,18 @@ print(json.dumps(s))
                         done
                     """
 
-                    def pipeline     = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
+                    def pipeline     = getPipeline()
                     def pipelineJson = readJSON file: "pipelines/${pipeline}.json"
 
-                    def rawVersions = pipelineJson.versions   ?: [params.OPENSEARCH_VERSION]
-                    def rawSizes    = pipelineJson.node_sizes ?: (pipelineJson.node_size ? [pipelineJson.node_size] : ['small'])
+                    // ── GHE tag resolution ────────────────────────────────────────────────
+                    // Versions containing '-dev' are GHE builds. The version string itself is
+                    // used as the GHE release tag (e.g. "3.8.0-dev_pr754").
+                    // The deploy script strips everything from '-dev' onward to get the Docker
+                    // image version (e.g. "3.8.0"), and stores the full string as the GHE tag.
+
+                    def rawVersions = (pipelineJson.versions ?: [params.OPENSEARCH_VERSION])
+                    // ── Build the runs list ───────────────────────────────────────────────
+                    def rawSizes = pipelineJson.node_sizes ?: (pipelineJson.node_size ? [pipelineJson.node_size] : ['small'])
                     def versionCounts = [:]
                     rawVersions.each { v -> versionCounts[v] = (versionCounts[v] ?: 0) + 1 }
                     def versionOccurrence = [:]
@@ -430,18 +457,28 @@ print(json.dumps(s))
                         def occ = (versionOccurrence[v] ?: 0) + 1
                         versionOccurrence[v] = occ
                         def versionLabel = (versionCounts[v] > 1) ? "${v}_run${occ}" : v
-                        rawSizes.each { s -> runs << [version: v, nodeSize: s, versionLabel: versionLabel] }
+                        def gheTag = v.contains('-dev') ? v : null
+                        rawSizes.each { s -> runs << [version: v, nodeSize: s, versionLabel: versionLabel, gheTag: gheTag] }
                     }
 
                     sh "mkdir -p ${RESULTS_DIR}"
 
+                    def statsInterval         = params.STATS_INTERVAL?.trim() ?: (pipelineJson.stats_interval ? "${pipelineJson.stats_interval}" : "")
                     def redeploy              = params.REDEPLOY_CLUSTERS || pipelineJson.redeploy == true
                     def multiRun              = (pipelineJson.versions || pipelineJson.node_sizes) ? true : false
                     def hasFirstRunSteps      = pipelineJson.first_run_steps && pipelineJson.first_run_steps.size() > 0
                     // When true, first_run_steps re-execute on every version change (not just the
                     // first run). Useful when you want ingest perf data for each version, not just
                     // search. PVCs are still preserved — create-index + bulk-ingest overwrite in-place.
-                    def rebuildOnVersionChange = pipelineJson.rebuild_on_version_change == true
+                    def rebuildOnVersionChange  = pipelineJson.rebuild_on_version_change == true
+                    // When true, PVCs are wiped and first_run_steps re-execute on every version or
+                    // size change. Complements rebuild_on_version_change (in-place re-ingest without
+                    // a disk wipe) — both can coexist independently.
+                    def deletePvcsOnChange      = pipelineJson.delete_pvcs_on_change == true
+                    // When true, PVCs are wiped and first_run_steps re-execute on version change only.
+                    // Size changes keep the PVCs, so every node size searches the index built by the
+                    // first size for that version.
+                    def deletePvcsOnVersionChange = pipelineJson.delete_pvcs_on_version_change == true
                     // When true, the cluster is restarted after first_run_steps complete and before
                     // the first search run — ensures all version/size comparisons start from the
                     // same cold JVM/cache state.
@@ -462,6 +499,8 @@ print(json.dumps(s))
                                         export ENGINE="${engine}"
                                         export NAMESPACE="${apiNs}"
                                         export AUTOMATION_BRANCH="${automationBranch}"
+                                        export OSB_BRANCH="${params.OSB_BRANCH ?: 'main'}"
+                                        export OSB_WORKLOADS_BRANCH="${params.OSB_WORKLOADS_BRANCH ?: 'main'}"
                                         export WORKER_STORAGE_CLAIM="${workerStorageClaim}"
                                         export OS_NAMESPACE="${getNamespace(engine)}"
                                         MANIFEST=\$(envsubst < gke-manifest/opensearch-benchmark-worker-template.yaml)
@@ -523,9 +562,13 @@ print(json.dumps(s))
                                 //     Cluster is redeployed with new resources/version. PVCs are PRESERVED —
                                 //     indexes on disk are reused as-is. Only search steps execute.
                                 //
-                                //   DELETE_PVCS=true overrides the above and always deletes PVCs on every run.
+                                //   DELETE_PVCS=true          → always wipe PVCs on every run
+                                //   delete_pvcs_on_change     → wipe PVCs on every version or size change
+                                //   delete_pvcs_on_version_change → wipe PVCs on version change only
+                                //   rebuild_on_version_change → re-run first_run_steps in-place (no PVC wipe)
                                 def engineFirstRun = true
                                 def lastVersion    = null
+                                def lastSize       = null
                                 runs.each { run ->
                                     if (currentBuild.currentResult == 'ABORTED') { return }
                                     def version         = run.version
@@ -534,18 +577,34 @@ print(json.dumps(s))
                                     def runKey          = "${versionLabel}/${runSize}"
                                     def isFirstRun      = engineFirstRun
                                     def isVersionChange = !isFirstRun && (version != lastVersion)
-                                    // Run first_run_steps when: it's the first run, or the version changed
-                                    // and rebuild_on_version_change is set in the pipeline JSON.
-                                    def runFirstRunSteps = isFirstRun || (isVersionChange && rebuildOnVersionChange)
+                                    def isSizeChange    = !isFirstRun && (runSize != lastSize)
+                                    def isAnyChange     = isVersionChange || isSizeChange
+                                    // PVC deletion rules (priority order):
+                                    //   1. DELETE_PVCS=true          → always wipe (Jenkins param override)
+                                    //   2. isFirstRun + first_run_steps → wipe on first run (automatic fresh start)
+                                    //   3. delete_pvcs_on_change     → wipe on every version or size change
+                                    //   4. delete_pvcs_on_version_change → wipe on version change only
+                                    def pvcsWillBeDeleted = params.DELETE_PVCS \
+                                        || (isFirstRun && hasFirstRunSteps) \
+                                        || (isAnyChange && deletePvcsOnChange) \
+                                        || (isVersionChange && deletePvcsOnVersionChange)
+                                    // first_run_steps execution rules:
+                                    //   1. isFirstRun                        → always on first run
+                                    //   2. rebuild_on_version_change         → in-place re-ingest on version change
+                                    //   3. pvcsWillBeDeleted on non-first run → must rebuild after disk wipe
+                                    def runFirstRunSteps = isFirstRun \
+                                        || (isVersionChange && rebuildOnVersionChange) \
+                                        || (!isFirstRun && pvcsWillBeDeleted && hasFirstRunSteps)
                                     engineFirstRun      = false
                                     lastVersion         = version
+                                    lastSize            = runSize
 
-                                    def runExtraArgs = "--version ${version} --node-size ${runSize} --force"
-                                    // PVC deletion rules:
-                                    //   DELETE_PVCS=true  → always delete (explicit user override, e.g. corrupted data)
-                                    //   hasFirstRunSteps  → delete only on the first run (automatic fresh-start)
-                                    //   all other runs    → preserve PVCs so indexed data is reused
-                                    if (params.DELETE_PVCS || (isFirstRun && hasFirstRunSteps)) { runExtraArgs += " --delete-pvcs" }
+                                    def gheTag    = run.gheTag
+                                    def ghePluginArg = gheTag ? "--ghe-tag ${gheTag} --ghe-token \$GHE_TOKEN" : ""
+                                    def runExtraArgs = "--version ${version} --node-size ${runSize} --force ${ghePluginArg}".trim()
+                                    // PVC deletion — see pvcsWillBeDeleted above for full rules
+                                    if (pvcsWillBeDeleted) { runExtraArgs += " --delete-pvcs" }
+                                    if (params.NUM_DATA_REPLICAS?.trim()) { runExtraArgs += " --data-replicas ${params.NUM_DATA_REPLICAS.trim()}" }
 
                                     stage("${engine} / ${versionLabel} / ${runSize} — Prepare Cluster") {
                                         // ── a) Scale up or deploy this engine's cluster ────
@@ -722,7 +781,7 @@ print(json.dumps(s))
                                                 ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                 ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
-                                                ${params.STATS_INTERVAL?.trim() ? "--stats-interval ${params.STATS_INTERVAL.trim()}" : ""} \
+                                                ${statsInterval ? "--stats-interval ${statsInterval}" : ""} \
                                                 ${engine} \
                                                 2>&1 | tee benchmark-run-${engine}-${versionLabel}-${runSize}.log
                                             PIPE_RC=\${PIPESTATUS[0]}
@@ -742,7 +801,7 @@ print(json.dumps(s))
                                         if (hasFirstRunSteps && runFirstRunSteps && restartAfterBuild) {
                                             sh """
                                                 echo "Restarting cluster ${ns} after build to ensure cold start for search..."
-                                                gke-manifest/deploy-namespace-cluster.sh ${ns} --version ${version} --node-size ${runSize} --force
+                                                gke-manifest/deploy-namespace-cluster.sh ${ns} --version ${version} --node-size ${runSize} --force ${ghePluginArg}
 
                                                 kubectl rollout status statefulset/opensearch-cluster-manager -n ${ns} --timeout=600s
 
@@ -833,7 +892,7 @@ print(json.dumps(s))
                                                     ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
                                                     ${params.ENABLE_PROFILING ? "--enable-profiling" : ""} \
                                                     ${params.ENABLE_PROFILING ? "--profiling-duration ${params.PROFILING_DURATION}" : ""} \
-                                                    ${params.STATS_INTERVAL?.trim() ? "--stats-interval ${params.STATS_INTERVAL.trim()}" : ""} \
+                                                    ${statsInterval ? "--stats-interval ${statsInterval}" : ""} \
                                                     ${engine} \
                                                     2>&1 | tee benchmark-run-${engine}-${versionLabel}-${runSize}-search.log
                                                 PIPE_RC=\${PIPESTATUS[0]}
@@ -945,7 +1004,7 @@ print(json.dumps(s))
                 script {
                     def engines  = getEngines()
                     def apiUrl   = getApiUrl()
-                    def pipeline = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
+                    def pipeline = getPipeline()
 
                     sh """
                         cat > ${RESULTS_DIR}/BUILD_SUMMARY.txt << EOF
@@ -1146,9 +1205,17 @@ def getApiUrl() {
     return isProd() ? 'http://34.132.114.18' : 'http://136.116.139.175'
 }
 
+def getPipeline() {
+    // PIPELINE_OVERRIDE wins over the PIPELINE choice. Accept either a bare name
+    // or one with a trailing ".json" so both "foo" and "foo.json" resolve to
+    // pipelines/foo.json.
+    def pipeline = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
+    return pipeline?.replaceFirst(/\.json$/, '')
+}
+
 def getEngines() {
     // ACL pipelines always run on jvector-acl — ENGINE_TARGET is ignored.
-    def pipeline = params.PIPELINE_OVERRIDE?.trim() ?: params.PIPELINE
+    def pipeline = getPipeline()
     if (pipeline?.startsWith('acl-')) {
         return ['jvector-acl']
     }

@@ -1,14 +1,14 @@
 # PodDisruptionBudget — prevents the GKE cluster autoscaler from evicting data
-# pods during a scale-down. minAvailable: 3 ensures all data nodes stay up for
-# the duration of a benchmark, preventing any shard reallocation which
-# would skew results and cause recovery delays.
+# pods during a scale-down. minAvailable matches NUM_DATA_REPLICAS (3 for prod,
+# 1 for develop) to ensure all data nodes stay up for the duration of a
+# benchmark, preventing shard reallocation which would skew results.
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
   name: opensearch-data-pdb
   namespace: ${NAMESPACE}
 spec:
-  minAvailable: 3
+  minAvailable: ${NUM_DATA_REPLICAS}
   selector:
     matchLabels:
       app: opensearch-data
@@ -120,7 +120,7 @@ metadata:
   namespace: ${NAMESPACE}
 spec:
   serviceName: opensearch-data
-  replicas: 3
+  replicas: ${NUM_DATA_REPLICAS}
   podManagementPolicy: Parallel
   selector:
     matchLabels:
@@ -177,6 +177,8 @@ spec:
           env:
             - name: JVECTOR_PLUGIN_VERSION
               value: "${OPENSEARCH_VERSION}.0"
+            - name: NEURAL_SEARCH_JVECTOR_VERSION
+              value: "${OPENSEARCH_VERSION}.0"
             - name: PROMETHEUS_PLUGIN_VERSION
               value: "${OPENSEARCH_VERSION}.0"
             - name: GCS_PLUGIN_VERSION
@@ -185,36 +187,91 @@ spec:
             - bash
             - -c
             - |
-              set -e
+              set -euo pipefail
+              shopt -s nullglob
+
               echo "Staging base OpenSearch plugins for version ${OPENSEARCH_VERSION}..."
               cp -r /usr/share/opensearch/plugins/* /mnt/plugins/
-              
-              echo "Downloading and installing JVector Plugin..."
-              curl -sL "https://repo1.maven.org/maven2/org/opensearch/plugin/opensearch-jvector-plugin/${JVECTOR_PLUGIN_VERSION}/opensearch-jvector-plugin-${JVECTOR_PLUGIN_VERSION}.zip" -o /tmp/jvector.zip
+
+              # Remove default vector search plugins
               rm -rf /mnt/plugins/opensearch-neural-search
               rm -rf /mnt/plugins/opensearch-knn
+
+              # --- JVector Plugin Setup ---
+              # If /mnt/ghe-token/GHE_TOKEN and TAG are present, download the sole
+              # asset from the GHE release directly. Otherwise fall back to Maven Central.
+
+              rm -rf /mnt/plugins/opensearch-jvector
               mkdir -p /mnt/plugins/opensearch-jvector
               cd /mnt/plugins/opensearch-jvector
-              jar xf /tmp/jvector.zip
+
+              SECRET=/mnt/ghe-token
+
+              if [ -s "$SECRET/GHE_TOKEN" ] && [ -s "$SECRET/TAG" ]; then
+                GHE_TOKEN="$(cat "$SECRET/GHE_TOKEN")"
+                TAG="$(cat "$SECRET/TAG")"
+                GHE_API="https://api.github.ibm.com/repos/bharath/opensearch-jvector-releases"
+                echo "Installing custom dev JVector plugin from GHE release: $TAG"
+                ASSET_ID=$(curl -sSfL \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "Authorization: Bearer $GHE_TOKEN" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" \
+                  "$GHE_API/releases/tags/$TAG" \
+                  | python3 -c "import sys,json; assets=json.load(sys.stdin).get('assets',[]); print(assets[0]['id'] if assets else '')")
+                if [ -z "$ASSET_ID" ]; then
+                  echo "Error: No assets found in release '$TAG'" >&2
+                  exit 1
+                fi
+                curl -sSfL \
+                  -H "Authorization: Bearer $GHE_TOKEN" \
+                  -H "Accept: application/octet-stream" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" \
+                  "$GHE_API/releases/assets/$ASSET_ID" \
+                  -o /tmp/jvector.zip
+                jar xf /tmp/jvector.zip
+                rm -f /tmp/jvector.zip
+              else
+                echo "No custom dev zip found. Downloading JVector plugin ${JVECTOR_PLUGIN_VERSION} from Maven Central..."
+                curl -sSfL "https://repo1.maven.org/maven2/org/opensearch/plugin/opensearch-jvector-plugin/${JVECTOR_PLUGIN_VERSION}/opensearch-jvector-plugin-${JVECTOR_PLUGIN_VERSION}.zip" -o /tmp/jvector.zip
+                jar xf /tmp/jvector.zip
+                rm -f /tmp/jvector.zip
+              fi
               echo "JVector plugin installed successfully!"
 
+              # --- Neural Search JVector Plugin ---
+              echo "Downloading and installing Neural Search JVector plugin..."
+              curl -sSfL "https://github.com/IBM/neural-search-jvector/releases/download/${NEURAL_SEARCH_JVECTOR_VERSION}/opensearch-neural-search-jvector-${NEURAL_SEARCH_JVECTOR_VERSION}.zip" -o /tmp/neural-search-jvector.zip
+              mkdir -p /mnt/plugins/opensearch-neural-search-jvector
+              cd /mnt/plugins/opensearch-neural-search-jvector
+              jar xf /tmp/neural-search-jvector.zip
+              rm -f /tmp/neural-search-jvector.zip
+              echo "Neural Search JVector plugin installed successfully!"
+
+              # --- Prometheus Exporter ---
               echo "Downloading and installing Prometheus Exporter..."
-              curl -sL "https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/${PROMETHEUS_PLUGIN_VERSION}/prometheus-exporter-${PROMETHEUS_PLUGIN_VERSION}.zip" -o /tmp/prometheus-exporter.zip
+              curl -sSfL "https://github.com/opensearch-project/opensearch-prometheus-exporter/releases/download/${PROMETHEUS_PLUGIN_VERSION}/prometheus-exporter-${PROMETHEUS_PLUGIN_VERSION}.zip" -o /tmp/prometheus-exporter.zip
               mkdir -p /mnt/plugins/prometheus-exporter
               cd /mnt/plugins/prometheus-exporter
               jar xf /tmp/prometheus-exporter.zip
+              rm -f /tmp/prometheus-exporter.zip
               echo "Prometheus plugin installed successfully!"
 
+              # --- Repository GCS Plugin ---
               echo "Downloading and installing Repository GCS Plugin..."
-              curl -sL "https://artifacts.opensearch.org/releases/plugins/repository-gcs/${GCS_PLUGIN_VERSION}/repository-gcs-${GCS_PLUGIN_VERSION}.zip" -o /tmp/repository-gcs.zip
+              curl -sSfL "https://artifacts.opensearch.org/releases/plugins/repository-gcs/${GCS_PLUGIN_VERSION}/repository-gcs-${GCS_PLUGIN_VERSION}.zip" -o /tmp/repository-gcs.zip
               mkdir -p /mnt/plugins/repository-gcs
               cd /mnt/plugins/repository-gcs
               jar xf /tmp/repository-gcs.zip
+              rm -f /tmp/repository-gcs.zip
               echo "Repository GCS plugin installed successfully!"
+
           volumeMounts:
             - name: plugins
               mountPath: /mnt/plugins
-        
+            - name: ghe-token
+              mountPath: /mnt/ghe-token
+              readOnly: true
+
         - name: install-async-profiler
           image: busybox:1.36
           command:
@@ -381,6 +438,9 @@ spec:
             secretName: opensearch-shared-certs
         - name: async-profiler
           emptyDir: {}
+        - name: ghe-token
+          secret:
+            secretName: ghe-token
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -389,6 +449,6 @@ spec:
         storageClassName: premium-rwo
         resources:
           requests:
-            storage: 600Gi
+            storage: 1200Gi
 
 # Made with Bob

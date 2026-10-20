@@ -63,7 +63,7 @@ gcloud container clusters resize opensearch-benchmarking \
 │  - opensearch-data-2                        │
 │  - Role: data, ingest                       │
 │  - Resources: 27Gi RAM, 7-8 CPU each        │
-│  - Storage: 600Gi each                      │
+│  - Storage: 1200Gi each                      │
 └─────────────────────────────────────────────┘
 ```
 

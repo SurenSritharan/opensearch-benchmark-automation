@@ -234,6 +234,17 @@ while IFS= read -r pipeline_sweep; do
         [ -n "$query_k" ] && label="${label}-k${query_k}"
       fi
 
+      # Append optional sweep names (pipeline-level, then step-level) to make
+      # this result context identifiable.
+      for sweep_name in \
+        "$(echo "$pipeline_sweep" | jq -r '.name // ""')" \
+        "$(echo "$sweep_entry" | jq -r '.name // ""')"; do
+        if [ -n "$sweep_name" ]; then
+          sweep_slug=$(printf '%s' "$sweep_name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+          [ -n "$sweep_slug" ] && label="${label}-${sweep_slug}"
+        fi
+      done
+
       # Deduplicate: if this label has appeared before, append an occurrence counter.
       # First occurrence keeps the plain label; second becomes label-2, third label-3, etc.
       # Key on dataset+label (mirrors the server's path_key) so two different datasets
@@ -532,7 +543,8 @@ _collect_scenario_server_logs() {
       rm -f "$gc_file"
     fi
 
-    # Heap dumps
+    # Capture each pod's dump under the scenario that first observes it, then
+    # remove the source from the pod so later scenarios cannot copy it again.
     local hprof_files
     hprof_files=$(kubectl exec "$pod" -c opensearch -n "$ns" -- \
       sh -c 'ls /usr/share/opensearch/data/*.hprof 2>/dev/null || true' || true)
@@ -540,9 +552,17 @@ _collect_scenario_server_logs() {
       local hprof_name
       hprof_name=$(basename "$hprof")
       local local_hprof="${log_dir}/${pod}-${hprof_name}"
-      kubectl cp "${ns}/${pod}:${hprof}" "$local_hprof" \
-        -c opensearch 2>/dev/null || true
-      [ -s "$local_hprof" ] && hprof_count=$((hprof_count + 1))
+      if [ ! -s "$local_hprof" ]; then
+        kubectl cp "${ns}/${pod}:${hprof}" "$local_hprof" \
+          -c opensearch 2>/dev/null || true
+      fi
+      if [ -s "$local_hprof" ]; then
+        hprof_count=$((hprof_count + 1))
+        if ! kubectl exec "$pod" -c opensearch -n "$ns" -- \
+          rm -f -- "$hprof" 2>/dev/null; then
+          echo "  WARNING: archived ${hprof_name} for ${scenario_key}, but could not remove it from ${pod}"
+        fi
+      fi
     done
   done
 

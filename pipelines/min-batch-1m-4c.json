@@ -1,0 +1,22 @@
+{
+  "description": "Isolation test: 1M (Cohere Wiki 768d, 3 shards, ~333K vectors/shard) with 4 bulk clients at thresholds 1024 and 50000. Purpose: decide whether the flat ingest seen at 1M (1 client) vs the step seen at 5M (4 clients) is caused by corpus size or by client load. Only the client count differs from the earlier 1M sweeps (1 client). Compare ingest duration, p99/max ingest latency and docs/s against the 1M 1-client runs and the 5M 4-client runs. One run per threshold; resubmit for repeats.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "1m" },
+  "steps": [
+    { "dataset": "cohere-wiki-en-768", "scenario": "delete-index",    "label": "1m-1024-4c-delete-index",     "params": { "min_batch_size_for_quantization": 1024 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "create-index",    "label": "1m-1024-4c-create-index",     "params": { "min_batch_size_for_quantization": 1024 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-data", "label": "1m-1024-4c-bulk-ingest-data", "params": { "min_batch_size_for_quantization": 1024, "target_index_bulk_indexing_clients": 4 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index",   "label": "1m-1024-4c-refresh-index",    "params": { "min_batch_size_for_quantization": 1024 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "force-merge",     "label": "1m-1024-4c-force-merge",      "params": { "min_batch_size_for_quantization": 1024 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index",   "label": "1m-1024-4c-refresh-index-2",  "params": { "min_batch_size_for_quantization": 1024 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search",   "label": "1m-1024-4c-vector-search-k10", "params": { "min_batch_size_for_quantization": 1024, "query_k": 10 } },
+
+    { "dataset": "cohere-wiki-en-768", "scenario": "delete-index",    "label": "1m-50000-4c-delete-index",     "params": { "min_batch_size_for_quantization": 50000 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "create-index",    "label": "1m-50000-4c-create-index",     "params": { "min_batch_size_for_quantization": 50000 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-data", "label": "1m-50000-4c-bulk-ingest-data", "params": { "min_batch_size_for_quantization": 50000, "target_index_bulk_indexing_clients": 4 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index",   "label": "1m-50000-4c-refresh-index",    "params": { "min_batch_size_for_quantization": 50000 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "force-merge",     "label": "1m-50000-4c-force-merge",      "params": { "min_batch_size_for_quantization": 50000 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "refresh-index",   "label": "1m-50000-4c-refresh-index-2",  "params": { "min_batch_size_for_quantization": 50000 } },
+    { "dataset": "cohere-wiki-en-768", "scenario": "vector-search",   "label": "1m-50000-4c-vector-search-k10", "params": { "min_batch_size_for_quantization": 50000, "query_k": 10 } }
+  ]
+}

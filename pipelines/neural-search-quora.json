@@ -1,0 +1,8 @@
+{
+  "description": "Neural search on Quora — dense semantic then sparse (neural_sparse): deploy model, ingest, search. Latency/throughput only (no recall).",
+  "engine": "__ENGINE__",
+  "steps": [
+    { "dataset": "quora-neural-search", "scenario": "semantic-search" },
+    { "dataset": "quora-neural-search", "scenario": "sparse-search" }
+  ]
+}

@@ -594,32 +594,18 @@ def process_engine_queue(engine: str):
                         # Extract workload params from options
                         workload_params = options.get('workload_params', None)
                         
-                        # Run the benchmark — ingest gets doc-count verification + retry
-                        if scenario == "bulk-ingest-data":
-                            result = benchmark_runner.run_ingest(
-                                dataset=dataset,
-                                engine=engine,
-                                job_id=job_id,
-                                enable_profiling=options.get('enable_profiling', False),
-                                profiling_duration=options.get('profiling_duration', 60),
-                                enable_metrics=not options.get('no_metrics', False),
-                                workload_params=workload_params,
-                                cancel_event=cancel_event,
-                                log_level=options.get('log_level'),
-                            )
-                        else:
-                            result = benchmark_runner.run_benchmark(
-                                dataset=dataset,
-                                engine=engine,
-                                scenario=scenario,
-                                job_id=job_id,
-                                enable_profiling=options.get('enable_profiling', False),
-                                profiling_duration=options.get('profiling_duration', 60),
-                                enable_metrics=not options.get('no_metrics', False),
-                                workload_params=workload_params,
-                                cancel_event=cancel_event,
-                                log_level=options.get('log_level'),
-                            )
+                        result = benchmark_runner.run_benchmark(
+                            dataset=dataset,
+                            engine=engine,
+                            scenario=scenario,
+                            job_id=job_id,
+                            enable_profiling=options.get('enable_profiling', False),
+                            profiling_duration=options.get('profiling_duration', 60),
+                            enable_metrics=not options.get('no_metrics', False),
+                            workload_params=workload_params,
+                            cancel_event=cancel_event,
+                            log_level=options.get('log_level'),
+                        )
                         
                         # Only save result if the job wasn't cancelled while we were running
                         job_result = get_job(job_id)
@@ -839,34 +825,18 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             scenario_profiling = step_profile if step_profile is not None else job_profiling
             profiling_duration = options.get('profiling_duration', 60)
 
-            # --- bulk-ingest-data: doc-count verification + retry ---
-            if procedure_name == "bulk-ingest-data":
-                result = benchmark_runner.run_ingest(
-                    dataset=dataset,
-                    engine=engine,
-                    job_id=scenario_job_id,
-                    enable_profiling=scenario_profiling,
-                    profiling_duration=profiling_duration,
-                    enable_metrics=not options.get('no_metrics', False),
-                    workload_params=workload_params if workload_params else None,
-                    cancel_event=cancel_event,
-                    log_level=options.get('log_level'),
-                )
-
-            # --- all other steps ---
-            else:
-                result = benchmark_runner.run_benchmark(
-                    dataset=dataset,
-                    engine=engine,
-                    scenario=procedure_name,
-                    job_id=scenario_job_id,
-                    enable_profiling=scenario_profiling,
-                    profiling_duration=profiling_duration,
-                    enable_metrics=not options.get('no_metrics', False),
-                    workload_params=workload_params if workload_params else None,
-                    cancel_event=cancel_event,
-                    log_level=options.get('log_level'),
-                )
+            result = benchmark_runner.run_benchmark(
+                dataset=dataset,
+                engine=engine,
+                scenario=procedure_name,
+                job_id=scenario_job_id,
+                enable_profiling=scenario_profiling,
+                profiling_duration=profiling_duration,
+                enable_metrics=not options.get('no_metrics', False),
+                workload_params=workload_params if workload_params else None,
+                cancel_event=cancel_event,
+                log_level=options.get('log_level'),
+            )
 
             scenario_completed_at = datetime.utcnow().isoformat()
 
@@ -937,6 +907,16 @@ def process_batch_job(job_id: str, job: Dict[str, Any], options: Dict[str, Any],
             # Standard unexpected error execution path remains unchanged
             logger.error(f"Batch job {job_id}: Error running scenario {scenario_key}: {e}", exc_info=True)
             batch_results['scenarios_failed'] += 1
+            # Record a minimal scenario_results entry so the UI/API always has
+            # something to show for this scenario even when it errored out.
+            batch_results['scenario_results'][scenario_key] = {
+                'status':          'error',
+                'error':           str(e),
+                'dataset':         dataset,
+                'scenario_label':  label,
+                'results_subdir':  scenario_key,
+                'results_dir':     str(benchmark_runner.results_dir / f"{results_base}/{scenario_key}"),
+            }
             # Update scenario status and times
             job_data = get_job(job_id)
             if job_data and 'scenario_status' in job_data:
