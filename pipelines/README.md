@@ -33,6 +33,7 @@ Each file here defines a complete benchmark run — an ordered list of steps wit
 ### Available datasets
 - `cohere-wiki-en-768`
 - `cohere-msmarco-1024`
+- `quora-neural-search` — workload `neural_search` (ML Commons dense/sparse/hybrid search; scenarios `semantic-search`, `sparse-search`, `hybrid-search` and their `-create-resources-and-index-document` / `-query-only` variants; latency/throughput only, no recall)
 
 ### Available scenarios (procedures)
 | Name | What it does |

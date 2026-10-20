@@ -79,6 +79,8 @@ pipeline {
                 'dbpedia-parquet-50k',
                 'dbpedia-parquet-500k',
                 'dbpedia-parquet-1m',
+                'neural-search-quora',
+                'neural-search-quora-semantic',
                 'complete-5m-test',
                 'bulk-ingest-and-search',
                 'bulk-ingest-and-search-refresh-sweep-1m.json',

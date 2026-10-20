@@ -629,3 +629,79 @@ datasets:
           query_k: 10
           search_clients: 8
           detailed_results: true
+
+  quora-neural-search:
+    dimension: 768
+    format: json
+    space_type: "l2"
+    description: "Quora (522,931 questions) - OpenSearch neural search (dense semantic, sparse, hybrid) via ML Commons. Model, ingest pipeline and index are created by the workload; latency/throughput only (no recall)."
+    workload: "neural_search"
+
+    # Corpus is declared in neural_search/workload.json and downloaded by OSB itself,
+    # so no data_files / gcs_cache_files / supported_corpus_sizes are needed.
+    common_params:
+      index_body: "indices/quora.json"
+      corpora_name: "quora"
+      variable_queries: 10000
+      query_size: 100
+      ingest_percentage: 100
+      warmup_time_period: 5
+      warmup_iterations: 100
+      iterations: 100
+      search_clients: 1
+      number_of_shards: 3
+      number_of_replicas: 1
+      refresh_interval: "5s"
+
+    # Engine only affects the knn_vector mapping in indices/quora.json (dense procedures).
+    # Sparse procedures use a rank_features field and ignore these.
+    engine_params:
+      faiss:
+        engine: "faiss"
+        method: "hnsw"
+      lucene:
+        engine: "lucene"
+        method: "hnsw"
+      jvector:
+        engine: "jvector"
+        method: "disk_ann"
+
+    test_procedures:
+      # ── Dense semantic search ────────────────────────────────────────────
+      - name: "semantic-search"
+        params: &quora_dense
+          index_name: "quora-dense-embedding"
+          default_ingest_pipeline: "nlp-default-ingest-pipeline-dense-embedding"
+          index_knn: true
+          dimensions: 768
+          space_type: "l2"
+          k: 100
+      - name: "semantic-search-create-resources-and-index-document"
+        params: *quora_dense
+      - name: "semantic-search-query-only"
+        params: *quora_dense
+
+      # ── Sparse (neural_sparse) search ────────────────────────────────────
+      - name: "sparse-search"
+        params: &quora_sparse
+          index_name: "quora-sparse-embedding"
+          default_ingest_pipeline: "nlp-default-ingest-pipeline-sparse"
+          passage_embedding_type: "rank_features"
+      - name: "sparse-search-create-resources-and-index-document"
+        params: *quora_sparse
+      - name: "sparse-search-query-only"
+        params: *quora_sparse
+
+      # ── Hybrid (dense + BM25 with normalization search pipeline) ─────────
+      - name: "hybrid-search"
+        params: &quora_hybrid
+          index_name: "quora-hybrid-embedding"
+          default_ingest_pipeline: "nlp-default-ingest-pipeline-dense-embedding"
+          index_knn: true
+          dimensions: 768
+          space_type: "l2"
+          k: 100
+      - name: "hybrid-search-create-resources-and-index-document"
+        params: *quora_hybrid
+      - name: "hybrid-search-query-only"
+        params: *quora_hybrid
