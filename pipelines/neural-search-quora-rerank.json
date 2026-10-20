@@ -1,0 +1,7 @@
+{
+  "description": "Neural search on Quora with cross-encoder re-ranker: deploy embedding + reranker models, create ingest and rerank search pipelines, ingest, and search.",
+  "engine": "__ENGINE__",
+  "steps": [
+    { "dataset": "quora-neural-search", "scenario": "semantic-search-with-reranker" }
+  ]
+}
