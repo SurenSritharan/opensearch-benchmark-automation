@@ -6,7 +6,7 @@
     "seed_num_vectors": 500000
   },
   "parameter_sweeps": [
-    { "name": "run-1", "params": { "refresh_interval": "-1" } },
+    { "name": "run-1", "params": { "refresh_interval": "1" } },
     { "name": "run-2", "params": { "refresh_interval": "5s" } },
     { "name": "run-3", "params": { "refresh_interval": "10s" } },
     { "name": "run-4", "params": { "refresh_interval": "15s" } },
