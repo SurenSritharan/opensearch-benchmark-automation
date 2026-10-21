@@ -1,0 +1,24 @@
+{
+  "description": "min_batch_size_for_quantization at 10M with 3 shards (Cohere Wiki 768d, ~3.33M vectors/shard, 4 bulk clients, small cluster). Two thresholds in increasing order: 1024 (default), 50000 (candidate). Same shard count and clients as the 5M sweep, so the only change from 5M is corpus size, which makes each shard twice as large (~3.33M vs ~1.67M). Companion to min-batch-10m.json (6 shards, ~1.67M/shard). Risks: larger per-shard merges, so force-merge may run much longer and use more heap/memory than at 5M (heap peaked 79-81% at 5M); no earlier 10M run used 3 shards. Force-merge uses the datasets.yaml default (1 segment per shard) to match the 5M sweep. Labels carry '3s' so they do not collide with the 6-shard file. One run per threshold; resubmit for repeats.",
+  "engine": "__ENGINE__",
+  "node_sizes": ["small"],
+  "params": { "corpus_size": "10m" },
+  "steps": [
+    {"dataset": "cohere-wiki-en-768", "scenario": "delete-index", "label": "10m-3s-1024-4c-delete-index", "params": {"min_batch_size_for_quantization": 1024}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "create-index", "label": "10m-3s-1024-4c-create-index", "params": {"min_batch_size_for_quantization": 1024, "target_index_primary_shards": 3}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-data", "label": "10m-3s-1024-4c-bulk-ingest-data", "params": {"min_batch_size_for_quantization": 1024, "target_index_bulk_indexing_clients": 4}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "refresh-index", "label": "10m-3s-1024-4c-refresh-index", "params": {"min_batch_size_for_quantization": 1024}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "force-merge", "label": "10m-3s-1024-4c-force-merge", "params": {"min_batch_size_for_quantization": 1024, "client_timeout": 28800}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "refresh-index", "label": "10m-3s-1024-4c-refresh-index-2", "params": {"min_batch_size_for_quantization": 1024, "client_timeout": 3600}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "10m-3s-1024-4c-vector-search-k10", "params": {"min_batch_size_for_quantization": 1024, "query_k": 10}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "10m-3s-1024-4c-vector-search-k100", "params": {"min_batch_size_for_quantization": 1024, "query_k": 100}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "delete-index", "label": "10m-3s-50000-4c-delete-index", "params": {"min_batch_size_for_quantization": 50000}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "create-index", "label": "10m-3s-50000-4c-create-index", "params": {"min_batch_size_for_quantization": 50000, "target_index_primary_shards": 3}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "bulk-ingest-data", "label": "10m-3s-50000-4c-bulk-ingest-data", "params": {"min_batch_size_for_quantization": 50000, "target_index_bulk_indexing_clients": 4}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "refresh-index", "label": "10m-3s-50000-4c-refresh-index", "params": {"min_batch_size_for_quantization": 50000}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "force-merge", "label": "10m-3s-50000-4c-force-merge", "params": {"min_batch_size_for_quantization": 50000, "client_timeout": 28800}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "refresh-index", "label": "10m-3s-50000-4c-refresh-index-2", "params": {"min_batch_size_for_quantization": 50000, "client_timeout": 3600}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "10m-3s-50000-4c-vector-search-k10", "params": {"min_batch_size_for_quantization": 50000, "query_k": 10}},
+    {"dataset": "cohere-wiki-en-768", "scenario": "vector-search", "label": "10m-3s-50000-4c-vector-search-k100", "params": {"min_batch_size_for_quantization": 50000, "query_k": 100}}
+  ]
+}
