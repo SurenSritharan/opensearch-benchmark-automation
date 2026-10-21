@@ -832,7 +832,7 @@ datasets:
       derived_fields:
         domain: "url"
       include_pid: true
-      real_queries_file: "../cohere-msmarco-v2.1/queries.parquet"
+      real_queries_file: "cohere-msmarco-v2.1/queries.parquet"
       qrel_id_separator: "#"
 
     engine_params:
