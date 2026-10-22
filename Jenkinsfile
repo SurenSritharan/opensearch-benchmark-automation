@@ -35,6 +35,11 @@ pipeline {
             defaultValue: '',
             description: 'Newline-separated list of Jenkins job names to wait for before starting. The pipeline will block until all listed jobs finish. Leave blank to skip.'
         )
+        string(
+            name: 'DESCRIPTION',
+            defaultValue: '',
+            description: 'Optional: free-text note describing this run (e.g. what you are testing). Shown as the build description in Jenkins.'
+        )
         choice(
             name: 'PIPELINE',
             choices: [
@@ -253,6 +258,9 @@ pipeline {
                 }
                 sh 'chmod +x gke-manifest/*.sh cloud-service/scripts/*.sh'
                 script {
+                    if (params.DESCRIPTION?.trim()) {
+                        currentBuild.description = params.DESCRIPTION.trim()
+                    }
                     // Resolve and display environment context for this build.
                     def apiNs       = getApiNamespace()
                     def resolvedUrl = getApiUrl()
