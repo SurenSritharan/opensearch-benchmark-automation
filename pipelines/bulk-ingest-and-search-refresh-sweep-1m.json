@@ -9,9 +9,8 @@
   "parameter_sweeps": [
     { "name": "replicas-0", "params": { "target_index_replica_shards": 0 } },
     { "name": "replicas-1", "params": { "target_index_replica_shards": 1 } },
-    { "name": "replicas-2", "params": { "target_index_replica_shards": 2 } },
-    { "name": "replicas-3", "params": { "target_index_replica_shards": 3 } },
-    { "name": "replicas-4", "params": { "target_index_replica_shards": 4 } }
+    { "name": "replicas-2", "params": { "target_index_replica_shards": 2 } }
+
   ],
 
   "steps": [
