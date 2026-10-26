@@ -786,6 +786,8 @@ print(json.dumps(s))
                                             OS_NAMESPACE="${ns}" \
                                             API_NAMESPACE="${apiNs}" \
                                             WORKER_POD="opensearch-benchmark-worker-${engine}-0" \
+                                            ${params.EMBEDDING_MODEL_ID?.trim() ? "EMBEDDING_MODEL_ID='${params.EMBEDDING_MODEL_ID.trim()}'" : "EMBEDDING_MODEL_ID="} \
+                                            ${params.RERANKER_MODEL_ID?.trim() ? "RERANKER_MODEL_ID='${params.RERANKER_MODEL_ID.trim()}'" : "RERANKER_MODEL_ID="} \
                                             cloud-service/scripts/run-pipeline.sh \
                                                 --pipeline ${pipeline} \
                                                 ${buildFlag} \
@@ -898,6 +900,8 @@ print(json.dumps(s))
                                                 OS_NAMESPACE="${ns}" \
                                                 API_NAMESPACE="${apiNs}" \
                                                 WORKER_POD="opensearch-benchmark-worker-${engine}-0" \
+                                                ${params.EMBEDDING_MODEL_ID?.trim() ? "EMBEDDING_MODEL_ID='${params.EMBEDDING_MODEL_ID.trim()}'" : "EMBEDDING_MODEL_ID="} \
+                                                ${params.RERANKER_MODEL_ID?.trim() ? "RERANKER_MODEL_ID='${params.RERANKER_MODEL_ID.trim()}'" : "RERANKER_MODEL_ID="} \
                                                 cloud-service/scripts/run-pipeline.sh \
                                                     --pipeline ${pipeline} \
                                                     ${params.LOG_LEVEL ? "--log-level ${params.LOG_LEVEL}" : ""} \
