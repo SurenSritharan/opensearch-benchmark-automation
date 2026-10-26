@@ -1,0 +1,11 @@
+{
+  "description": "Neural search on BEIR MSMARCO (full 8.8M passages) with a 1024-dim embedding model — dense semantic search baseline followed by semantic search with cross-encoder re-ranking. Set the EMBEDDING_MODEL_ID Jenkins build parameter (optional RERANKER_MODEL_ID) to a model already deployed on the target cluster; run one engine at a time since model IDs are per cluster.",
+  "engine": "__ENGINE__",
+  "params": {
+    "ingest_percentage": 100
+  },
+  "steps": [
+    { "dataset": "msmarco-neural-search-1024", "scenario": "semantic-search" },
+    { "dataset": "msmarco-neural-search-1024", "scenario": "semantic-search-with-reranker" }
+  ]
+}

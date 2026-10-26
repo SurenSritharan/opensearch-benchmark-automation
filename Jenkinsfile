@@ -81,6 +81,7 @@ pipeline {
                 'dbpedia-parquet-1m',
                 'neural-search-quora',
                 'neural-search-quora-semantic',
+                'neural-search-msmarco-1024',
                 'complete-5m-test',
                 'bulk-ingest-and-search',
                 'bulk-ingest-and-search-refresh-sweep-1m.json',
@@ -134,6 +135,16 @@ pipeline {
             name: 'OSB_WORKLOADS_BRANCH',
             defaultValue: 'main',
             description: 'Branch of opensearch-benchmark-workloads to clone on the worker pod. Use a feature branch to test workload changes.'
+        )
+        string(
+            name: 'EMBEDDING_MODEL_ID',
+            defaultValue: '',
+            description: 'ML Commons model ID of a pre-deployed embedding model, passed to neural_search pipelines as the embedding_model_id workload param (skips register/deploy). Optional: leave blank to let the workload register and deploy its own model. Model IDs are per cluster — use with a single ENGINE_TARGET. Ignored by workloads that do not use it.'
+        )
+        string(
+            name: 'RERANKER_MODEL_ID',
+            defaultValue: '',
+            description: 'Optional ML Commons model ID of a pre-deployed re-ranker model, passed as the reranker_model_id workload param. Leave blank to register the default cross-encoder.'
         )
         string(
             name: 'NUM_DATA_REPLICAS',

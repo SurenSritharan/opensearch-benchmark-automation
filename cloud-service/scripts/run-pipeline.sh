@@ -121,6 +121,18 @@ LOG_LEVEL="${CLI_LOG_LEVEL:-$(echo "$PIPELINE_JSON" | jq -r '.log_level // ""')}
 # Top-level pipeline params merged into every step (later keys win)
 PIPELINE_PARAMS=$(echo "$PIPELINE_JSON" | jq '.params // {}')
 
+# Pre-deployed ML model IDs from the environment (Jenkins exposes the EMBEDDING_MODEL_ID /
+# RERANKER_MODEL_ID build parameters as env vars). When non-empty they override any value
+# in the pipeline JSON and are passed to the workload as embedding_model_id / reranker_model_id.
+# When empty/unset nothing is injected, so the workload registers and deploys its own model.
+# Workloads that don't reference these params have them stripped server-side.
+if [ -n "${EMBEDDING_MODEL_ID:-}" ]; then
+  PIPELINE_PARAMS=$(echo "$PIPELINE_PARAMS" | jq --arg v "$EMBEDDING_MODEL_ID" '.embedding_model_id = $v')
+fi
+if [ -n "${RERANKER_MODEL_ID:-}" ]; then
+  PIPELINE_PARAMS=$(echo "$PIPELINE_PARAMS" | jq --arg v "$RERANKER_MODEL_ID" '.reranker_model_id = $v')
+fi
+
 # Pipeline-level parameter_sweeps: each entry runs ALL steps once with its params
 # merged on top of PIPELINE_PARAMS. Falls back to a single pass when absent.
 PIPELINE_SWEEPS=$(echo "$PIPELINE_JSON" | jq '.parameter_sweeps // [{}]')

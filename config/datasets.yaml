@@ -787,3 +787,64 @@ datasets:
         params: *msmarco_dense_rerank
       - name: "semantic-search-with-reranker-query-only"
         params: *msmarco_dense_rerank
+
+  # Same corpus/workload as msmarco-neural-search, but for a pre-deployed 1024-dim embedding model.
+  # The model is supplied via the pipeline param `embedding_model_id` (must exist on the target cluster),
+  # so no embedding model_name/model_version is declared here.
+  msmarco-neural-search-1024:
+    dimension: 1024
+    format: json
+    space_type: "l2"
+    description: "BEIR MSMARCO (8.8M passages) - Neural search with a pre-deployed 1024-dim embedding model (embedding_model_id) and re-ranking via ML Commons."
+    workload: "neural_search"
+
+    common_params:
+      index_body: "indices/msmarco.json"
+      corpora_name: "msmarco"
+      variable_queries: 10000
+      query_size: 100
+      ingest_percentage: 100
+      search_clients: 1
+      number_of_shards: 3
+      number_of_replicas: 1
+      refresh_interval: "5s"
+
+    engine_params:
+      faiss:
+        engine: "faiss"
+        method: "hnsw"
+      lucene:
+        engine: "lucene"
+        method: "hnsw"
+      jvector:
+        engine: "jvector"
+        method: "disk_ann"
+
+    test_procedures:
+      - name: "semantic-search"
+        params: &msmarco_1024_dense
+          index_name: "msmarco-dense-embedding"
+          default_ingest_pipeline: "nlp-default-ingest-pipeline-dense-embedding"
+          index_knn: true
+          dimensions: 1024
+          space_type: "l2"
+          k: 100
+      - name: "semantic-search-create-resources-and-index-document"
+        params: *msmarco_1024_dense
+      - name: "semantic-search-query-only"
+        params: *msmarco_1024_dense
+
+      - name: "semantic-search-with-reranker"
+        params: &msmarco_1024_dense_rerank
+          index_name: "msmarco-dense-embedding"
+          default_ingest_pipeline: "nlp-default-ingest-pipeline-dense-embedding"
+          index_knn: true
+          dimensions: 1024
+          space_type: "l2"
+          k: 100
+          reranker_model_name: "huggingface/cross-encoder/ms-marco-MiniLM-L-6-v2"
+          reranker_model_version: "1.0.1"
+      - name: "semantic-search-with-reranker-create-resources-and-index-document"
+        params: *msmarco_1024_dense_rerank
+      - name: "semantic-search-with-reranker-query-only"
+        params: *msmarco_1024_dense_rerank
