@@ -1,16 +1,19 @@
 {
-  "description": "Concurrent bulk-ingest + search with refresh ACTIVE at a fixed refresh_interval of 3s — 5 runs sweeping replicas 0-4 at 1M, seed 500k. A/B against bulk-ingest-and-search (refresh off).",
+  "description": "Concurrent bulk-ingest + search at 1M, seed 500k, refresh 3s, 1 replica. Writes fixed at 8 bulk clients; sweeps search_clients 2/5/8/11/13 to see how CPU, memory and disk respond to read load.",
   "engine": "__ENGINE__",
   "params": {
     "corpus_size": "1m",
     "seed_num_vectors": 500000,
-    "refresh_interval": "3s"
+    "refresh_interval": "3s",
+    "target_index_replica_shards": 1,
+    "target_index_bulk_indexing_clients": 8
   },
   "parameter_sweeps": [
-    { "name": "replicas-0", "params": { "target_index_replica_shards": 0 } },
-    { "name": "replicas-1", "params": { "target_index_replica_shards": 1 } },
-    { "name": "replicas-2", "params": { "target_index_replica_shards": 2 } }
-
+    { "name": "reads-2",  "params": { "search_clients": 2 } },
+    { "name": "reads-5",  "params": { "search_clients": 5 } },
+    { "name": "reads-8",  "params": { "search_clients": 8 } },
+    { "name": "reads-11", "params": { "search_clients": 11 } },
+    { "name": "reads-13", "params": { "search_clients": 13 } }
   ],
 
   "steps": [
