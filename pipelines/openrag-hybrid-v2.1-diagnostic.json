@@ -1,0 +1,10 @@
+{
+  "description": "Short hybrid-only diagnostic on the existing 50k MS MARCO v2.1 index. Requires the prior index and ground-truth file to remain on the cluster and worker PVC.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "50k" },
+  "steps": [
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "create-search-pipeline" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "hybrid-search",
+      "params": { "query_k": 10, "warmup_time_period": 10, "time_period": 60 } }
+  ]
+}
