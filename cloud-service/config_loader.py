@@ -366,7 +366,14 @@ class ConfigLoader:
         scan_file(workload_dir / "workload.json")
 
         if scenario:
-            scan_file(workload_dir / "test_procedures" / f"{scenario}.json")
+            # The workload scenario name uses hyphens (e.g. "semantic-search") but the
+            # test_procedures files on disk use underscores (e.g. "semantic_search.json").
+            # Fall back to the underscore form so params like embedding_model_id that only
+            # appear in the test_procedures file are not silently filtered out.
+            scenario_file = workload_dir / "test_procedures" / f"{scenario}.json"
+            if not scenario_file.exists():
+                scenario_file = workload_dir / "test_procedures" / f"{scenario.replace('-', '_')}.json"
+            scan_file(scenario_file)
 
         if runtime_params:
             for val in runtime_params.values():

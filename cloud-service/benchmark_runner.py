@@ -505,6 +505,22 @@ class BenchmarkRunner:
             json.dump(ctx.params, f, indent=2)
         logger.info(f"Workload params written to: {params_file}")
         logger.info(f"Workload params content:\n{json.dumps(ctx.params, indent=2)}")
+
+        # Write a human-readable run-info.log alongside benchmark.log so it is
+        # always easy to see which model IDs (and key params) this run used.
+        embedding_model_id = ctx.params.get('embedding_model_id')
+        reranker_model_id  = ctx.params.get('reranker_model_id')
+        model_source = 'pre-deployed (from Jenkins param)' if embedding_model_id else 'self-registered by workload'
+        run_info_lines = [
+            f"scenario:           {scenario}",
+            f"dataset:            {ctx.dataset_config.get('workload', '')}",
+            f"model source:       {model_source}",
+            f"embedding_model_id: {embedding_model_id or '(none — workload will register)'}",
+            f"reranker_model_id:  {reranker_model_id  or '(none — workload will register)'}",
+        ]
+        run_info_file = ctx.results_dir / 'run-info.log'
+        run_info_file.write_text('\n'.join(run_info_lines) + '\n')
+        logger.info(f"[ML model] {run_info_lines[2]} | {run_info_lines[3]} | {run_info_lines[4]}")
         logger.info(f"User tags: {user_tags_str}")
         # ACL tracking — log the username that will appear in --client-options.
         # This is the ground truth of who OSB actually authenticates as.
