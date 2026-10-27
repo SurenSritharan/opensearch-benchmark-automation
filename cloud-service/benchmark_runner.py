@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import requests
+import psutil
 from async_profiler import AsyncProfiler
 from config_loader import ConfigLoader, get_os_namespace, sweep_directory_name
 from event_tracer import RunTrace, trace_event
@@ -23,6 +24,21 @@ from metrics_collector import MetricsCollector
 from node_stats_poller import diff_node_stats
 
 _CORE_ENGINES = {'jvector', 'faiss', 'lucene'}
+_TIMED_SEARCH_SCENARIOS = {'vector-search', 'bm25-search', 'hybrid-search', 'openrag-hybrid-search'}
+
+
+def _scenario_timeout_seconds(scenario: str, params: Dict[str, Any]) -> int:
+    """Bound pure search runs; combined ingest/search can take much longer."""
+    if scenario in _TIMED_SEARCH_SCENARIOS and params.get('time_period') is not None:
+        return max(900, int(params.get('warmup_time_period') or 0) + int(params['time_period']) + 600)
+    return 86400
+
+
+def _sweep_status(returncode: int, cancel_event: Optional[threading.Event]) -> str:
+    """A SIGKILL is a cancellation only when this job requested one."""
+    if cancel_event is not None and cancel_event.is_set():
+        return 'cancelled'
+    return 'completed' if returncode == 0 else 'failed'
 
 def _base_engine(engine: str) -> str:
     """Return the base engine name for dataset config / workload param lookups.
@@ -51,7 +67,26 @@ class RunContext:
 
 
 def _kill_proc_group(proc: subprocess.Popen) -> None:
-    """Stop this benchmark's process group without affecting another job."""
+    """Stop the launcher group and descendants that created their own sessions.
+
+    Snapshot descendants before killing the launcher, while their parent links
+    still exist. Thespian's admin uses setsid(), so group membership alone is
+    insufficient to identify its actor tree.
+    """
+    try:
+        descendants = [child.pid for child in psutil.Process(proc.pid).children(recursive=True)]
+    except psutil.NoSuchProcess:
+        descendants = []
+    except (psutil.AccessDenied, OSError) as exc:
+        logger.warning("Could not enumerate descendants of benchmark %s: %s", proc.pid, exc)
+        descendants = []
+    for pid in reversed(descendants):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            logger.warning("Could not kill benchmark descendant %s: %s", pid, exc)
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -1195,17 +1230,10 @@ class BenchmarkRunner:
                                       engine=engine, scenario=scenario, sweep=idx) as trace:
                             with trace.span("benchmark_process", procedure=scenario):
                                 proc = self._launch_process(cmd, env, active_key, cancel_event, ctx.results_dir)
-                                search_timeout = None
-                                if scenario.endswith('search') and ctx.params.get('time_period') is not None:
-                                    search_timeout = max(
-                                        900,
-                                        int(ctx.params.get('warmup_time_period') or 0)
-                                        + int(ctx.params['time_period']) + 600,
-                                    )
                                 result = self._poll_until_done(
                                     proc, cmd, job_id, active_key, ctx.target_host, cancel_event,
                                     engine=engine, results_dir=ctx.results_dir,
-                                    timeout_seconds=search_timeout or 86400,
+                                    timeout_seconds=_scenario_timeout_seconds(scenario, ctx.params),
                                 )
                             trace.event("benchmark_process_finished",
                                         exit_code=result.returncode if result else None)
@@ -1233,7 +1261,8 @@ class BenchmarkRunner:
                              benchmark_log=(ctx.results_dir / "benchmark.log").exists(),
                              metrics_file=(ctx.results_dir / "k8s_metrics.json").exists())
 
-                is_cancelled = bool(cancel_event and cancel_event.is_set())
+                sweep_status = _sweep_status(result.returncode, cancel_event)
+                is_cancelled = sweep_status == 'cancelled'
                 # Snapshot from this sweep's resolved RunContext, so telemetry
                 # uses the same index name and output directory as the OSB run.
                 if result.returncode == 0 and not is_cancelled:
@@ -1242,7 +1271,7 @@ class BenchmarkRunner:
                         _save_index_snapshot(engine, ctx.target_host, index_name, ctx.results_dir)
 
                 all_results.append({
-                    'status':           'cancelled' if is_cancelled else ('completed' if result.returncode == 0 else 'failed'),
+                    'status':           sweep_status,
                     'exit_code':        result.returncode,
                     'duration_seconds': duration,
                     'started_at':       start_time.isoformat(),
@@ -1255,7 +1284,7 @@ class BenchmarkRunner:
                     'stderr_tail':      result.stderr[-5000:] if result.stderr else '',
                 })
                 trace_event(ctx.results_dir, "sweep_finished",
-                             status="cancelled" if is_cancelled else ("completed" if result.returncode == 0 else "failed"),
+                             status=sweep_status,
                              exit_code=result.returncode, duration_seconds=duration)
 
                 if is_cancelled:

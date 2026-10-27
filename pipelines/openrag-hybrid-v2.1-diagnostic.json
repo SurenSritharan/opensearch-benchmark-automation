@@ -1,10 +1,17 @@
 {
-  "description": "Short hybrid-only diagnostic on the existing 50k MS MARCO v2.1 index. Requires the prior index and ground-truth file to remain on the cluster and worker PVC.",
+  "description": "Self-contained 50k MS MARCO v2.1 hybrid diagnostic: creates and ingests a fresh index, computes ground truth during ingest, then runs a short hybrid search. Requires the configured dataset sources to be reachable.",
   "engine": "__ENGINE__",
   "params": { "corpus_size": "50k" },
   "steps": [
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "delete-index" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "create-index" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "refresh-index" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "force-merge" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "refresh-index" },
     { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "create-search-pipeline" },
     { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "hybrid-search",
-      "params": { "query_k": 10, "warmup_time_period": 10, "time_period": 60 } }
+      "params": { "query_k": 10, "warmup_time_period": 10, "time_period": 60 } },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "delete-search-pipeline" }
   ]
 }
