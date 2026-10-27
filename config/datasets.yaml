@@ -829,9 +829,6 @@ datasets:
           dimensions: 1024
           space_type: "l2"
           k: 100
-          # Supplied at runtime via EMBEDDING_MODEL_ID Jenkins param; placeholder
-          # keeps resolve_workload_params from stripping it before it reaches OSB.
-          embedding_model_id: null
       - name: "semantic-search-create-resources-and-index-document"
         params: *msmarco_1024_dense
       - name: "semantic-search-query-only"
@@ -845,9 +842,6 @@ datasets:
           dimensions: 1024
           space_type: "l2"
           k: 100
-          # Supplied at runtime via EMBEDDING_MODEL_ID / RERANKER_MODEL_ID Jenkins params.
-          embedding_model_id: null
-          reranker_model_id: null
           reranker_model_name: "huggingface/cross-encoder/ms-marco-MiniLM-L-6-v2"
           reranker_model_version: "1.0.1"
       - name: "semantic-search-with-reranker-create-resources-and-index-document"

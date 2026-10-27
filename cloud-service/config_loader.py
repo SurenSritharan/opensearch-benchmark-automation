@@ -392,6 +392,18 @@ class ConfigLoader:
 
         resolved_params = self._resolve_template_vars(merged_params, dataset_config)
 
+        # Strip ML model ID params whose value is None/null so OSB never receives
+        # a literal null as a model ID (workloads use these values directly in API
+        # calls and a null causes a 404 "model id: None" error).
+        # These params are only meaningful when a real ID string is supplied at
+        # runtime via EMBEDDING_MODEL_ID / RERANKER_MODEL_ID Jenkins params.
+        _MODEL_ID_KEYS = {'embedding_model_id', 'reranker_model_id'}
+        null_model_keys = {k for k in _MODEL_ID_KEYS if k in resolved_params and resolved_params[k] is None}
+        if null_model_keys:
+            for k in null_model_keys:
+                del resolved_params[k]
+            logger.info(f"Stripped null model ID params (no runtime value provided): {sorted(null_model_keys)}")
+
         valid_params = self.get_valid_workload_params(dataset_name, scenario, resolved_params)
         if valid_params is not None:
             filtered = {k: v for k, v in resolved_params.items() if k in valid_params}
