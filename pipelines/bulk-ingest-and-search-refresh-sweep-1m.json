@@ -1,19 +1,19 @@
 {
-  "description": "Concurrent bulk-ingest + search at 1M, seed 500k, refresh 3s, 1 replica. Writes fixed at 8 bulk clients; sweeps search_clients 2/5/8/11/13 to see how CPU, memory and disk respond to read load.",
+  "description": "Concurrent bulk-ingest + search at 1M, seed 500k, refresh 3s, 1 replica. Reads fixed at 8 search clients; sweeps bulk ingest clients 2/5/8/11/13 to see how CPU, memory and disk respond to write load.",
   "engine": "__ENGINE__",
   "params": {
     "corpus_size": "1m",
     "seed_num_vectors": 500000,
     "refresh_interval": "3s",
     "target_index_replica_shards": 1,
-    "target_index_bulk_indexing_clients": 8
+    "search_clients": 8
   },
   "parameter_sweeps": [
-    { "name": "reads-2",  "params": { "search_clients": 2 } },
-    { "name": "reads-5",  "params": { "search_clients": 5 } },
-    { "name": "reads-8",  "params": { "search_clients": 8 } },
-    { "name": "reads-11", "params": { "search_clients": 11 } },
-    { "name": "reads-13", "params": { "search_clients": 13 } }
+    { "name": "writes-2",  "params": { "target_index_bulk_indexing_clients": 2 } },
+    { "name": "writes-5",  "params": { "target_index_bulk_indexing_clients": 5 } },
+    { "name": "writes-8",  "params": { "target_index_bulk_indexing_clients": 8 } },
+    { "name": "writes-11", "params": { "target_index_bulk_indexing_clients": 11 } },
+    { "name": "writes-13", "params": { "target_index_bulk_indexing_clients": 13 } }
   ],
 
   "steps": [
