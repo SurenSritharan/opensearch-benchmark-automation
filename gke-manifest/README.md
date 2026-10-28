@@ -27,6 +27,8 @@ Prod engines run **in parallel** — all clusters are up simultaneously.
 
 **Recommended `server-pool` size: 18 nodes.**
 
+Jenkins scales benchmark and OpenSearch pods to zero after runs, but it does not resize the node pool. VM savings depend on the live node pool autoscaling minimum; a fixed-size pool or a high minimum keeps nodes allocated. Verify that setting separately. PVC storage remains allocated so indexes can be reused.
+
 This covers all 4 prod namespaces running in parallel plus one develop namespace scaled up at the same time (e.g. a developer testing while a prod run is in progress). With 16 nodes, a develop scale-up while prod is fully loaded would stall on the autoscaler (2–5 min delay).
 
 ### Develop (`os-develop-*`)

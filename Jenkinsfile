@@ -143,7 +143,7 @@ pipeline {
         string(
             name: 'NUM_DATA_REPLICAS',
             defaultValue: '',
-            description: 'Number of OpenSearch data node replicas. Leave blank to use the namespace default (develop=1, prod=3). Set to 3 on a develop namespace for a full-scale test.'
+            description: 'Number of OpenSearch data node replicas. Leave blank for the deployment default of 3 in all namespaces. Use a smaller value only when a different cluster topology is acceptable for the benchmark.'
         )
         booleanParam(
             name: 'DELETE_PVCS',
@@ -985,20 +985,33 @@ print(json.dumps(s))
                         parallel engineBranches
                     } else {
                         // DEVELOP: run engines sequentially — shared dev node, avoid contention.
-                        // Scale down each engine's worker after it finishes before the next one
-                        // starts, regardless of SKIP_SCALE_DOWN (which only controls what stays
-                        // up after the final engine completes).
+                        // Release the completed engine's worker and OpenSearch cluster
+                        // before starting the next engine. SKIP_SCALE_DOWN keeps them
+                        // available when a run is being investigated.
                         engines.eachWithIndex { engine, idx ->
-                            engineBranches[engine].call()
+                            if (currentBuild.currentResult != 'SUCCESS') {
+                                echo "Skipping ${engine} because an earlier engine failed; post-build cancellation will run before scale-down."
+                            } else {
+                                engineBranches[engine].call()
+                            }
                             def isLast = (idx == engines.size() - 1)
-                            if (params.SCALE_CLUSTERS && !isLast) {
+                            if (currentBuild.currentResult == 'SUCCESS' && params.SCALE_CLUSTERS && !params.SKIP_SCALE_DOWN && !isLast) {
                                 sh """
-                                    kubectl scale statefulset opensearch-benchmark-worker-${engine} \
-                                        --replicas=0 -n ${apiNs} || true
-                                    kubectl wait --for=delete pod \
-                                        -l app=opensearch-benchmark,component=worker,engine=${engine} \
-                                        -n ${apiNs} --timeout=120s || true
+                                    STS=\$(kubectl get statefulset opensearch-benchmark-worker-${engine} \
+                                        -n ${apiNs} -o name --ignore-not-found)
+                                    if [ -n "\$STS" ]; then
+                                        kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                            --replicas=0 -n ${apiNs}
+                                        if ! kubectl wait --for=delete pod \
+                                            -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                            -n ${apiNs} --timeout=120s; then
+                                            REMAINING=\$(kubectl get pods -n ${apiNs} \
+                                                -l app=opensearch-benchmark,component=worker,engine=${engine} -o name)
+                                            [ -z "\$REMAINING" ] || exit 1
+                                        fi
+                                    fi
                                 """
+                                sh "gke-manifest/scale-down-clusters.sh ${getNamespace(engine)}"
                             }
                         }
                     }
@@ -1118,46 +1131,70 @@ EOF
                 }
 
                 if (params.SCALE_CLUSTERS && !params.SKIP_SCALE_DOWN) {
+                    def cleanupFailures = []
                     echo "Scaling down benchmark worker(s)..."
                     engines.each { engine ->
-                        sh """
-                            kubectl scale statefulset opensearch-benchmark-worker-${engine} \
-                                --replicas=0 -n ${apiNs} || true
-                        """
+                        def rc = sh(script: """
+                            STS=\$(kubectl get statefulset opensearch-benchmark-worker-${engine} \
+                                -n ${apiNs} -o name --ignore-not-found)
+                            if [ -n "\$STS" ]; then
+                                kubectl scale statefulset opensearch-benchmark-worker-${engine} \
+                                    --replicas=0 -n ${apiNs}
+                                if ! kubectl wait --for=delete pod \
+                                    -l app=opensearch-benchmark,component=worker,engine=${engine} \
+                                    -n ${apiNs} --timeout=120s; then
+                                    REMAINING=\$(kubectl get pods -n ${apiNs} \
+                                        -l app=opensearch-benchmark,component=worker,engine=${engine} -o name)
+                                    [ -z "\$REMAINING" ] || exit 1
+                                fi
+                            fi
+                        """, returnStatus: true)
+                        if (rc != 0) { cleanupFailures << "worker-${engine} scale-down (exit ${rc})" }
                     }
 
                     // Only scale down the API server if no other worker pods are still
-                    // running in the same namespace. This allows two jobs (e.g. the main
+                    // present in the same namespace, including Pending pods. This allows two jobs (e.g. the main
                     // pipeline and an ACL pipeline both using FORCE_PROD / benchmark-api)
                     // to run concurrently — the first to finish won't kill the API server
                     // while the second job's worker is still active.
-                    def otherWorkersRunning = sh(
-                        script: """
-                            OTHER=\$(kubectl get pods -n ${apiNs} \
-                                -l app=opensearch-benchmark,component=worker \
-                                --field-selector=status.phase=Running \
-                                --no-headers 2>/dev/null \
-                                | grep -v -E '${engines.collect { "worker-${it}-" }.join('|')}' \
-                                | wc -l)
-                            echo \$OTHER
-                        """,
-                        returnStdout: true
-                    ).trim().toInteger()
-
-                    if (otherWorkersRunning > 0) {
-                        echo "Skipping API server scale-down — ${otherWorkersRunning} other worker pod(s) still active in ${apiNs}."
-                    } else {
-                        echo "Scaling down API server..."
-                        sh """
-                            kubectl scale deployment opensearch-benchmark-api-server \
-                                --replicas=0 -n ${apiNs} || true
-                        """
+                    try {
+                        def workerPods = sh(
+                            script: "kubectl get pods -n ${apiNs} -l app=opensearch-benchmark,component=worker -o jsonpath='{.items[*].metadata.name}'",
+                            returnStdout: true
+                        ).trim().tokenize()
+                        def otherWorkers = workerPods.findAll { pod ->
+                            !engines.any { engine -> pod.startsWith("opensearch-benchmark-worker-${engine}-") }
+                        }
+                        if (otherWorkers) {
+                            echo "Skipping API server scale-down — ${otherWorkers.size()} other worker pod(s) still present in ${apiNs}."
+                        } else {
+                            echo "Scaling down API server..."
+                            def rc = sh(script: """
+                                kubectl scale deployment opensearch-benchmark-api-server --replicas=0 -n ${apiNs}
+                                if ! kubectl wait --for=delete pod \
+                                    -l app=opensearch-benchmark,component=api-server \
+                                    -n ${apiNs} --timeout=120s; then
+                                    REMAINING=\$(kubectl get pods -n ${apiNs} \
+                                        -l app=opensearch-benchmark,component=api-server -o name)
+                                    [ -z "\$REMAINING" ] || exit 1
+                                fi
+                            """, returnStatus: true)
+                            if (rc != 0) { cleanupFailures << "API server scale-down (exit ${rc})" }
+                        }
+                    } catch (err) {
+                        cleanupFailures << "worker pod check: ${err}"
+                        echo "Could not verify other workers; keeping the shared API server up."
                     }
 
                     echo "Scaling down OpenSearch cluster(s)..."
                     engines.each { engine ->
                         def ns = getNamespace(engine)
-                        sh "gke-manifest/scale-down-clusters.sh ${ns} || true"
+                        def rc = sh(script: "gke-manifest/scale-down-clusters.sh ${ns}", returnStatus: true)
+                        if (rc != 0) { cleanupFailures << "${ns} scale-down (exit ${rc})" }
+                    }
+                    if (cleanupFailures) {
+                        echo "ERROR: GKE cleanup incomplete: ${cleanupFailures.join('; ')}"
+                        if (currentBuild.currentResult != 'ABORTED') { currentBuild.result = 'FAILURE' }
                     }
                 }
 

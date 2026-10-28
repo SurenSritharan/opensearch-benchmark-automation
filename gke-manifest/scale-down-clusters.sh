@@ -12,9 +12,9 @@
 #          ./scale-down-clusters.sh os-acl-jvector
 #          ./scale-down-clusters.sh all   ← scales down every os-* namespace found in GKE
 
-set -e
+set -euo pipefail
 
-NAMESPACE=$1
+NAMESPACE=${1:-}
 
 # Color codes for output
 RED='\033[0;31m'
@@ -36,56 +36,60 @@ scale_down_namespace() {
     echo "----------------------------------------"
     
     # Check if namespace exists
-    if ! kubectl get namespace $ns &> /dev/null; then
+    local namespace
+    namespace=$(kubectl get namespace "$ns" -o name --ignore-not-found)
+    if [ -z "$namespace" ]; then
         echo -e "${YELLOW}⚠️  Namespace $ns does not exist, skipping...${NC}"
-        return
+        return 0
     fi
     
     # Check if there are any StatefulSets
-    local statefulsets=$(kubectl get statefulset -n $ns -o name 2>/dev/null | wc -l)
-    if [ "$statefulsets" -eq 0 ]; then
+    local statefulsets
+    statefulsets=$(kubectl get statefulset -n "$ns" -o name)
+    if [ -z "$statefulsets" ]; then
         echo -e "${YELLOW}⚠️  No StatefulSets found in $ns, skipping...${NC}"
         return
     fi
     
     # Get current replica counts before scaling down
     echo "Current StatefulSet status:"
-    kubectl get statefulset -n $ns -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas,READY:.status.readyReplicas 2>/dev/null || echo "  No StatefulSets found"
+    kubectl get statefulset -n "$ns" -o custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas,READY:.status.readyReplicas
     
     echo ""
     echo "Scaling down StatefulSets to 0 replicas..."
     
     # Scale down data nodes first (graceful shutdown)
-    if kubectl get statefulset opensearch-data -n $ns &> /dev/null; then
+    if kubectl get statefulset opensearch-data -n "$ns" &> /dev/null; then
         echo "  📉 Scaling down opensearch-data..."
-        kubectl scale statefulset opensearch-data --replicas=0 -n $ns
+        kubectl scale statefulset opensearch-data --replicas=0 -n "$ns"
     fi
     
     # Scale down cluster manager
-    if kubectl get statefulset opensearch-cluster-manager -n $ns &> /dev/null; then
+    if kubectl get statefulset opensearch-cluster-manager -n "$ns" &> /dev/null; then
         echo "  📉 Scaling down opensearch-cluster-manager..."
-        kubectl scale statefulset opensearch-cluster-manager --replicas=0 -n $ns
+        kubectl scale statefulset opensearch-cluster-manager --replicas=0 -n "$ns"
     fi
     
     # Wait for pods to terminate
     echo ""
     echo "Waiting for pods to terminate..."
-    local timeout=120
+    local timeout=${SCALE_DOWN_TIMEOUT_SECONDS:-120}
     local elapsed=0
-    while [ $elapsed -lt $timeout ]; do
-        local pod_count=$(kubectl get pods -n $ns --no-headers 2>/dev/null | wc -l)
-        if [ "$pod_count" -eq 0 ]; then
+    while true; do
+        local pods
+        pods=$(kubectl get pods -n "$ns" -o name)
+        if [ -z "$pods" ]; then
             echo -e "${GREEN}✅ All pods terminated in $ns${NC}"
             break
         fi
-        echo "  Waiting... ($pod_count pods remaining)"
+        if [ "$elapsed" -ge "$timeout" ]; then
+            echo -e "${RED}❌ Timeout waiting for pods to terminate in $ns.${NC}" >&2
+            return 1
+        fi
+        echo "  Waiting... ($(printf '%s\n' "$pods" | wc -l | tr -d ' ') pods remaining)"
         sleep 5
         elapsed=$((elapsed + 5))
     done
-    
-    if [ $elapsed -ge $timeout ]; then
-        echo -e "${YELLOW}⚠️  Timeout waiting for pods to terminate. Some pods may still be running.${NC}"
-    fi
     
     # Show PVC status (data is preserved)
     echo ""
@@ -114,10 +118,14 @@ if [ "$NAMESPACE" == "all" ]; then
     echo -e "${YELLOW}   tear down clusters that are actively in use by the other job.${NC}"
     echo ""
 
+    # Check discovery separately: process-substitution errors do not propagate
+    # through the while loop, and must not look like a successful empty list.
+    namespace_names=$(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}')
     # Discover every namespace matching os-* dynamically — no hardcoded list.
     while IFS= read -r ns; do
+        [ -n "$ns" ] || continue
         scale_down_namespace "$ns"
-    done < <(kubectl get namespaces -o jsonpath='{.items[*].metadata.name}' \
+    done < <(printf '%s\n' "$namespace_names" \
                  | tr ' ' '\n' \
                  | grep -E '^os(-develop)?-[a-z][a-z0-9-]+$' \
                  | sort)
