@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -15,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 import requests
+import psutil
 from async_profiler import AsyncProfiler
 from config_loader import ConfigLoader, get_os_namespace, sweep_directory_name
 from event_tracer import RunTrace, trace_event
@@ -22,6 +24,21 @@ from metrics_collector import MetricsCollector
 from node_stats_poller import diff_node_stats
 
 _CORE_ENGINES = {'jvector', 'faiss', 'lucene'}
+_TIMED_SEARCH_SCENARIOS = {'vector-search', 'bm25-search', 'hybrid-search', 'openrag-hybrid-search'}
+
+
+def _scenario_timeout_seconds(scenario: str, params: Dict[str, Any]) -> int:
+    """Bound pure search runs; combined ingest/search can take much longer."""
+    if scenario in _TIMED_SEARCH_SCENARIOS and params.get('time_period') is not None:
+        return max(900, int(params.get('warmup_time_period') or 0) + int(params['time_period']) + 600)
+    return 86400
+
+
+def _sweep_status(returncode: int, cancel_event: Optional[threading.Event]) -> str:
+    """A SIGKILL is a cancellation only when this job requested one."""
+    if cancel_event is not None and cancel_event.is_set():
+        return 'cancelled'
+    return 'completed' if returncode == 0 else 'failed'
 
 def _base_engine(engine: str) -> str:
     """Return the base engine name for dataset config / workload param lookups.
@@ -50,27 +67,37 @@ class RunContext:
 
 
 def _kill_proc_group(proc: subprocess.Popen) -> None:
-    """
-    Immediately obliterates all benchmark engine footprints across the container 
-    using an uncatchable SIGKILL broad sweep.
-    """
+    """Stop the launcher group and descendants that created their own sessions.
 
-    # Broad patterns to catch the engine wrapper and the underlying actor layers
+    Snapshot descendants before killing the launcher, while their parent links
+    still exist. Thespian's admin uses setsid(), so group membership alone is
+    insufficient to identify its actor tree.
+    """
     try:
-        for i in range(15):
-            subprocess.run(["pkill", "-9", "-f", "opensearch-benchmark"])
-            time.sleep(1)
-    except Exception as e:
+        descendants = [child.pid for child in psutil.Process(proc.pid).children(recursive=True)]
+    except psutil.NoSuchProcess:
+        descendants = []
+    except (psutil.AccessDenied, OSError) as exc:
+        logger.warning("Could not enumerate descendants of benchmark %s: %s", proc.pid, exc)
+        descendants = []
+    for pid in reversed(descendants):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            logger.warning("Could not kill benchmark descendant %s: %s", pid, exc)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
         pass
-
-    # Fallback: Clean up the local wrapper handle if it's still tracked by the thread
-    try:
+    except OSError:
         if proc.poll() is None:
             proc.kill()
-            proc.wait(timeout=1)
-    except Exception:
-        pass
-    
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        logger.warning("Benchmark process %s did not exit after SIGKILL", proc.pid)
 
 _CERT    = os.environ.get('OS_CERT', '/certs/admin.pem')
 _KEY     = os.environ.get('OS_KEY', '/certs/admin-key.pem')
@@ -585,6 +612,7 @@ class BenchmarkRunner:
         env: dict,
         active_key: str,
         cancel_event: Optional[threading.Event],
+        results_dir: Path,
     ) -> subprocess.Popen:
         """Launch the opensearch-benchmark subprocess in its own process group,
         register it for cross-Gunicorn-worker cancellation, and write its PGID
@@ -593,18 +621,28 @@ class BenchmarkRunner:
         run_dir.mkdir(parents=True, exist_ok=True)
         pgid_file = run_dir / f"job_{active_key}.pgid"
 
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-            cwd=str(self.datasets_root),
-            start_new_session=True,  # Breaks into its own PGID
-        )
+        # OSB can emit more than a pipe buffer of progress/errors. Capturing both
+        # streams in files prevents the child from blocking while we poll it.
+        results_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = results_dir / 'osb-stdout.log'
+        stderr_path = results_dir / 'osb-stderr.log'
+        for path in (stdout_path, stderr_path):
+            path.touch(mode=0o600, exist_ok=True)
+            path.chmod(0o600)
+        with open(stdout_path, 'w') as stdout_file, open(stderr_path, 'w') as stderr_file:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                text=True,
+                env=env,
+                cwd=str(self.datasets_root),
+                start_new_session=True,  # Breaks into its own PGID
+            )
 
-        pgid = os.getpgid(proc.pid)
-        pgid_file.write_text(str(pgid))
+        # start_new_session makes the child its own process-group leader. Using
+        # its PID avoids a race if a short operation exits before getpgid().
+        pgid_file.write_text(str(proc.pid))
 
         with self._active_lock:
             self._active[active_key] = (proc, cancel_event)
@@ -621,6 +659,7 @@ class BenchmarkRunner:
         cancel_event: Optional[threading.Event],
         engine: str = '',
         results_dir: Optional[Path] = None,
+        timeout_seconds: int = 86400,
     ) -> subprocess.CompletedProcess:
         """Poll the benchmark subprocess until it finishes, is cancelled, times
         out, or the cluster health watchdog decides to kill it.
@@ -643,7 +682,6 @@ class BenchmarkRunner:
 
         Returns a CompletedProcess with the exit code, stdout, and stderr.
         """
-        TIMEOUT_SECONDS        = 86400   # 24-hour hard limit
         POLL_INTERVAL          = 1.0     # seconds between loop iterations
         HEALTH_INTERVAL        = 60.0    # seconds between cluster health checks
         RED_TOLERANCE          = 5       # consecutive connection failures → kill
@@ -654,13 +692,14 @@ class BenchmarkRunner:
                                          # 2-4 h on small nodes for a 1.67M-vector shard)
         HEAP_DUMP_THRESHOLD_PCT = 95     # trigger a heap dump when any node exceeds this
 
-        elapsed            = 0.0
+        started_at         = time.monotonic()
         health_elapsed     = 0.0
         red_consecutive    = 0
         busy_consecutive   = 0
         heap_dumped_nodes: set = set()   # guard: at most one dump per node per run
         run_dir            = Path(os.environ.get('RUN_DIR', str(self.benchmark_home / 'run')))
         pgid_file          = run_dir / f"job_{active_key}.pgid"
+        termination_reason = ''
 
         try:
             while proc.poll() is None:
@@ -669,8 +708,9 @@ class BenchmarkRunner:
                     _kill_proc_group(proc)
                     break
 
-                if elapsed >= TIMEOUT_SECONDS:
-                    logger.warning(f"Job {job_id}: hit 6-hour hard limit — killing process tree.")
+                if time.monotonic() - started_at >= timeout_seconds:
+                    termination_reason = f'Exceeded scenario deadline ({timeout_seconds}s)'
+                    logger.warning(f"Job {job_id}: {termination_reason} — killing process tree.")
                     _kill_proc_group(proc)
                     break
 
@@ -707,15 +747,13 @@ class BenchmarkRunner:
                             f"— waiting... ({busy_consecutive}/{BUSY_TOLERANCE})"
                         )
                         if busy_consecutive >= BUSY_TOLERANCE:
+                            termination_reason = 'Killed: cluster HTTP unresponsive (read timeout)'
                             logger.error(
                                 f"Job {job_id}: cluster HTTP unresponsive for "
                                 f"{busy_consecutive} consecutive checks — killing benchmark process."
                             )
                             _kill_proc_group(proc)
-                            return subprocess.CompletedProcess(
-                                cmd, -1, '',
-                                'Killed: cluster HTTP unresponsive (read timeout)'
-                            )
+                            break
                     else:
                         # Connection refused/reset or other hard error: process is dead.
                         busy_consecutive  = 0
@@ -725,20 +763,24 @@ class BenchmarkRunner:
                             f"({red_consecutive}/{RED_TOLERANCE} consecutive checks)"
                         )
                         if red_consecutive >= RED_TOLERANCE:
+                            termination_reason = 'Killed: cluster went red during execution'
                             logger.error(
                                 f"Job {job_id}: cluster has been unreachable for "
                                 f"{red_consecutive} consecutive checks — killing benchmark process."
                             )
                             _kill_proc_group(proc)
-                            return subprocess.CompletedProcess(
-                                cmd, -1, '', 'Killed: cluster went red during execution'
-                            )
+                            break
 
                 time.sleep(POLL_INTERVAL)
-                elapsed += POLL_INTERVAL
 
-            stdout, stderr = proc.communicate()
-            return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+            proc.wait()
+            stdout = (results_dir / 'osb-stdout.log').read_text(errors='replace') if results_dir else ''
+            stderr = (results_dir / 'osb-stderr.log').read_text(errors='replace') if results_dir else ''
+            if termination_reason:
+                stderr = f'{stderr}\n{termination_reason}'
+            return subprocess.CompletedProcess(
+                cmd, -1 if termination_reason else proc.returncode, stdout, stderr
+            )
 
         finally:
             # Always clean up the PGID file and deregister the process
@@ -1187,8 +1229,12 @@ class BenchmarkRunner:
                         with RunTrace(ctx.results_dir, job_id=job_id, dataset=dataset,
                                       engine=engine, scenario=scenario, sweep=idx) as trace:
                             with trace.span("benchmark_process", procedure=scenario):
-                                proc = self._launch_process(cmd, env, active_key, cancel_event)
-                                result = self._poll_until_done(proc, cmd, job_id, active_key, ctx.target_host, cancel_event, engine=engine, results_dir=ctx.results_dir)
+                                proc = self._launch_process(cmd, env, active_key, cancel_event, ctx.results_dir)
+                                result = self._poll_until_done(
+                                    proc, cmd, job_id, active_key, ctx.target_host, cancel_event,
+                                    engine=engine, results_dir=ctx.results_dir,
+                                    timeout_seconds=_scenario_timeout_seconds(scenario, ctx.params),
+                                )
                             trace.event("benchmark_process_finished",
                                         exit_code=result.returncode if result else None)
                     finally:
@@ -1215,7 +1261,8 @@ class BenchmarkRunner:
                              benchmark_log=(ctx.results_dir / "benchmark.log").exists(),
                              metrics_file=(ctx.results_dir / "k8s_metrics.json").exists())
 
-                is_cancelled = (cancel_event and cancel_event.is_set()) or result.returncode == -9
+                sweep_status = _sweep_status(result.returncode, cancel_event)
+                is_cancelled = sweep_status == 'cancelled'
                 # Snapshot from this sweep's resolved RunContext, so telemetry
                 # uses the same index name and output directory as the OSB run.
                 if result.returncode == 0 and not is_cancelled:
@@ -1224,7 +1271,7 @@ class BenchmarkRunner:
                         _save_index_snapshot(engine, ctx.target_host, index_name, ctx.results_dir)
 
                 all_results.append({
-                    'status':           'cancelled' if is_cancelled else ('completed' if result.returncode == 0 else 'failed'),
+                    'status':           sweep_status,
                     'exit_code':        result.returncode,
                     'duration_seconds': duration,
                     'started_at':       start_time.isoformat(),
@@ -1237,7 +1284,7 @@ class BenchmarkRunner:
                     'stderr_tail':      result.stderr[-5000:] if result.stderr else '',
                 })
                 trace_event(ctx.results_dir, "sweep_finished",
-                             status="cancelled" if is_cancelled else ("completed" if result.returncode == 0 else "failed"),
+                             status=sweep_status,
                              exit_code=result.returncode, duration_seconds=duration)
 
                 if is_cancelled:
