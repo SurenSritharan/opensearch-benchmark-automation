@@ -1,19 +1,20 @@
 {
-  "description": "Concurrent bulk-ingest + search at 1M, seed 500k, refresh 3s, 1 replica. Reads fixed at 8 search clients; sweeps bulk ingest clients 2/5/8/11/13 to see how CPU, memory and disk respond to write load.",
+  "description": "Concurrent bulk-ingest + search at 1M, seed 500k, refresh 3s, 1 replica. Concurrent ingest and search both fixed at 8 clients; sweeps seed_bulk_indexing_clients 8/11/14/17/20 to see how CPU, memory and disk respond to seed (write-only) load.",
   "engine": "__ENGINE__",
   "params": {
     "corpus_size": "1m",
     "seed_num_vectors": 500000,
     "refresh_interval": "3s",
     "target_index_replica_shards": 1,
+    "target_index_bulk_indexing_clients": 8,
     "search_clients": 8
   },
   "parameter_sweeps": [
-    { "name": "writes-2",  "params": { "target_index_bulk_indexing_clients": 2 } },
-    { "name": "writes-5",  "params": { "target_index_bulk_indexing_clients": 5 } },
-    { "name": "writes-8",  "params": { "target_index_bulk_indexing_clients": 8 } },
-    { "name": "writes-11", "params": { "target_index_bulk_indexing_clients": 11 } },
-    { "name": "writes-13", "params": { "target_index_bulk_indexing_clients": 13 } }
+    { "name": "seed-8",  "params": { "seed_bulk_indexing_clients": 8 } },
+    { "name": "seed-11", "params": { "seed_bulk_indexing_clients": 11 } },
+    { "name": "seed-14", "params": { "seed_bulk_indexing_clients": 14 } },
+    { "name": "seed-17", "params": { "seed_bulk_indexing_clients": 17 } },
+    { "name": "seed-20", "params": { "seed_bulk_indexing_clients": 20 } }
   ],
 
   "steps": [
