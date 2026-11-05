@@ -11,10 +11,7 @@
   },
   "parameter_sweeps": [
     { "name": "seed-8",  "params": { "seed_bulk_indexing_clients": 8 } },
-    { "name": "seed-11", "params": { "seed_bulk_indexing_clients": 11 } },
-    { "name": "seed-14", "params": { "seed_bulk_indexing_clients": 14 } },
-    { "name": "seed-17", "params": { "seed_bulk_indexing_clients": 17 } },
-    { "name": "seed-20", "params": { "seed_bulk_indexing_clients": 20 } }
+    { "name": "seed-14", "params": { "seed_bulk_indexing_clients": 14 } }
   ],
 
   "steps": [
