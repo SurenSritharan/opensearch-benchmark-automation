@@ -287,6 +287,9 @@ pipeline {
         //    may have been initialised with a different root CA, causing TLS handshake
         //    failures on already-running clusters (unknown_ca alert).
         stage('Copy Certs') {
+            when {
+                expression { getPipeline() != 'openrag-hybrid-v2.1-plugin-check' }
+            }
             steps {
                 script {
                     def apiNs = getApiNamespace()
@@ -334,7 +337,7 @@ print(json.dumps(s))
         //    engine that needs them — one at a time on both prod and develop.
         stage('Prepare Workers') {
             when {
-                expression { params.SCALE_CLUSTERS }
+                expression { params.SCALE_CLUSTERS && getPipeline() != 'openrag-hybrid-v2.1-plugin-check' }
             }
             steps {
                 script {
@@ -389,6 +392,9 @@ print(json.dumps(s))
 
         // ── 3. Verify Health ───────────────────────────────────────────────────
         stage('Verify Health') {
+            when {
+                expression { getPipeline() != 'openrag-hybrid-v2.1-plugin-check' }
+            }
             steps {
                 script {
                     def apiNs   = getApiNamespace()
@@ -431,9 +437,14 @@ print(json.dumps(s))
                     def rawAutomationBranch = prodRun ? 'main' : (env.BRANCH_NAME ?: env.GIT_BRANCH ?: 'main')
                     def automationBranch = rawAutomationBranch.contains('/') ? rawAutomationBranch.tokenize('/').last() : rawAutomationBranch
 
+                    def pipeline = getPipeline()
+
                     // Cancel any running/queued jobs from a previous build of this same job.
                     // Each engine name is unique end-to-end (jvector, jvector-acl, faiss, lucene)
                     // so this loop is always safe to run concurrently across different pipelines.
+                    // The plugin inventory diagnostic does not submit a benchmark job and
+                    // must not cancel an unrelated benchmark while inspecting the cluster.
+                    if (pipeline != 'openrag-hybrid-v2.1-plugin-check') {
                     sh """
                         for engine in ${engines.join(' ')}; do
                             JOBS=\$(curl -s "${apiUrl}/api/v1/benchmark?engine=\$engine" \
@@ -444,9 +455,19 @@ print(json.dumps(s))
                             done
                         done
                     """
+                    }
 
-                    def pipeline     = getPipeline()
                     def pipelineJson = readJSON file: "pipelines/${pipeline}.json"
+
+                    if (pipeline == 'openrag-hybrid-v2.1-plugin-check') {
+                        if (prodRun || engines != ['jvector']) {
+                            error('Plugin check requires the develop JVector cluster only')
+                        }
+                        if (!params.SCALE_CLUSTERS || params.REDEPLOY_CLUSTERS ||
+                            params.SKIP_SCALE_DOWN || params.DELETE_PVCS) {
+                            error('Plugin check requires SCALE_CLUSTERS=true, REDEPLOY_CLUSTERS=false, SKIP_SCALE_DOWN=false, DELETE_PVCS=false')
+                        }
+                    }
 
                     // ── GHE tag resolution ────────────────────────────────────────────────
                     // Versions containing '-dev' are GHE builds. The version string itself is
@@ -499,7 +520,7 @@ print(json.dumps(s))
                             catchError(buildResult: 'FAILURE', stageResult: 'FAILURE') {
 
                                 // ── a) Start this engine's worker just-in-time ─────────
-                                if (params.SCALE_CLUSTERS) {
+                                if (params.SCALE_CLUSTERS && pipeline != 'openrag-hybrid-v2.1-plugin-check') {
                                     def workerStorageClaim = prodRun \
                                         ? "benchmark-worker-storage-${engine}" \
                                         : "benchmark-worker-storage"
@@ -617,6 +638,27 @@ print(json.dumps(s))
                                     stage("${engine} / ${versionLabel} / ${runSize} — Prepare Cluster") {
                                         // ── a) Scale up or deploy this engine's cluster ────
                                         if (params.SCALE_CLUSTERS) {
+                                            if (pipeline == 'openrag-hybrid-v2.1-plugin-check') {
+                                                // Inventory the installed deployment. Never redeploy it
+                                                // as part of a diagnostic that is meant to inspect it.
+                                                sh """
+                                                    if ! kubectl get statefulset/opensearch-cluster-manager statefulset/opensearch-data \
+                                                            -n ${ns} >/dev/null 2>&1; then
+                                                        echo "Expected an existing JVector cluster in ${ns}; refusing to deploy one."
+                                                        exit 1
+                                                    fi
+                                                    CM_REPLICAS=\$(kubectl get statefulset/opensearch-cluster-manager -n ${ns} -o jsonpath='{.spec.replicas}')
+                                                    DATA_REPLICAS=\$(kubectl get statefulset/opensearch-data -n ${ns} -o jsonpath='{.spec.replicas}')
+                                                    if [ "\$CM_REPLICAS" != "0" ] || [ "\$DATA_REPLICAS" != "0" ]; then
+                                                        echo "Cluster ${ns} is already running; refusing to alter another build's cluster."
+                                                        exit 1
+                                                    fi
+                                                    touch native-hybrid-diagnostic-cluster-started-${BUILD_ID}
+                                                    gke-manifest/scale-up-clusters.sh ${ns}
+                                                    kubectl rollout status statefulset/opensearch-cluster-manager -n ${ns} --timeout=600s
+                                                    kubectl rollout status statefulset/opensearch-data -n ${ns} --timeout=600s
+                                                """
+                                            } else {
                                             sh """
                                                 WORKER_POD="opensearch-benchmark-worker-${engine}-0"
                                                 WORKER_NS="${apiNs}"
@@ -731,6 +773,7 @@ print(json.dumps(s))
                                                     sleep 10
                                                 done
                                             """
+                                            }
                                         }
                                     } // Prepare Cluster stage
 
@@ -774,6 +817,21 @@ print(json.dumps(s))
                                             ? (restartAfterBuild ? "--build-only" : "--first-run")
                                             : ""
 
+                                        if (pipeline == 'openrag-hybrid-v2.1-plugin-check') {
+                                            // Inspect the existing JVector cluster before any ingest or
+                                            // search. The result is captured even when the check fails.
+                                            sh """
+                                                DEST="${RESULTS_DIR}/${runKey}"
+                                                mkdir -p "\$DEST"
+                                                set +e
+                                                OS_NAMESPACE="${ns}" \
+                                                    bash gke-manifest/check-jvector-hybrid-readiness.sh \
+                                                    > "\$DEST/jvector-hybrid-readiness.json"
+                                                CHECK_RC=\$?
+                                                cat "\$DEST/jvector-hybrid-readiness.json"
+                                                exit \$CHECK_RC
+                                            """
+                                        } else {
                                         sh """
                                             set +e
                                             DEST="${RESULTS_DIR}/${runKey}/test-runs/${engine}"
@@ -802,6 +860,7 @@ print(json.dumps(s))
 
                                             exit \$PIPE_RC
                                         """
+                                        }
 
                                         // After --build-only: redeploy the cluster (same version + size,
                                         // preserve PVCs) to clear JVM heap and OS page cache, then run
@@ -935,6 +994,10 @@ print(json.dumps(s))
                                         // run-pipeline.sh during the run. This block captures the
                                         // run log and final job-status JSON, and does a catch-up
                                         // kubectl cp in case any copy was missed mid-run.
+                                        if (pipeline == 'openrag-hybrid-v2.1-plugin-check') {
+                                            archiveArtifacts artifacts: "${RESULTS_DIR}/${runKey}/jvector-hybrid-readiness.json", allowEmptyArchive: true
+                                            echo "Plugin inventory: ${RESULTS_DIR}/${runKey}/jvector-hybrid-readiness.json"
+                                        } else {
                                         sh """
                                             mkdir -p ${RESULTS_DIR}/${runKey}
                                             cp benchmark-run-${engine}-${versionLabel}-${runSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
@@ -966,6 +1029,7 @@ print(json.dumps(s))
                                                 -n ${apiNs} --tail=5000 2>&1 > "\$WORKER_LOG" || true
                                             echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
                                         """
+                                        }
                                     } // try/finally
                                     } // Run Benchmark stage
                                 } // runs.each
@@ -1073,7 +1137,8 @@ EOF
                 def apiUrl  = getApiUrl()
 
                 // Cancel any running cloud service jobs before scale-down kills the worker pods.
-                if (currentBuild.currentResult in ['ABORTED', 'FAILURE']) {
+                if (getPipeline() != 'openrag-hybrid-v2.1-plugin-check' &&
+                    currentBuild.currentResult in ['ABORTED', 'FAILURE']) {
                     echo "Build ${currentBuild.currentResult} — cancelling any running cloud service jobs..."
 
                     def apiRunning = sh(
@@ -1118,6 +1183,14 @@ EOF
                 }
 
                 if (params.SCALE_CLUSTERS && !params.SKIP_SCALE_DOWN) {
+                    if (getPipeline() == 'openrag-hybrid-v2.1-plugin-check') {
+                        if (fileExists("native-hybrid-diagnostic-cluster-started-${BUILD_ID}")) {
+                            echo 'Scaling down inspected OpenSearch cluster...'
+                            sh "gke-manifest/scale-down-clusters.sh ${getNamespace('jvector')} || true"
+                        } else {
+                            echo 'Diagnostic did not start the cluster; leaving cluster state unchanged.'
+                        }
+                    } else {
                     echo "Scaling down benchmark worker(s)..."
                     engines.each { engine ->
                         sh """
@@ -1158,6 +1231,7 @@ EOF
                     engines.each { engine ->
                         def ns = getNamespace(engine)
                         sh "gke-manifest/scale-down-clusters.sh ${ns} || true"
+                    }
                     }
                 }
 

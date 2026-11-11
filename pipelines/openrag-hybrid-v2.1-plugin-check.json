@@ -1,0 +1,5 @@
+{
+  "description": "Read-only JVector native-hybrid plugin and processor inventory. Jenkins scales up the existing cluster, prints per-node readiness, and stops before ingest or search.",
+  "engine": "__ENGINE__",
+  "steps": []
+}
