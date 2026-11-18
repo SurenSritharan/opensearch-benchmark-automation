@@ -1,0 +1,16 @@
+{
+  "description": "500k MS MARCO v2.1 JVector comparison: ingest once, then measure vector, BM25, and OpenRAG-style hybrid search with NDCG@10 and Recall@k. Native normalized hybrid is deferred pending plugin diagnosis.",
+  "engine": "__ENGINE__",
+  "params": { "corpus_size": "500k" },
+  "steps": [
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "delete-index" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "create-index" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "bulk-ingest-data" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "refresh-index" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "force-merge" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "refresh-index" },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "vector-search", "params": { "query_k": 10 } },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "bm25-search", "params": { "query_k": 10 } },
+    { "dataset": "cohere-msmarco-v2.1-1024", "scenario": "openrag-hybrid-search", "params": { "query_k": 10 } }
+  ]
+}
