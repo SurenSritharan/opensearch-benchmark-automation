@@ -1,0 +1,6 @@
+__pycache__/
+.env
+*.pem
+openrag-results/
+params.json
+.ruff_cache/

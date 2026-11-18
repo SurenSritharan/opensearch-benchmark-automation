@@ -1,0 +1,15 @@
+{
+  "name": "openrag_arxiv_1000",
+  {%- if corpus_base_url is defined %}
+  "base-url": "{{ corpus_base_url }}",
+  {%- endif %}
+  "documents": [
+    {
+      "source-file": "documents.json.bz2",
+      "includes-action-and-meta-data": true,
+      "document-count": 252434,
+      "compressed-bytes": 1003364257,
+      "uncompressed-bytes": 5553552798
+    }
+  ]
+}
