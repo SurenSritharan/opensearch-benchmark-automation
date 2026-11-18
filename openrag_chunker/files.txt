@@ -1,0 +1,3 @@
+documents.json.bz2
+documents-1k.json.bz2
+queries.json.bz2

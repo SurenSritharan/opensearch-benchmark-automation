@@ -1,0 +1,82 @@
+{#- candidates: num_candidates sent in knn clauses. OpenRAG always sends 1000 and,
+    because OpenSearch's knn query rejects it, retries every search without it.
+    Single-request operations isolate that successful retry, so they send none. -#}
+{%- macro search_op(name, operation_type, param_source, extra, candidates=none) -%}
+{%- for auth in ["admin", "dls"] %}
+    {
+      "name": "{{ name }}{{ '-dls' if auth == 'dls' else '' }}",
+      "operation-type": "{{ operation_type }}",
+      "param-source": "{{ param_source }}",
+      "auth": "{{ auth }}",
+      "embedding-space-id": "openai:text-embedding-3-small",
+      "num-candidates": {{ candidates if candidates is not none else (num_candidates | default(1000)) }},
+      "seed": {{ query_seed | default(42) }},
+      "dls-users": {{ dls_users | default(10) }},
+      {%- if dls_jwt_private_key is defined %}
+      "dls-jwt-private-key": {{ dls_jwt_private_key | tojson }},
+      {%- endif %}
+      {%- if dls_jwt_issuer is defined %}
+      "dls-jwt-issuer": {{ dls_jwt_issuer | tojson }},
+      {%- endif %}
+      {%- if queries_path is defined %}
+      "queries-path": {{ queries_path | tojson }},
+      {%- endif %}
+      {%- if corpus_base_url is defined %}
+      "corpus-base-url": {{ corpus_base_url | tojson }},
+      {%- endif %}
+      {%- if query_types is defined %}
+      "query-types": {{ query_types | tojson }},
+      {%- endif %}
+      {%- if search_request_timeout is defined %}
+      "request-timeout": {{ search_request_timeout }},
+      {%- endif %}
+      "detailed-results": {{ detailed_results | default(false) | tojson }},
+      "measure-relevance": {{ measure_relevance | default(true) | tojson }},
+      "dls-user-choice": {{ dls_user_choice | default('can-see') | tojson }},
+      {{ extra | safe }}
+    }{{ "," if not loop.last }}
+{%- endfor %}
+{%- endmacro -%}
+    {
+      "name": "setup-dls-users",
+      "operation-type": "openrag-setup-dls",
+      "users": {{ dls_users | default(10) }},
+      "create-missing-roles": {{ create_missing_openrag_roles | default(false) | tojson }}
+    },
+    {
+      "name": "index-openrag-chunks",
+      "operation-type": "openrag-bulk",
+      "param-source": "openrag-bulk-source",
+      "bulk-size": {{ bulk_size | default(100) }},
+      "ingest-percentage": {{ ingest_percentage | default(100) }},
+      "refresh-index": "openrag-bench-documents",
+      "refresh-after-bulk": {{ refresh_after_bulk | default(true) | tojson }}
+    },
+    {
+      "name": "refresh-after-index",
+      "operation-type": "refresh",
+      "index": "openrag-bench-documents"
+    },
+    {
+      "name": "wait-until-merges-finish",
+      "operation-type": "index-stats",
+      "index": "openrag-bench-documents",
+      "condition": {
+        "path": "_all.total.merges.current",
+        "expected-value": 0
+      },
+      "retry-until-success": true,
+      "include-in-reporting": false
+    },
+{{ search_op("embedding-space-discovery", "search", "openrag-discovery-source", '"path": "api"') }},
+{{ search_op("api-hybrid-query", "search", "openrag-search-source", '"path": "api"', 0) }},
+{{ search_op("agent-hybrid-query", "search", "openrag-search-source", '"path": "langflow"', 0) }},
+{{ search_op("api-search", "openrag-search", "openrag-search-source", '"path": "api"') }},
+{{ search_op("agent-retrieval", "openrag-search", "openrag-search-source", '"path": "langflow"') }},
+{{ search_op("knowledge-search", "openrag-search", "openrag-search-source", '"path": "api", "result-mode": "knowledge_sources", "limit": 100') }},
+{{ search_op("knowledge-facets", "openrag-search", "openrag-search-source", '"path": "api", "variant": "wildcard"') }},
+{{ search_op("api-search-file-filter", "openrag-search", "openrag-search-source", '"path": "api", "filter": "knowledge-filter"') }},
+{{ search_op("agent-retrieval-file-filter", "openrag-search", "openrag-search-source", '"path": "langflow", "filter": "knowledge-filter"') }},
+{{ search_op("api-search-score-threshold", "openrag-search", "openrag-search-source", '"path": "api", "score-threshold": ' ~ (score_threshold | default(0.5))) }},
+{{ search_op("api-search-keyword-fallback", "openrag-search", "openrag-search-source", '"path": "api", "variant": "keyword-only"') }},
+{{ search_op("baseline-knn-only", "search", "openrag-search-source", '"path": "api", "variant": "knn-only"') }}

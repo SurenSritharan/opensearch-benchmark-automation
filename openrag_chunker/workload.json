@@ -1,0 +1,21 @@
+{% import "benchmark.helpers" as benchmark with context %}
+
+{
+  "version": 2,
+  "description": "Benchmarks OpenSearch as OpenRAG uses it: OpenRAG's hybrid (knn + fuzzy keyword) retrieval over chunked, OpenAI-embedded arXiv PDFs, on the search API and agent tool paths, with and without document-level security",
+  "indices": [
+    {
+      "name": "openrag-bench-documents",
+      "body": "index.json"
+    }
+  ],
+  "corpora": [
+    {{ benchmark.collect(parts="corpora.json") }}
+  ],
+  "operations": [
+    {{ benchmark.collect(parts="operations/*.json") }}
+  ],
+  "test_procedures": [
+    {{ benchmark.collect(parts="test_procedures/*.json") }}
+  ]
+}

@@ -1,0 +1,79 @@
+{% set knn_method %}
+        "method": {
+          "name": "{{ knn_method_name | default('disk_ann') }}",
+          "engine": "{{ knn_engine | default('jvector') }}",
+          "space_type": "l2",
+          "parameters": {
+            "ef_construction": {{ knn_ef_construction | default(100) }},
+            "m": {{ knn_m | default(16) }}
+          }
+        }
+{% endset %}
+{
+  "settings": {
+    "index": {
+      "knn": true
+      {%- if refresh_interval is defined %},
+      "refresh_interval": "{{ refresh_interval }}"
+      {%- endif %}
+    },
+    "number_of_shards": {{ number_of_shards | default(1) }},
+    "number_of_replicas": {{ number_of_replicas | default(0) }}
+  },
+  "mappings": {
+    "properties": {
+      "document_id": {"type": "keyword"},
+      "filename": {"type": "keyword"},
+      "mimetype": {"type": "keyword"},
+      "page": {"type": "integer"},
+      "text": {"type": "text"},
+      "chunk_embedding": {
+        "type": "knn_vector",
+        "dimension": 1536,
+        {{ knn_method }}
+      },
+      "chunk_embedding_openai_text_embedding_3_small": {
+        "type": "knn_vector",
+        "dimension": 1536,
+        {{ knn_method }}
+      },
+      "embedding_model": {"type": "keyword"},
+      "embedding_provider": {"type": "keyword"},
+      "embedding_space_id": {"type": "keyword"},
+      "embedding_dimensions": {"type": "integer"},
+      "source_url": {"type": "keyword"},
+      "connector_type": {"type": "keyword"},
+      "record_kind": {"type": "keyword"},
+      "web_source_id": {"type": "keyword"},
+      "web_page_id": {"type": "keyword"},
+      "web_page_depth": {"type": "integer"},
+      "web_child_count": {"type": "integer"},
+      "root_source_url": {"type": "keyword"},
+      "canonical_url": {"type": "keyword"},
+      "status": {"type": "keyword"},
+      "error": {"type": "text"},
+      "ingest_run_id": {"type": "keyword"},
+      "content_etag": {"type": "keyword"},
+      "owner": {"type": "keyword"},
+      "owner_email": {"type": "keyword"},
+      "allowed_users": {"type": "keyword"},
+      "allowed_groups": {"type": "keyword"},
+      "allowed_principals": {"type": "keyword"},
+      "allowed_principal_labels": {
+        "type": "object",
+        "properties": {
+          "principal": {"type": "keyword"},
+          "kind": {"type": "keyword"},
+          "provider": {"type": "keyword"},
+          "display_name": {"type": "keyword"},
+          "email": {"type": "keyword"},
+          "external_id": {"type": "keyword"}
+        }
+      },
+      "created_time": {"type": "date"},
+      "modified_time": {"type": "date"},
+      "indexed_time": {"type": "date"},
+      "metadata": {"type": "object"}
+    }
+  }
+}
