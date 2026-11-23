@@ -78,6 +78,6 @@ def openrag_user_token(user_id, email, name, private_key, *, issuer=DEFAULT_ISSU
         "preferred_username": email,
         "email_verified": True,
         "roles": roles,
-        "user_roles": roles + ["all_access"],
+        "user_roles": roles,
     }
     return f"Bearer {sign(claims, private_key)}"

@@ -50,7 +50,7 @@
       "bulk-size": {{ bulk_size | default(100) }},
       "ingest-percentage": {{ ingest_percentage | default(100) }},
       "refresh-index": "openrag-bench-documents",
-      "refresh-after-bulk": {{ refresh_after_bulk | default(true) | tojson }}
+      "refresh-every-docs": {{ refresh_every_docs | default(20000) }}
     },
     {
       "name": "refresh-after-index",

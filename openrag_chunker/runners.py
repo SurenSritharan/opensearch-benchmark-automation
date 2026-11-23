@@ -188,10 +188,13 @@ class OpenRagBulkRunner(Runner):
     """Bulk indexing as OpenRAG's DocumentIndexWriter does it.
 
     OpenRAG writes each file's chunks in bulk batches of
-    OPENRAG_INGEST_BATCH_SIZE (100) with refresh=false, then refreshes the
-    index once the file's last batch is in. With papers of roughly one batch
-    each, ``refresh-after-bulk`` approximates that refresh-per-file pattern,
-    which drives the segment layout searches later run against.
+    OPENRAG_INGEST_BATCH_SIZE (100) with refresh=false. The benchmark has no
+    concurrent search during ingestion, so refreshing after every batch is not
+    needed. ``refresh-every-docs`` instead refreshes the index each time that
+    many documents have been ingested since the last refresh (0 disables it).
+    The count is kept per runner instance, i.e. per worker process, and a
+    separate refresh operation after ingestion makes the remaining documents
+    visible.
     """
 
     RUNNER_NAME = "openrag-bulk"
@@ -199,14 +202,19 @@ class OpenRagBulkRunner(Runner):
     def __init__(self):
         super().__init__()
         self._bulk = BulkIndex()
+        self._docs_since_refresh = 0
 
     async def __call__(self, opensearch, params):
         refresh_index = params.pop("refresh-index", None)
-        refresh = params.pop("refresh-after-bulk", True)
+        refresh_every_docs = int(params.pop("refresh-every-docs", 0) or 0)
         result = await self._bulk(opensearch, params)
-        if refresh and refresh_index:
-            await opensearch.indices.refresh(index=refresh_index)
-            request_context_holder.on_client_request_end()
+        if refresh_every_docs > 0 and refresh_index:
+            self._docs_since_refresh += int(result.get("weight", 0))
+            if self._docs_since_refresh >= refresh_every_docs:
+                # Reset before awaiting so concurrent clients do not refresh twice.
+                self._docs_since_refresh = 0
+                await opensearch.indices.refresh(index=refresh_index)
+                request_context_holder.on_client_request_end()
         return result
 
     def __repr__(self, *args, **kwargs):

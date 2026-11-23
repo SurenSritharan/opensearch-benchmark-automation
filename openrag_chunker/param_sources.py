@@ -7,13 +7,17 @@
 import bz2
 import copy
 import json
+import logging
 import os
 import random
+import tempfile
 
 from osbenchmark.workload.params import ParamSource
 
 from . import bench_identity, openrag_jwt
 from . import openrag_queries as oq
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_EMBEDDING_SPACE = "openai:text-embedding-3-small"
 QUERIES_FILE = "queries.json.bz2"
@@ -47,7 +51,20 @@ def load_queries(path, base_url=None):
             )
         from osbenchmark.workload.loader import Downloader
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        Downloader(False, False).download(base_url, None, path, None)
+        temp_path = None
+
+        try:
+            fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(path))
+            os.close(fd)
+
+            Downloader(False, False).download(base_url, None, temp_path, None)
+            os.replace(temp_path, path)
+        
+        except Exception:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+                raise
+
     opener = bz2.open if path.endswith(".bz2") else open
     with opener(path, "rt", encoding="utf-8") as f:
         queries = [json.loads(line) for line in f if line.strip()]
@@ -123,6 +140,7 @@ class OpenRagSearchParamSource(ParamSource):
         self._dls_key_path = params.get("dls-jwt-private-key")
         self._dls_issuer = params.get("dls-jwt-issuer", openrag_jwt.DEFAULT_ISSUER)
         self._dls_tokens = None
+        self._warned_user_fallback = set()
         if self._auth == "dls" and not self._dls_key_path:
             raise ValueError("auth [dls] needs the dls_jwt_private_key workload parameter")
 
@@ -155,6 +173,7 @@ class OpenRagSearchParamSource(ParamSource):
         # Each client draws its own reproducible sequence of queries and users.
         partition = copy.copy(self)
         partition._rng = random.Random(self._seed + partition_index)
+        partition._warned_user_fallback = set()
         return partition
 
     def _filters(self, query):
@@ -170,15 +189,37 @@ class OpenRagSearchParamSource(ParamSource):
     def _dls_user(self, query):
         """Index of the synthetic user to search as."""
         visible = set(query.get("visible_users") or [])
-        if self._dls_user_choice == "can-see" and visible:
-            candidates = [i for i in range(self._dls_users) if bench_identity.user_name(i) in visible]
-            if candidates:
-                return self._rng.choice(candidates)
+        if self._dls_user_choice == "can-see":
+            if not visible:
+                self._warn_user_fallback("no-visible-users", query)
+            else:
+                candidates = [i for i in range(self._dls_users) if bench_identity.user_name(i) in visible]
+                if candidates:
+                    return self._rng.choice(candidates)
+                self._warn_user_fallback("no-matching-user", query)
         return self._rng.randrange(self._dls_users)
+
+    def _warn_user_fallback(self, reason, query):
+        """dls-user-choice=can-see could not honour its promise, so a random user is used.
+
+        Logged once per reason per client, as the fallback can hit every query.
+        """
+        if reason in self._warned_user_fallback:
+            return
+        self._warned_user_fallback.add(reason)
+        if reason == "no-visible-users":
+            detail = "the query has no visible_users"
+        else:
+            detail = f"none of the query's visible_users is among the {self._dls_users} synthetic users"
+        LOGGER.warning(
+            "dls-user-choice is [can-see] but %s (paper [%s]); searching as a random user, "
+            "so relevance may drop. Further occurrences of this case are not logged.",
+            detail, query.get("filename"))
 
     def params(self):
         if self._queries is None:
             self._load()
+            
         query = self._rng.choice(self._queries)
         text = "*" if self._variant == "wildcard" else query["text"]
         vectors = {self._space_id: query["vector"]}

@@ -164,7 +164,7 @@ docker run -d -p 9200:9200 -e discovery.type=single-node \
 | `concurrency-sweep` | `api-search` and `agent-retrieval` at each count in `sweep_clients` (`search_auth:dls` for DLS users) |
 | `ingest-while-searching` | Re-ingests the corpus at `concurrent_ingest_throughput` bulks/s while both retrieval paths search, all for `ingest_while_searching_period` seconds |
 
-Ingestion uses OpenRAG's batch of 100 chunks per bulk with a refresh after each bulk, which approximates OpenRAG's refresh after each file. The index is not force-merged unless `force_merge_max_num_segments` is set, because OpenRAG never force-merges.
+Ingestion uses OpenRAG's batch of 100 chunks per bulk. Because nothing searches during ingestion, the index is refreshed only after every `refresh_every_docs` ingested documents (default 20000) and once more after ingestion, rather than after each bulk. The index is not force-merged unless `force_merge_max_num_segments` is set, because OpenRAG never force-merges.
 
 ### Operations
 
@@ -205,7 +205,7 @@ This workload allows [specifying the following parameters](#specifying-workload-
 * `query_seed` (default: 42): Seed for query and user selection.
 * `detailed_results` (default: false): Record hits, took and request counts per search.
 * `search_request_timeout` (default: unset): Client timeout for searches.
-* `bulk_size` (default: 100), `bulk_indexing_clients` (default: 1), `ingest_percentage` (default: 100), `refresh_after_bulk` (default: true): Ingestion.
+* `bulk_size` (default: 100), `bulk_indexing_clients` (default: 1), `ingest_percentage` (default: 100), `refresh_every_docs` (default: 20000, 0 disables mid-ingest refreshes): Ingestion.
 * `concurrent_ingest_throughput` (default: 1), `ingest_while_searching_period` (default: 600): For `ingest-while-searching`.
 * `number_of_shards` (default: 1), `number_of_replicas` (default: 0): OpenRAG's defaults.
 * `refresh_interval` (default: unset): Index refresh interval.

@@ -185,7 +185,7 @@ async def main_async(args):
     finally:
         timing.run_finished()
 
-    failed = sorted(name for name, entry in state.files.items() if entry.get("status") != "completed")
+    failed = sorted(p.name for p in pdfs if not state.done(p.name))
     log(f"Done: {len(pdfs) - len(failed)} of {len(pdfs)} PDFs ingested"
         + (f"; {len(failed)} failed, rerun to retry them: {', '.join(failed[:10])}" if failed else ""))
 
