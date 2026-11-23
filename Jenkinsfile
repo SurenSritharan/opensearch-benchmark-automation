@@ -1001,6 +1001,7 @@ print(json.dumps(s))
                                         sh """
                                             mkdir -p ${RESULTS_DIR}/${runKey}
                                             cp benchmark-run-${engine}-${versionLabel}-${runSize}.log ${RESULTS_DIR}/${runKey}/ 2>/dev/null || true
+                                            FUSION_RC=0
 
                                             if [ -f job_id_${engine}-${versionLabel}-${runSize}.txt ]; then
                                                 JOB_ID=\$(cat job_id_${engine}-${versionLabel}-${runSize}.txt)
@@ -1010,6 +1011,15 @@ print(json.dumps(s))
                                                     | jq '.' > ${RESULTS_DIR}/${runKey}/job-status-${engine}.json
                                                 jq '{job_id, status, scenarios_completed, scenarios_total}' \
                                                     ${RESULTS_DIR}/${runKey}/job-status-${engine}.json
+
+                                                if [ "${pipeline}" = 'openrag-hybrid-v2.1-500k' ] \
+                                                    && [ "${engine}" = 'jvector' ] \
+                                                    && [ "\$(jq -r '.status' ${RESULTS_DIR}/${runKey}/job-status-${engine}.json)" = 'completed' ]; then
+                                                    echo 'Collecting judged-query candidates and fusion scores...'
+                                                    kubectl exec -n ${apiNs} opensearch-benchmark-worker-${engine}-0 -c worker -- \
+                                                        python3 /workspace/cloud-service/scripts/hybrid_fusion_experiment.py \
+                                                        --job-dir /results/\$JOB_ID/${engine} || FUSION_RC=\$?
+                                                fi
 
                                                 DEST="${RESULTS_DIR}/${runKey}/test-runs/${engine}"
                                                 mkdir -p "\$DEST"
@@ -1028,11 +1038,18 @@ print(json.dumps(s))
                                             kubectl logs statefulset/opensearch-benchmark-worker-${engine} \
                                                 -n ${apiNs} --tail=5000 2>&1 > "\$WORKER_LOG" || true
                                             echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
+                                            echo "\$FUSION_RC" > ${RESULTS_DIR}/${runKey}/fusion-experiment.exit
                                         """
                                         if (pipeline == 'openrag-hybrid-v2.1-500k') {
                                             // Keep the small comparison artifacts available after
                                             // workspace cleanup, including a failed search run.
-                                            archiveArtifacts artifacts: "${RESULTS_DIR}/${runKey}/test-runs/${engine}/*/test_run.json,${RESULTS_DIR}/${runKey}/test-runs/${engine}/*/ndcg-summary.json,${RESULTS_DIR}/${runKey}/test-runs/${engine}/*/index_snapshot.json,${RESULTS_DIR}/${runKey}/job-status-${engine}.json,${RESULTS_DIR}/${runKey}/benchmark-run-${engine}-${versionLabel}-${runSize}.log", allowEmptyArchive: true
+                                            archiveArtifacts artifacts: "${RESULTS_DIR}/${runKey}/test-runs/${engine}/*/test_run.json,${RESULTS_DIR}/${runKey}/test-runs/${engine}/*/ndcg-summary.json,${RESULTS_DIR}/${runKey}/test-runs/${engine}/*/index_snapshot.json,${RESULTS_DIR}/${runKey}/test-runs/${engine}/fusion-experiment/*.json,${RESULTS_DIR}/${runKey}/test-runs/${engine}/fusion-experiment/*.jsonl,${RESULTS_DIR}/${runKey}/job-status-${engine}.json,${RESULTS_DIR}/${runKey}/benchmark-run-${engine}-${versionLabel}-${runSize}.log", allowEmptyArchive: true
+                                            if (engine == 'jvector') {
+                                                sh """
+                                                    test "\$(cat ${RESULTS_DIR}/${runKey}/fusion-experiment.exit)" -eq 0
+                                                    jq -e '.queries_scored > 0' ${RESULTS_DIR}/${runKey}/test-runs/${engine}/fusion-experiment/summary.json
+                                                """
+                                            }
                                         }
                                         }
                                     } // try/finally
