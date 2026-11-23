@@ -1029,6 +1029,11 @@ print(json.dumps(s))
                                                 -n ${apiNs} --tail=5000 2>&1 > "\$WORKER_LOG" || true
                                             echo "Worker log: \$WORKER_LOG (\$(wc -l < \$WORKER_LOG) lines)"
                                         """
+                                        if (pipeline == 'openrag-hybrid-v2.1-500k') {
+                                            // Keep the small comparison artifacts available after
+                                            // workspace cleanup, including a failed search run.
+                                            archiveArtifacts artifacts: "${RESULTS_DIR}/${runKey}/test-runs/${engine}/*/test_run.json,${RESULTS_DIR}/${runKey}/test-runs/${engine}/*/ndcg-summary.json,${RESULTS_DIR}/${runKey}/test-runs/${engine}/*/index_snapshot.json,${RESULTS_DIR}/${runKey}/job-status-${engine}.json,${RESULTS_DIR}/${runKey}/benchmark-run-${engine}-${versionLabel}-${runSize}.log", allowEmptyArchive: true
+                                        }
                                         }
                                     } // try/finally
                                     } // Run Benchmark stage

@@ -40,6 +40,21 @@ def _sweep_status(returncode: int, cancel_event: Optional[threading.Event]) -> s
         return 'cancelled'
     return 'completed' if returncode == 0 else 'failed'
 
+
+def _validate_openrag_500k_search_artifacts(results_dir: Path) -> Optional[str]:
+    """Require usable search and relevance results for the 500k comparison."""
+    try:
+        report = json.loads((results_dir / 'test_run.json').read_text())
+        metrics = report['results']['op_metrics']
+        if not metrics or any(metric.get('error_rate') != 0 for metric in metrics):
+            return 'Search reported missing metrics or request errors'
+        relevance = json.loads((results_dir / 'ndcg-summary.json').read_text())
+        if relevance.get('queries_scored', 0) <= 0:
+            return 'NDCG summary contains no scored queries'
+    except (FileNotFoundError, ValueError, KeyError, TypeError) as exc:
+        return f'Missing or invalid search/NDCG artifact: {exc}'
+    return None
+
 def _base_engine(engine: str) -> str:
     """Return the base engine name for dataset config / workload param lookups.
 
@@ -319,6 +334,13 @@ class BenchmarkRunner:
                 base = self.results_dir / job_id / scenario
                 results_dir = base / sweep_dir_name if has_sweeps else base
             results_dir.mkdir(parents=True, exist_ok=True)
+
+            # This comparison's NDCG accumulator normally writes beside the GT
+            # file in /datasets/gt, outside the per-scenario results Jenkins
+            # copies. Keep each search's summary with its own result artifacts.
+            if (pipeline_name == 'openrag-hybrid-v2.1-500k'
+                    and scenario in ('vector-search', 'bm25-search', 'openrag-hybrid-search')):
+                final_params['ndcg_summary_file'] = str(results_dir / 'ndcg-summary.json')
 
             sweeps.append(RunContext(
                 target_host    = target_host,
@@ -1263,6 +1285,14 @@ class BenchmarkRunner:
 
                 sweep_status = _sweep_status(result.returncode, cancel_event)
                 is_cancelled = sweep_status == 'cancelled'
+                validation_error = None
+                if (sweep_status == 'completed'
+                        and ctx.pipeline_name == 'openrag-hybrid-v2.1-500k'
+                        and scenario in ('vector-search', 'bm25-search', 'openrag-hybrid-search')):
+                    validation_error = _validate_openrag_500k_search_artifacts(ctx.results_dir)
+                    if validation_error:
+                        sweep_status = 'failed'
+                        logger.error('500k search result validation failed: %s', validation_error)
                 # Snapshot from this sweep's resolved RunContext, so telemetry
                 # uses the same index name and output directory as the OSB run.
                 if result.returncode == 0 and not is_cancelled:
@@ -1272,6 +1302,7 @@ class BenchmarkRunner:
 
                 all_results.append({
                     'status':           sweep_status,
+                    'error':            validation_error,
                     'exit_code':        result.returncode,
                     'duration_seconds': duration,
                     'started_at':       start_time.isoformat(),
