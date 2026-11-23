@@ -1300,9 +1300,8 @@ class BenchmarkRunner:
                     if index_name:
                         _save_index_snapshot(engine, ctx.target_host, index_name, ctx.results_dir)
 
-                all_results.append({
+                sweep_result = {
                     'status':           sweep_status,
-                    'error':            validation_error,
                     'exit_code':        result.returncode,
                     'duration_seconds': duration,
                     'started_at':       start_time.isoformat(),
@@ -1313,7 +1312,10 @@ class BenchmarkRunner:
                     'command':          ' '.join(cmd),
                     'stdout_tail':      result.stdout[-5000:] if result.stdout else '',
                     'stderr_tail':      result.stderr[-5000:] if result.stderr else '',
-                })
+                }
+                if validation_error:
+                    sweep_result['error'] = validation_error
+                all_results.append(sweep_result)
                 trace_event(ctx.results_dir, "sweep_finished",
                              status=sweep_status,
                              exit_code=result.returncode, duration_seconds=duration)

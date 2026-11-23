@@ -1016,7 +1016,7 @@ print(json.dumps(s))
                                                     && [ "${engine}" = 'jvector' ] \
                                                     && [ "\$(jq -r '.status' ${RESULTS_DIR}/${runKey}/job-status-${engine}.json)" = 'completed' ]; then
                                                     echo 'Collecting judged-query candidates and fusion scores...'
-                                                    kubectl exec -n ${apiNs} opensearch-benchmark-worker-${engine}-0 -c worker -- \
+                                                    timeout 1300s kubectl exec -n ${apiNs} opensearch-benchmark-worker-${engine}-0 -c worker -- \
                                                         python3 /workspace/cloud-service/scripts/hybrid_fusion_experiment.py \
                                                         --job-dir /results/\$JOB_ID/${engine} || FUSION_RC=\$?
                                                 fi

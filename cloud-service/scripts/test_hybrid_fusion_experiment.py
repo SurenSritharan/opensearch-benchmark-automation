@@ -1,11 +1,13 @@
 """Small fixed-candidate checks for the search-only fusion experiment."""
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from hybrid_fusion_experiment import fuse, ndcg_at_10, run
+from hybrid_fusion_experiment import _load_job, fuse, ndcg_at_10, run
 
 
 class FusionTest(unittest.TestCase):
@@ -64,6 +66,23 @@ class FusionTest(unittest.TestCase):
             self.assertIn("multi_match", client.bodies[1]["query"]["bool"]["should"][0])
             self.assertEqual(len(result["variants"]), 10)
             self.assertEqual(len((base / "fusion-experiment/candidates.jsonl").read_text().splitlines()), 1)
+
+    def test_relative_ground_truth_path_uses_datasets_root(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "gt").mkdir()
+            (root / "gt/queries.json").write_text(json.dumps({"queries": [{
+                "query_id": "q1", "text": "bone mass", "vector": [0.1],
+                "qrels": {"doc": 1},
+            }]}))
+            scenario = root / "results/example-openrag-hybrid-search"
+            scenario.mkdir(parents=True)
+            (scenario / "workload-params.json").write_text(json.dumps({
+                "queries_file": "gt/queries.json", "target_index_name": "test-index",
+            }))
+            with patch.dict(os.environ, {"DATASETS_ROOT": str(root)}):
+                _, judged = _load_job(root / "results")
+            self.assertEqual(judged[0]["query_id"], "q1")
 
 
 if __name__ == "__main__":
