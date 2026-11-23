@@ -93,8 +93,9 @@ VARIANTS = (
 
 
 class SearchClient:
-    def __init__(self, base_url, cert_file, key_file, ca_file):
+    def __init__(self, base_url, cert_file, key_file, ca_file, timeout=30):
         self.base_url = base_url
+        self.timeout = timeout
         self.context = ssl.create_default_context(cafile=ca_file)
         self.context.load_cert_chain(certfile=cert_file, keyfile=key_file)
 
@@ -104,7 +105,7 @@ class SearchClient:
             data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"},
         )
-        with urlopen(request, context=self.context, timeout=120) as response:
+        with urlopen(request, context=self.context, timeout=self.timeout) as response:
             payload = json.load(response)
         if payload.get("timed_out") or payload.get("_shards", {}).get("failed", 0):
             raise RuntimeError("OpenSearch search timed out or had shard failures")
@@ -120,7 +121,8 @@ def _load_job(job_dir):
     params = json.loads(matches[0].read_text())
     query_path = Path(params["queries_file"])
     if not query_path.is_absolute():
-        query_path = Path(os.environ.get("BENCHMARK_HOME", "/datasets/opensearch-benchmark")) / query_path
+        # OSB runs with /datasets as cwd, so gt/... is written under DATASETS_ROOT.
+        query_path = Path(os.environ.get("DATASETS_ROOT", "/datasets")) / query_path
     queries = json.loads(query_path.read_text())["queries"]
     judged = [q for q in queries if q.get("qrels")]
     if not judged:
@@ -128,7 +130,7 @@ def _load_job(job_dir):
     return params, judged
 
 
-def run(job_dir, client, output_dir):
+def run(job_dir, client, output_dir, max_seconds=1200):
     params, judged = _load_job(job_dir)
     index = params["target_index_name"]
     ef_search = int(params.get("ef_search", 128))
@@ -137,8 +139,11 @@ def run(job_dir, client, output_dir):
     sums = {f"{name}_depth{depth}": {} for depth in (50, 100)
             for name, _, _, _ in VARIANTS}
     started = time.monotonic()
+    deadline = started + max_seconds
     with (output_dir / "candidates.jsonl").open("w") as candidate_file:
-        for query in judged:
+        for number, query in enumerate(judged, 1):
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Fusion collection exceeded {max_seconds}s after {number - 1} queries")
             text = query.get("text") or query.get("title", "")
             size = 100
             common = {"size": size, "_source": ["pid"]}
@@ -156,6 +161,8 @@ def run(job_dir, client, output_dir):
                 ], "minimum_should_match": 1,
             }}}
             vector_hits = client.search(index, vector_body)
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Fusion collection exceeded {max_seconds}s after vector query {number}")
             lexical_hits = client.search(index, lexical_body)
             record = {"query_id": query["query_id"], "vector": vector_hits,
                       "lexical": lexical_hits}
@@ -166,6 +173,8 @@ def run(job_dir, client, output_dir):
                                   lexical_weight, rank_constant, depth)
                     sums[f"{name}_depth{depth}"][query["query_id"]] = ndcg_at_10(
                         ranked, query["qrels"], separator)
+            if number % 25 == 0 or number == len(judged):
+                print(f"Fusion candidates: {number}/{len(judged)} judged queries", flush=True)
     summary = {
         "index": index, "engine": "jvector", "queries_scored": len(judged),
         "candidate_depths": [50, 100], "ef_search": ef_search,
@@ -183,12 +192,14 @@ def run(job_dir, client, output_dir):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-dir", type=Path, required=True)
+    parser.add_argument("--max-seconds", type=int, default=1200)
     args = parser.parse_args()
     namespace = os.environ["OS_NAMESPACE"]
     base_url = f"https://opensearch-cluster.{namespace}.svc.cluster.local:9200"
     client = SearchClient(base_url, "/certs/admin.pem", "/certs/admin-key.pem",
                           "/certs/root-ca.pem")
-    summary = run(args.job_dir, client, args.job_dir / "fusion-experiment")
+    summary = run(args.job_dir, client, args.job_dir / "fusion-experiment",
+                  max_seconds=args.max_seconds)
     print(f"Scored {summary['queries_scored']} judged queries; "
           f"results: {args.job_dir / 'fusion-experiment' / 'summary.json'}")
 
