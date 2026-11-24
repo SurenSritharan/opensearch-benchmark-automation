@@ -16,6 +16,7 @@ OpenSearch Security rejects DLS queries that reference undefined attributes.
 
 import base64
 import json
+import os
 import time
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -36,7 +37,8 @@ def load_private_key(path):
 
 def generate_private_key(path):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    with open(path, "wb") as f:
+    # Owner-only: this key signs tokens the security plugin trusts.
+    with os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "wb") as f:
         f.write(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                                   serialization.NoEncryption()))
     return key

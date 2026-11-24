@@ -140,7 +140,7 @@ Run against OpenRAG's OpenSearch image (`langflowai/openrag-opensearch`). Stock 
 The DLS mode authenticates like OpenRAG does: an RS256 JWT through the security plugin's openid domain, with the claims OpenRAG's `SessionManager` issues (`sub`, `email`, `roles: [openrag_user]`). Basic-auth users cannot stand in. OpenRAG's roles reference `${attr.jwt.email}`, and OpenSearch Security rejects DLS queries that reference attributes the user does not have.
 
 * **Full OpenRAG deployment:** set `dls_jwt_private_key` to OpenRAG's `keys/private_key.pem`.
-* **OpenSearch without the OpenRAG backend:** run the OIDC stub and point the container's backend URL at it:
+* **OpenSearch without the OpenRAG backend:** run the OIDC stub and point the container's backend URL at it. The stub listens on `127.0.0.1` by default, which Docker Desktop can reach through `host.docker.internal`. On Linux, pass `--host` with the Docker bridge address (usually `172.17.0.1`) instead:
 
 ```
 python scripts/oidc_stub.py --key-file ~/openrag-bench-jwt.pem --port 8000
@@ -235,10 +235,10 @@ Save it as `params.json` and provide it to OpenSearch Benchmark with `--workload
 The subcommand is `run` in current OpenSearch Benchmark releases and `execute-test` in some other versions.
 
 ```
-opensearch-benchmark run --workload-path=openrag_hybrid_search \
+opensearch-benchmark run --workload-path=openrag_chunker \
   --test-procedure=index-and-search-dls --pipeline=benchmark-only \
   --target-hosts=https://localhost:9200 \
-  --client-options="basic_auth_user:admin,basic_auth_password:<admin password>,use_ssl:true,verify_certs:false" \
+  --client-options="basic_auth_user:admin,basic_auth_password:<admin password>,use_ssl:true,verify_certs:<true | false>" \
   --workload-params=params.json
 ```
 

@@ -33,7 +33,9 @@ import openrag_jwt  # noqa: E402
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--key-file", required=True, help="RSA private key (PEM); created if missing")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="interface to listen on; use the Docker bridge IP if the container cannot reach "
+                             "host.docker.internal on loopback (Linux)")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
 

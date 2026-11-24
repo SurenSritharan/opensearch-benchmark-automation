@@ -27,15 +27,19 @@ _QUERY_CACHE = {}
 
 
 def _queries_candidates(workload):
-    """Where OSB keeps this corpus: next to the resolved corpus file, the workload directory, the dataset cache."""
-    dirs = []
+    """Where OSB keeps this corpus: next to the resolved corpus file, the workload directory, the dataset cache.
+
+    The dataset cache is always last: it is where load_queries downloads to when no candidate exists.
+    """
+    resolved_dirs = []
+    cache_dirs = []
     for corpus in workload.corpora:
         for docs in corpus.documents:
             if docs.document_file and os.path.isabs(docs.document_file):
-                dirs.append(os.path.dirname(docs.document_file))
-        dirs.append(os.path.join(os.path.expanduser("~"), ".osb", "benchmarks", "data", corpus.name))
-    dirs.insert(1 if dirs and os.path.isabs(dirs[0]) else 0, os.path.dirname(os.path.realpath(__file__)))
-    return [os.path.join(d, QUERIES_FILE) for d in dirs]
+                resolved_dirs.append(os.path.dirname(docs.document_file))
+        cache_dirs.append(os.path.join(os.path.expanduser("~"), ".osb", "benchmarks", "data", corpus.name))
+    workload_dir = os.path.dirname(os.path.realpath(__file__))
+    return [os.path.join(d, QUERIES_FILE) for d in resolved_dirs + [workload_dir] + cache_dirs]
 
 
 def load_queries(path, base_url=None):
@@ -50,20 +54,15 @@ def load_queries(path, base_url=None):
                 f"the corpus_base_url workload parameter."
             )
         from osbenchmark.workload.loader import Downloader
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        temp_path = None
-
-        try:
-            fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(path))
-            os.close(fd)
-
+        target_dir = os.path.dirname(path)
+        os.makedirs(target_dir, exist_ok=True)
+        # Same file name as the final path, because OSB builds the URL from it.
+        # A private temp dir on the same filesystem keeps os.replace atomic and
+        # stops concurrent workers writing to the same partial file.
+        with tempfile.TemporaryDirectory(dir=target_dir) as tmp_dir:
+            temp_path = os.path.join(tmp_dir, os.path.basename(path))
             Downloader(False, False).download(base_url, None, temp_path, None)
             os.replace(temp_path, path)
-        
-        except Exception:
-            if temp_path and os.path.exists(temp_path):
-                os.remove(temp_path)
-                raise
 
     opener = bz2.open if path.endswith(".bz2") else open
     with opener(path, "rt", encoding="utf-8") as f:
@@ -219,7 +218,7 @@ class OpenRagSearchParamSource(ParamSource):
     def params(self):
         if self._queries is None:
             self._load()
-            
+
         query = self._rng.choice(self._queries)
         text = "*" if self._variant == "wildcard" else query["text"]
         vectors = {self._space_id: query["vector"]}

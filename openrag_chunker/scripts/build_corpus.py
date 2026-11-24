@@ -5,7 +5,7 @@
 # this file be licensed under the Apache-2.0 license or a
 # compatible open source license.
 
-"""Builds the openrag_hybrid_search corpus from arXiv PDFs the way OpenRAG ingests them.
+"""Builds the openrag_arxiv_1000 corpus from arXiv PDFs the way OpenRAG ingests them.
 
 Stages, each resumable and cached under --work-dir:
 
@@ -381,7 +381,7 @@ def chunk_documents(paper_index, pdf, vectors, texts_pages):
             "owner_name": acl["owner_name"],
             "owner_email": acl["owner_email"],
             # OpenRAG appends a random uuid4 hex; a hash keeps rebuilds identical.
-            "ingest_run_id": f"{document_id}-{hashlib.md5(document_id.encode()).hexdigest()}",
+            "ingest_run_id": f"{document_id}-{hashlib.md5(document_id.encode(), usedforsecurity=False).hexdigest()}",
         }
         docs.append((chunk_id, doc))
     return docs
